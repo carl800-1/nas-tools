@@ -52,7 +52,7 @@ jobs:
       - name: Build and push Docker image (Alpine)
         uses: docker/build-push-action@v5
         with:
-          context: docker
+          context: .
           file: docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -102,7 +102,7 @@ jobs:
       - name: Build Docker image (arm64)
         uses: docker/build-push-action@v5
         with:
-          context: docker
+          context: .
           file: docker/Dockerfile
           load: true
           tags: nas-tools:arm64

@@ -54,9 +54,9 @@ class WebUtils:
         try:
             releases_update_only = True
             version_res = RequestUtils(proxies=Config().get_proxies()).get_res(
-                "https://api.github.com/repos/carl800-1/nas-tools-ugreen/releases/latest")
+                "https://api.github.com/repos/carl800-1/nas-tools/releases/latest")
             commit_res = RequestUtils(proxies=Config().get_proxies()).get_res(
-                "https://api.github.com/repos/carl800-1/nas-tools-ugreen/commits/master")
+                "https://api.github.com/repos/carl800-1/nas-tools/commits/main")
             if version_res and commit_res:
                 ver_json = version_res.json()
                 commit_json = commit_res.json()

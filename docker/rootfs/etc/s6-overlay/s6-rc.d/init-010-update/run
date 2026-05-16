@@ -43,9 +43,9 @@ function package_update {
 
     if grep -Eqi "Debian" /etc/issue || grep -Eq "Debian" /etc/os-release; then
         if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
-            package_list_debian_url=https://ghproxy.com/https://raw.githubusercontent.com/carl800-1/nas-tools-ugreen/master/package_list_debian.txt
+            package_list_debian_url=https://ghproxy.com/https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list_debian.txt
         else
-            package_list_debian_url=https://raw.githubusercontent.com/carl800-1/nas-tools-ugreen/master/package_list_debian.txt
+            package_list_debian_url=https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list_debian.txt
         fi
         if [ ! -f /tmp/package_list_debian.txt ]; then
             curl -L ${package_list_debian_url} -o /tmp/package_list_debian.txt
@@ -160,6 +160,8 @@ if [ "${NASTOOL_AUTO_UPDATE}" = "true" ]; then
     # 更新分支
     if [[ "${NASTOOL_VERSION}" == "dev" ]]; then
         branch="dev"
+    elif [[ "${NASTOOL_VERSION}" == "main" ]]; then
+        branch="main"
     else
         branch="master"
     fi
