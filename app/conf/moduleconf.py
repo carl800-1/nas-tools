@@ -941,6 +941,44 @@ class ModuleConf(object):
                 }
             }
         },
+        "ugreen": {
+            "name": "绿联影视",
+            "img_url": "../static/img/mediaserver/ugreen.jpg",
+            "background": "bg-blue",
+            "test_command": "app.mediaserver.client.ugreen|Ugreen",
+            "config": {
+                "host": {
+                    "id": "ugreen.host",
+                    "required": True,
+                    "title": "服务器地址",
+                    "tooltip": "绿联NAS的IP地址和端口",
+                    "type": "text",
+                    "placeholder": "http://127.0.0.1"
+                },
+                "username": {
+                    "id": "ugreen.username",
+                    "required": True,
+                    "title": "用户名",
+                    "type": "text",
+                    "placeholder": ""
+                },
+                "password": {
+                    "id": "ugreen.password",
+                    "required": True,
+                    "title": "密码",
+                    "type": "password",
+                    "placeholder": ""
+                },
+                "play_host": {
+                    "id": "ugreen.play_host",
+                    "required": False,
+                    "title": "媒体播放地址",
+                    "tooltip": "配置播放设备的访问地址，用于媒体详情页跳转播放页面；留空则默认与服务器地址一致",
+                    "type": "text",
+                    "placeholder": "http://127.0.0.1"
+                }
+            }
+        },
     }
 
     # 索引器
