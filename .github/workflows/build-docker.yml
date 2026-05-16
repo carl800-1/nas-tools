@@ -1,0 +1,176 @@
+name: Build Docker Image
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.custom
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and export to Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.custom
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:test
+          platforms: linux/amd64
+
+      - name: Export Docker image (amd64)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker save -o nas-tools-ugreen-amd64.tar ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          gzip nas-tools-ugreen-amd64.tar
+
+      - name: Upload artifact (amd64)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: nas-tools-ugreen-amd64
+          path: nas-tools-ugreen-amd64.tar.gz
+          retention-days: 30
+
+  build-arm64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and export (arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.custom
+          load: true
+          tags: nas-tools-ugreen:arm64
+          platforms: linux/arm64
+
+      - name: Export Docker image (arm64)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        run: |
+          docker save -o nas-tools-ugreen-arm64.tar nas-tools-ugreen:arm64
+          gzip nas-tools-ugreen-arm64.tar
+
+      - name: Upload artifact (arm64)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: nas-tools-ugreen-arm64
+          path: nas-tools-ugreen-arm64.tar.gz
+          retention-days: 30
+
+  release:
+    needs: [build, build-arm64]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nas-tools-ugreen-amd64
+          path: ./artifacts
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nas-tools-ugreen-arm64
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./artifacts/*.tar.gz
+          body: |
+            ## nas-tools 绿联版
+            
+            包含绿联影视支持的 nas-tools Docker 镜像
+            
+            ### 下载说明
+            - `nas-tools-ugreen-amd64.tar.gz` - 适用于 x86_64 架构（绿联 DXP4800 Plus）
+            - `nas-tools-ugreen-arm64.tar.gz` - 适用于 ARM64 架构
+            
+            ### 使用方法
+            1. 下载对应架构的镜像文件
+            2. 在绿联 NAS 上导入：`docker load -i nas-tools-ugreen-*.tar.gz`
+            3. 配置并启动容器
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
