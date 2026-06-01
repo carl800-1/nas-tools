@@ -6,10 +6,6 @@ on:
     paths:
       - version.py
 
-permissions:
-  contents: read
-  packages: write
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -18,6 +14,10 @@ jobs:
   alpine:
     runs-on: ubuntu-latest
     name: Build Docker Image (Alpine)
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
     steps:
       -
         name: Checkout
@@ -58,13 +58,14 @@ jobs:
 
       -
         name: Build Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: docker
           file: docker/Dockerfile
           platforms: |
             linux/amd64
             linux/arm64
+          provenance: false
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -72,6 +73,10 @@ jobs:
   debian:
     runs-on: ubuntu-latest
     name: Build Docker Image (Debian)
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
     steps:
       -
         name: Checkout
@@ -112,13 +117,14 @@ jobs:
 
       -
         name: Build Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: docker
           file: docker/debian.Dockerfile
           platforms: |
             linux/amd64
             linux/arm64
+          provenance: false
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

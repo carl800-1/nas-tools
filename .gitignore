@@ -15,3 +15,5 @@ nastools_test.py
 /node_modules/**
 package-lock.json
 package.json
+._*
+.DS_Store
