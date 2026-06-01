@@ -1,0 +1,17 @@
+version: "3"
+services:
+  nas-tools:
+    image: nas-tools-test:v3.6.5
+    ports:
+      - 3000:3000
+    volumes:
+      - ./config:/config
+    environment:
+      - PUID=0
+      - PGID=0
+      - UMASK=000
+      - NASTOOL_AUTO_UPDATE=false
+    restart: unless-stopped
+    network_mode: bridge
+    hostname: nas-tools
+    container_name: nas-tools-test
