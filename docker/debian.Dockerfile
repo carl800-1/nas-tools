@@ -15,9 +15,7 @@ RUN set -xe && \
     ln -sf /usr/bin/chromedriver /usr/lib/chromium/chromedriver && \
     # Python settings
     update-alternatives --install /usr/bin/python python /usr/local/bin/python3.10 3 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.9 2 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 3 && \
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 2 && \
     # Rclone
     curl https://rclone.org/install.sh | bash && \
     # Minio
