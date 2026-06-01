@@ -201,23 +201,16 @@ jobs:
           mv ./linux-musl-arm64/nas-tools.linux.musl.arm64 /home/runner/work/nas-tools/nas-tools/releases/nastool_linux_musl_arm64_v${{ env.app_version }}
           pwd
           ls -all
-      - name: Create release
-        id: create_release
-        uses: actions/create-release@latest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.app_version }}
-          release_name: v${{ env.app_version }}
-          body: ${{ github.event.commits[0].message }}
+          name: v${{ env.app_version }}
+          body: |
+            NAStool v${{ env.app_version }} 发布
+          files: |
+            /home/runner/work/nas-tools/nas-tools/releases/*
           draft: false
           prerelease: false
-
-      - name: Upload release asset
-        uses: dwenegar/upload-release-assets@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          release_id: ${{ steps.create_release.outputs.id }}
-          assets_path: |
-            /home/runner/work/nas-tools/nas-tools/releases/
