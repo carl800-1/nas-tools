@@ -1,26 +1,20 @@
 FROM python:3.10.11-alpine
-
-# 复制必要的文件
-COPY package_list.txt /tmp/
-COPY requirements.txt /tmp/
-
 RUN apk add --no-cache --virtual .build-deps \
         libffi-dev \
         gcc \
         musl-dev \
         libxml2-dev \
         libxslt-dev \
-    && apk add --no-cache $(cat /tmp/package_list.txt) \
+    && apk add --no-cache $(echo $(wget --no-check-certificate -qO- https://raw.githubusercontent.com/carl800-1/nas-tools/master/package_list.txt)) \
     && curl https://rclone.org/install.sh | bash \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc \
     && chmod +x /usr/bin/mc \
     && pip install --upgrade pip setuptools wheel \
     && pip install cython \
-    && pip install -r /tmp/requirements.txt \
+    && pip install -r https://raw.githubusercontent.com/carl800-1/nas-tools/master/requirements.txt \
     && apk del --purge .build-deps \
     && rm -rf /tmp/* /root/.cache /var/cache/apk/*
-
 ENV S6_SERVICES_GRACETIME=30000 \
     S6_KILL_GRACETIME=60000 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
@@ -43,9 +37,7 @@ ENV S6_SERVICES_GRACETIME=30000 \
     UMASK=000 \
     PYTHONWARNINGS="ignore:semaphore_tracker:UserWarning" \
     WORKDIR="/nas-tools"
-
 WORKDIR ${WORKDIR}
-
 RUN mkdir ${HOME} \
     && addgroup -S nt -g 911 \
     && adduser -S nt -G nt -h ${HOME} -s /bin/bash -u 911 \
@@ -56,17 +48,10 @@ RUN mkdir ${HOME} \
     && echo 'fs.inotify.max_user_watches=5242880' >> /etc/sysctl.conf \
     && echo 'fs.inotify.max_user_instances=5242880' >> /etc/sysctl.conf \
     && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
-    && git config --global pull.ff only
-
-# 复制本地代码
-COPY . ${WORKDIR}
-
-# 设置权限
-RUN git config --global --add safe.directory ${WORKDIR}
-
-# 复制 rootfs
+    && git config --global pull.ff only \
+    && git clone -b master ${REPO_URL} ${WORKDIR} --depth=1 --recurse-submodule \
+    && git config --global --add safe.directory ${WORKDIR}
 COPY --chmod=755 ./rootfs /
-
 EXPOSE 3000
 VOLUME ["/config"]
 ENTRYPOINT [ "/init" ]
