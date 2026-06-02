@@ -941,6 +941,38 @@ class ModuleConf(object):
                 }
             }
         },
+        "ugreen": {
+            "name": "绿联影视",
+            "img_url": "../static/img/mediaserver/emby.png",
+            "background": "bg-green",
+            "test_command": "app.mediaserver.client.ugreen|UgreenClient",
+            "config": {
+                "host": {
+                    "id": "ugreen.host",
+                    "required": True,
+                    "title": "服务器地址",
+                    "tooltip": "配置IP地址和端口，如为https则需要增加https://前缀",
+                    "type": "text",
+                    "placeholder": "http://127.0.0.1:8096"
+                },
+                "api_key": {
+                    "id": "ugreen.api_key",
+                    "required": True,
+                    "title": "Api Key",
+                    "tooltip": "在绿联影视设置->高级->API密钥处生成",
+                    "type": "text",
+                    "placeholder": ""
+                },
+                "play_host": {
+                    "id": "ugreen.play_host",
+                    "required": False,
+                    "title": "媒体播放地址",
+                    "tooltip": "配置播放设备的访问地址，用于媒体详情页跳转播放页面；如为https则需要增加https://前缀，留空则默认与服务器地址一致",
+                    "type": "text",
+                    "placeholder": "http://127.0.0.1:8096"
+                }
+            }
+        },
     }
 
     # 索引器

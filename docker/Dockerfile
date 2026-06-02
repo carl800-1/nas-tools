@@ -1,11 +1,19 @@
 FROM python:3.10.11-alpine
-RUN apk add --no-cache --virtual .build-deps \
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    echo "http://mirrors.ustc.edu.cn/alpine/v3.18/main" > /etc/apk/repositories && \
+    echo "http://mirrors.ustc.edu.cn/alpine/v3.18/community" >> /etc/apk/repositories && \
+    apk update && \
+    apk add --no-cache --virtual .build-deps \
         libffi-dev \
         gcc \
         musl-dev \
         libxml2-dev \
         libxslt-dev \
-    && apk add --no-cache $(echo $(wget --no-check-certificate -qO- https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list.txt)) \
+        curl \
+        bash \
+        ca-certificates \
+        tzdata \
+    && apk add --no-cache $(echo $(wget -qO- https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list.txt)) \
     && curl https://rclone.org/install.sh | bash \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc \
@@ -15,7 +23,8 @@ RUN apk add --no-cache --virtual .build-deps \
     && pip install -r https://raw.githubusercontent.com/carl800-1/nas-tools/main/requirements.txt \
     && apk del --purge .build-deps \
     && rm -rf /tmp/* /root/.cache /var/cache/apk/*
-ENV S6_SERVICES_GRACETIME=30000 \
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= \
+    S6_SERVICES_GRACETIME=30000 \
     S6_KILL_GRACETIME=60000 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
     S6_SYNC_DISKS=1 \
@@ -38,7 +47,8 @@ ENV S6_SERVICES_GRACETIME=30000 \
     PYTHONWARNINGS="ignore:semaphore_tracker:UserWarning" \
     WORKDIR="/nas-tools"
 WORKDIR ${WORKDIR}
-RUN mkdir ${HOME} \
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    mkdir ${HOME} \
     && addgroup -S nt -g 911 \
     && adduser -S nt -G nt -h ${HOME} -s /bin/bash -u 911 \
     && python_ver=$(python3 -V | awk '{print $2}') \

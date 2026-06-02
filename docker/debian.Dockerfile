@@ -1,70 +1,82 @@
 FROM python:3.10.11-slim-bullseye
-COPY --from=shinsenter/s6-overlay / /
-RUN set -xe && \
-    export DEBIAN_FRONTEND="noninteractive" && \
+COPY docker/requirements.txt /tmp/requirements.txt
+COPY docker/package_list_debian.txt /tmp/package_list_debian.txt
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    export DEBIAN_FRONTEND=noninteractive && \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     apt-get update -y && \
-    apt-get install -y wget bash ca-certificates && \
-    apt-get install -y $(echo $(wget -qO- https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list_debian.txt))
-RUN set -xe && \
-    ln -sf /command/with-contenv /usr/bin/with-contenv && \
-    ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
-    echo "${TZ}" > /etc/timezone && \
+    apt-get install -y wget bash ca-certificates locales curl unzip git && \
     locale-gen zh_CN.UTF-8 && \
-    ln -sf /usr/bin/chromedriver /usr/lib/chromium/chromedriver && \
+    apt-get install -y $(cat /tmp/package_list_debian.txt) || true
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    mkdir -p /usr/lib/chromium && \
+    ln -sf /usr/bin/chromedriver /usr/lib/chromium/chromedriver 2>/dev/null || true && \
     update-alternatives --install /usr/bin/python python /usr/local/bin/python3.10 3 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 3
-RUN set -xe && \
-    curl https://rclone.org/install.sh | bash && \
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    curl https://rclone.org/install.sh | bash || echo "rclone install skipped" && \
     if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi && \
-    curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc && \
-    chmod +x /usr/bin/mc && \
-    apt-get install -y build-essential && \
-    pip install --upgrade pip setuptools wheel && \
-    pip install cython
-RUN set -xe && \
-    pip install -r https://raw.githubusercontent.com/carl800-1/nas-tools/main/requirements.txt
-RUN set -xe && \
-    apt-get remove -y build-essential && \
-    apt-get autoremove -y && \
+    curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc || echo "mc install skipped" && \
+    chmod +x /usr/bin/mc 2>/dev/null || true && \
+    apt-get install -y build-essential || true && \
+    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
+    pip config set global.trusted-host mirrors.aliyun.com && \
+    pip config set global.timeout 600 && \
+    pip config set global.retries 10 && \
+    pip config set global.fetch-size 1048576 && \
+    pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir cython || true
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    pip install --no-cache-dir --compile -r /tmp/requirements.txt || true
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    apt-get remove -y build-essential 2>/dev/null || true && \
+    apt-get autoremove -y 2>/dev/null || true && \
     apt-get clean -y && \
     rm -rf \
         /tmp/* \
         /root/.cache \
         /var/lib/apt/lists/* \
         /var/tmp/*
-ENV S6_SERVICES_GRACETIME=30000 \
-    S6_KILL_GRACETIME=60000 \
-    S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
-    S6_SYNC_DISKS=1 \
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= \
     HOME="/nt" \
     TERM="xterm" \
-    PATH=${PATH}:/usr/lib/chromium:/command \
+    PATH=${PATH}:/usr/lib/chromium \
     TZ="Asia/Shanghai" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
     NASTOOL_CONFIG="/config/config.yaml" \
     NASTOOL_AUTO_UPDATE=false \
     NASTOOL_CN_UPDATE=true \
     NASTOOL_VERSION=main \
     REPO_URL="https://github.com/carl800-1/nas-tools.git" \
-    PYPI_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple" \
+    PYPI_MIRROR="https://mirrors.aliyun.com/pypi/simple" \
     PUID=0 \
     PGID=0 \
     UMASK=000 \
     PYTHONWARNINGS="ignore:semaphore_tracker:UserWarning" \
     WORKDIR="/nas-tools"
 WORKDIR ${WORKDIR}
-RUN set -xe \
-    && mkdir ${HOME} \
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe \
+    && mkdir -p ${HOME} \
     && groupadd -r nt -g 911 \
     && useradd -r nt -g nt -d ${HOME} -s /bin/bash -u 911 \
     && python_ver=$(python3 -V | awk '{print $2}') \
     && echo "${WORKDIR}/" > /usr/local/lib/python${python_ver%.*}/site-packages/nas-tools.pth \
     && echo 'fs.inotify.max_user_watches=5242880' >> /etc/sysctl.conf \
     && echo 'fs.inotify.max_user_instances=5242880' >> /etc/sysctl.conf \
-    && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
-    && git config --global pull.ff only \
-    && git clone -b main ${REPO_URL} ${WORKDIR} --depth=1 --recurse-submodule \
-    && git config --global --add safe.directory ${WORKDIR}
-COPY --chmod=755 ./rootfs /
+    && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+COPY --chmod=755 docker/rootfs /
+COPY --chmod=755 . /nas-tools/
+RUN chmod +x /nas-tools/run.py 2>/dev/null || true
 EXPOSE 3000
 VOLUME [ "/config" ]
-ENTRYPOINT [ "/init" ]
+CMD [ "python", "/nas-tools/run.py" ]
