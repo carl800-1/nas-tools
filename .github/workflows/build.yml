@@ -119,7 +119,7 @@ jobs:
         name: Build Image
         uses: docker/build-push-action@v6
         with:
-          context: docker
+          context: .
           file: docker/debian.Dockerfile
           platforms: |
             linux/amd64
