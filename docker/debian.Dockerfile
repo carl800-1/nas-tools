@@ -4,31 +4,26 @@ RUN set -xe && \
     export DEBIAN_FRONTEND="noninteractive" && \
     apt-get update -y && \
     apt-get install -y wget bash && \
-    apt-get install -y $(echo $(wget --no-check-certificate -qO- https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list_debian.txt)) && \
+    apt-get install -y $(echo $(wget --no-check-certificate -qO- https://raw.githubusercontent.com/carl800-1/nas-tools/main/package_list_debian.txt))
+RUN set -xe && \
     ln -sf /command/with-contenv /usr/bin/with-contenv && \
-    # zone time
     ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
     echo "${TZ}" > /etc/timezone && \
-    # locale
     locale-gen zh_CN.UTF-8 && \
-    # chromedriver
     ln -sf /usr/bin/chromedriver /usr/lib/chromium/chromedriver && \
-    # Python settings
     update-alternatives --install /usr/bin/python python /usr/local/bin/python3.10 3 && \
-    update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 3 && \
-    # Rclone
+    update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 3
+RUN set -xe && \
     curl https://rclone.org/install.sh | bash && \
-    # Minio
     if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi && \
     curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc && \
     chmod +x /usr/bin/mc && \
-    # Pip requirements prepare
     apt-get install -y build-essential && \
-    # Pip requirements
     pip install --upgrade pip setuptools wheel && \
-    pip install cython && \
-    pip install -r https://raw.githubusercontent.com/carl800-1/nas-tools/main/requirements.txt && \
-    # Clear
+    pip install cython
+RUN set -xe && \
+    pip install -r https://raw.githubusercontent.com/carl800-1/nas-tools/main/requirements.txt
+RUN set -xe && \
     apt-get remove -y build-essential && \
     apt-get autoremove -y && \
     apt-get clean -y && \
