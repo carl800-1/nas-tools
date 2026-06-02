@@ -2,14 +2,14 @@
 # NAS媒体库管理工具
 
 
-[![GitHub stars](https://img.shields.io/github/stars/0xforee/nas-tools?style=plastic)](https://github.com/0xforee/nas-tools/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/0xforee/nas-tools?style=plastic)](https://github.com/0xforee/nas-tools/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/0xforee/nas-tools?style=plastic)](https://github.com/0xforee/nas-tools/issues)
-[![GitHub license](https://img.shields.io/github/license/0xforee/nas-tools?style=plastic)](https://github.com/0xforee/nas-tools/blob/master/LICENSE.md)
-[![Docker pulls](https://img.shields.io/docker/pulls/0xforee/nas-tools?style=plastic)](https://hub.docker.com/r/0xforee/nas-tools)
-[![Platform](https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic)](https://hub.docker.com/r/0xforee/nas-tools)
+[![GitHub stars](https://img.shields.io/github/stars/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/issues)
+[![GitHub license](https://img.shields.io/github/license/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/blob/main/LICENSE.md)
+[![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://hub.docker.com/r/carl800-1/nas-tools)
+[![Platform](https://img.shields.io/badge/platform-amd64/arm64-pink?style=plastic)](https://hub.docker.com/r/carl800-1/nas-tools)
 
-Docker：https://hub.docker.com/repository/docker/0xforee/nas-tools
+Docker：https://hub.docker.com/repository/docker/carl800-1/nas-tools
 
 ## 基于官方主线版本增强
 1. 基于主线最新 3.2.3 版本制作，配置可以完美迁移
