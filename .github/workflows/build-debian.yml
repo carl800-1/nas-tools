@@ -68,7 +68,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: docker
+          context: .
           file: docker/debian.Dockerfile
           platforms: |
             linux/amd64
