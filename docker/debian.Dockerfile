@@ -1,11 +1,18 @@
+ARG APT_MIRROR="mirrors.aliyun.com"
+ARG PYPI_INDEX_URL="https://mirrors.aliyun.com/pypi/simple"
+ARG PYPI_TRUSTED_HOST="mirrors.aliyun.com"
+
 FROM python:3.10.11-slim-bullseye
+ARG APT_MIRROR
+ARG PYPI_INDEX_URL
+ARG PYPI_TRUSTED_HOST
 COPY docker/requirements.txt /tmp/requirements.txt
 COPY docker/package_list_debian.txt /tmp/package_list_debian.txt
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     set -xe && \
     export DEBIAN_FRONTEND=noninteractive && \
-    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list && \
+    sed -i "s/security.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list && \
     apt-get update -y && \
     apt-get install -y wget bash ca-certificates locales curl unzip git && \
     locale-gen zh_CN.UTF-8 && \
@@ -25,8 +32,8 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc || echo "mc install skipped" && \
     chmod +x /usr/bin/mc 2>/dev/null || true && \
     apt-get install -y build-essential || true && \
-    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
-    pip config set global.trusted-host mirrors.aliyun.com && \
+    pip config set global.index-url ${PYPI_INDEX_URL} && \
+    pip config set global.trusted-host ${PYPI_TRUSTED_HOST} && \
     pip config set global.timeout 600 && \
     pip config set global.retries 10 && \
     pip config set global.fetch-size 1048576 && \

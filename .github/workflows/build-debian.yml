@@ -78,6 +78,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APT_MIRROR=deb.debian.org
+            PYPI_INDEX_URL=https://pypi.org/simple
+            PYPI_TRUSTED_HOST=pypi.org
 
       - name: Verify image tags
         run: |
