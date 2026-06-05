@@ -29,6 +29,8 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
         git \
         wget \
     && apk add --no-cache $(cat /tmp/package_list.txt) || true \
+    && curl -sL https://github.com/just-containers/s6-overlay/releases/download/v2.2.0.3/s6-overlay-noarch.tar.xz | tarJxpf - / \
+    && curl -sL https://github.com/just-containers/s6-overlay/releases/download/v2.2.0.3/s6-overlay-arch.tar.xz | tarJxpf - / \
     && curl https://rclone.org/install.sh | bash || echo "rclone install skipped" \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc || echo "mc install skipped" \
