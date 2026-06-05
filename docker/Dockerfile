@@ -1,92 +1,89 @@
-ARG ALPINE_MIRROR="mirrors.ustc.edu.cn"
+ARG APT_MIRROR="mirrors.aliyun.com"
 ARG PYPI_INDEX_URL="https://mirrors.aliyun.com/pypi/simple"
 ARG PYPI_TRUSTED_HOST="mirrors.aliyun.com"
 
-FROM python:3.10.11-alpine
-ARG ALPINE_MIRROR
+FROM python:3.10.11-slim-bullseye
+ARG APT_MIRROR
 ARG PYPI_INDEX_URL
 ARG PYPI_TRUSTED_HOST
-
-# 复制依赖文件（构建上下文是docker目录）
-COPY package_list.txt /tmp/package_list.txt
-COPY requirements.txt /tmp/requirements.txt
-
-# 配置镜像源并安装依赖
+COPY docker/requirements.txt /tmp/requirements.txt
+COPY docker/package_list_debian.txt /tmp/package_list_debian.txt
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    echo "http://${ALPINE_MIRROR}/alpine/v3.18/main" > /etc/apk/repositories && \
-    echo "http://${ALPINE_MIRROR}/alpine/v3.18/community" >> /etc/apk/repositories && \
-    apk update && \
-    apk add --no-cache --virtual .build-deps \
-        libffi-dev \
-        gcc \
-        musl-dev \
-        libxml2-dev \
-        libxslt-dev \
-        curl \
-        bash \
-        ca-certificates \
-        tzdata \
-        git \
-        wget \
-    && apk add --no-cache $(cat /tmp/package_list.txt) || true \
-    && curl -sL https://github.com/just-containers/s6-overlay/releases/download/v2.2.0.3/s6-overlay-noarch.tar.xz | tarJxpf - / \
-    && curl -sL https://github.com/just-containers/s6-overlay/releases/download/v2.2.0.3/s6-overlay-arch.tar.xz | tarJxpf - / \
-    && curl https://rclone.org/install.sh | bash || echo "rclone install skipped" \
-    && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
-    && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc || echo "mc install skipped" \
-    && chmod +x /usr/bin/mc 2>/dev/null || true \
-    && pip config set global.index-url ${PYPI_INDEX_URL} && \
+    set -xe && \
+    export DEBIAN_FRONTEND=noninteractive && \
+    sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list && \
+    sed -i "s/security.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list && \
+    apt-get update -y && \
+    apt-get install -y wget bash ca-certificates locales curl unzip git && \
+    locale-gen zh_CN.UTF-8 && \
+    apt-get install -y $(cat /tmp/package_list_debian.txt) || true
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    mkdir -p /usr/lib/chromium && \
+    ln -sf /usr/bin/chromedriver /usr/lib/chromium/chromedriver 2>/dev/null || true && \
+    update-alternatives --install /usr/bin/python python /usr/local/bin/python3.10 3 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.10 3
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    curl https://rclone.org/install.sh | bash || echo "rclone install skipped" && \
+    if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi && \
+    curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc || echo "mc install skipped" && \
+    chmod +x /usr/bin/mc 2>/dev/null || true && \
+    apt-get install -y build-essential || true && \
+    pip config set global.index-url ${PYPI_INDEX_URL} && \
     pip config set global.trusted-host ${PYPI_TRUSTED_HOST} && \
     pip config set global.timeout 600 && \
     pip config set global.retries 10 && \
+    pip config set global.fetch-size 1048576 && \
     pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir cython || true && \
-    pip install --no-cache-dir -r /tmp/requirements.txt || true \
-    && apk del --purge .build-deps 2>/dev/null || true \
-    && rm -rf /tmp/* /root/.cache /var/cache/apk/*
-
+    pip install --no-cache-dir cython || true
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    pip install --no-cache-dir --compile -r /tmp/requirements.txt || true
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    set -xe && \
+    apt-get remove -y build-essential 2>/dev/null || true && \
+    apt-get autoremove -y 2>/dev/null || true && \
+    apt-get clean -y && \
+    rm -rf \
+        /tmp/* \
+        /root/.cache \
+        /var/lib/apt/lists/* \
+        /var/tmp/*
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= \
-    S6_SERVICES_GRACETIME=30000 \
-    S6_KILL_GRACETIME=60000 \
-    S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0 \
-    S6_SYNC_DISKS=1 \
     HOME="/nt" \
     TERM="xterm" \
     PATH=${PATH}:/usr/lib/chromium \
-    LANG="C.UTF-8" \
     TZ="Asia/Shanghai" \
+    LANG="C.UTF-8" \
+    LC_ALL="C.UTF-8" \
     NASTOOL_CONFIG="/config/config.yaml" \
     NASTOOL_AUTO_UPDATE=false \
     NASTOOL_CN_UPDATE=true \
     NASTOOL_VERSION=main \
-    PS1="\u@\h:\w \$ " \
     REPO_URL="https://github.com/carl800-1/nas-tools.git" \
-    PYPI_MIRROR="${PYPI_INDEX_URL}" \
-    ALPINE_MIRROR="${ALPINE_MIRROR}" \
+    PYPI_MIRROR="https://mirrors.aliyun.com/pypi/simple" \
     PUID=0 \
     PGID=0 \
     UMASK=000 \
     PYTHONWARNINGS="ignore:semaphore_tracker:UserWarning" \
     WORKDIR="/nas-tools"
-
 WORKDIR ${WORKDIR}
-
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    mkdir ${HOME} \
-    && addgroup -S nt -g 911 \
-    && adduser -S nt -G nt -h ${HOME} -s /bin/bash -u 911 \
+    set -xe \
+    && mkdir -p ${HOME} \
+    && groupadd -r nt -g 911 \
+    && useradd -r nt -g nt -d ${HOME} -s /bin/bash -u 911 \
     && python_ver=$(python3 -V | awk '{print $2}') \
-    && python_path=$(which python3) \
-    && [ -d "/usr/lib/python${python_ver%.*}/site-packages" ] || mkdir -p "/usr/lib/python${python_ver%.*}/site-packages" \
-    && echo "${WORKDIR}/" > /usr/lib/python${python_ver%.*}/site-packages/nas-tools.pth \
+    && echo "${WORKDIR}/" > /usr/local/lib/python${python_ver%.*}/site-packages/nas-tools.pth \
     && echo 'fs.inotify.max_user_watches=5242880' >> /etc/sysctl.conf \
     && echo 'fs.inotify.max_user_instances=5242880' >> /etc/sysctl.conf \
-    && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
-    && git config --global pull.ff only \
-    && git clone -b main ${REPO_URL} ${WORKDIR} --depth=1 --recurse-submodule \
-    && git config --global --add safe.directory ${WORKDIR}
-
-COPY --chmod=755 ./rootfs /
+    && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+COPY --chmod=755 docker/rootfs /
+COPY --chmod=755 . /nas-tools/
+RUN chmod +x /nas-tools/run.py 2>/dev/null || true
 EXPOSE 3000
-VOLUME ["/config"]
-ENTRYPOINT [ "/init" ]
+VOLUME [ "/config" ]
+CMD [ "python", "/nas-tools/run.py" ]
