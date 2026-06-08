@@ -21,7 +21,9 @@ class UgreenClient(_IMediaClient):
     _client_config = {}
     _host = None
     _play_host = None
-    _api_key = None
+    _username = None
+    _password = None
+    _access_token = None
     _user_id = None
     _server_info = None
 
@@ -48,10 +50,30 @@ class UgreenClient(_IMediaClient):
                     self._play_host = "http://" + self._play_host
                 if not self._play_host.endswith('/'):
                     self._play_host = self._play_host + "/"
-            self._api_key = self._client_config.get('api_key')
-            if self._host and self._api_key:
-                self._user_id = self.get_user_id()
-                self._server_info = self.get_server_info()
+            self._username = self._client_config.get('username')
+            self._password = self._client_config.get('password')
+            if self._host and self._username and self._password:
+                self._access_token = self.__get_access_token()
+                if self._access_token:
+                    self._user_id = self.get_user_id()
+                    self._server_info = self.get_server_info()
+
+    def __get_access_token(self):
+        if not self._host or not self._username or not self._password:
+            return None
+        req_url = f"{self._host}emby/Users/AuthenticateByName"
+        try:
+            data = {
+                "Username": self._username,
+                "Pw": self._password
+            }
+            res = RequestUtils().post_res(req_url, json=data)
+            if res and res.status_code == 200:
+                return res.json().get("AccessToken")
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】用户认证失败：" + str(e))
+        return None
 
     @classmethod
     def match(cls, ctype):
@@ -70,9 +92,9 @@ class UgreenClient(_IMediaClient):
         """
         获取用户ID
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return None
-        req_url = f"{self._host}Users?api_key={self._api_key}"
+        req_url = f"{self._host}Users?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -89,9 +111,9 @@ class UgreenClient(_IMediaClient):
         """
         获取服务器信息
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return None
-        req_url = f"{self._host}System/Info?api_key={self._api_key}"
+        req_url = f"{self._host}System/Info?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -105,9 +127,9 @@ class UgreenClient(_IMediaClient):
         """
         获取用户数量
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return 0
-        req_url = f"{self._host}emby/Users/Query?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Users/Query?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -121,9 +143,9 @@ class UgreenClient(_IMediaClient):
         """
         获取活动记录
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return []
-        req_url = f"{self._host}emby/System/ActivityLog/Entries?api_key={self._api_key}"
+        req_url = f"{self._host}emby/System/ActivityLog/Entries?api_key={self._access_token}"
         ret_array = []
         try:
             res = RequestUtils().get_res(req_url)
@@ -152,9 +174,9 @@ class UgreenClient(_IMediaClient):
         """
         获取电影、电视剧、音乐媒体数量
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return {"MovieCount": 0, "SeriesCount": 0, "MusicCount": 0, "EpisodeCount": 0}
-        req_url = f"{self._host}emby/Items/Counts?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Items/Counts?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -168,9 +190,9 @@ class UgreenClient(_IMediaClient):
         """
         根据标题和年份，检查电影是否存在
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return []
-        req_url = f"{self._host}emby/Items?IncludeItemTypes=Movie&Fields=ProductionYear&StartIndex=0&Recursive=true&SearchTerm={title}&Limit=10&IncludeSearchTypes=false&api_key={self._api_key}"
+        req_url = f"{self._host}emby/Items?IncludeItemTypes=Movie&Fields=ProductionYear&StartIndex=0&Recursive=true&SearchTerm={title}&Limit=10&IncludeSearchTypes=false&api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -193,7 +215,7 @@ class UgreenClient(_IMediaClient):
         """
         根据标题、年份、季查询电视剧所有集信息
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return []
 
         if not item_id:
@@ -203,7 +225,7 @@ class UgreenClient(_IMediaClient):
 
         if not season:
             season = ""
-        req_url = f"{self._host}emby/Shows/{item_id}/Episodes?Season={season}&IsMissing=false&api_key={self._api_key}"
+        req_url = f"{self._host}emby/Shows/{item_id}/Episodes?Season={season}&IsMissing=false&api_key={self._access_token}"
         try:
             res_json = RequestUtils().get_res(req_url)
             if res_json:
@@ -224,9 +246,9 @@ class UgreenClient(_IMediaClient):
         """
         根据名称查询剧集ID
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return None
-        req_url = f"{self._host}emby/Items?IncludeItemTypes=Series&Fields=ProductionYear&StartIndex=0&Recursive=true&SearchTerm={name}&Limit=10&IncludeSearchTypes=false&api_key={self._api_key}"
+        req_url = f"{self._host}emby/Items?IncludeItemTypes=Series&Fields=ProductionYear&StartIndex=0&Recursive=true&SearchTerm={name}&Limit=10&IncludeSearchTypes=false&api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -244,7 +266,7 @@ class UgreenClient(_IMediaClient):
         """
         查询缺少哪几集
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return []
 
         if not season:
@@ -268,10 +290,10 @@ class UgreenClient(_IMediaClient):
         """
         根据itemid、season_id、episode_id查询图片地址
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return ""
 
-        req_url = f"{self._host}emby/Shows/{item_id}/Episodes?Season={season_id}&IsMissing=false&api_key={self._api_key}"
+        req_url = f"{self._host}emby/Shows/{item_id}/Episodes?Season={season_id}&IsMissing=false&api_key={self._access_token}"
         try:
             res_json = RequestUtils().get_res(req_url)
             if res_json:
@@ -292,9 +314,9 @@ class UgreenClient(_IMediaClient):
         """
         根据ItemId查询远程图片地址
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return ""
-        req_url = f"{self._host}emby/Items/{item_id}/RemoteImages?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Items/{item_id}/RemoteImages?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -311,7 +333,7 @@ class UgreenClient(_IMediaClient):
         """
         根据ItemId查询本地图片地址
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return ""
 
         if not remote:
@@ -330,9 +352,9 @@ class UgreenClient(_IMediaClient):
         """
         刷新整个媒体库
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return
-        req_url = f"{self._host}emby/Library/Refresh?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Library/Refresh?api_key={self._access_token}"
         try:
             RequestUtils().post_res(req_url)
             log.info(f"【{self.client_name}】媒体库刷新请求已发送")
@@ -358,11 +380,11 @@ class UgreenClient(_IMediaClient):
         """
         获取媒体服务器所有媒体库列表
         """
-        if not self._host or not self._api_key or not self._user_id:
+        if not self._host or not self._access_token or not self._user_id:
             return []
 
         libraries = []
-        req_url = f"{self._host}emby/Users/{self._user_id}/Views?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Users/{self._user_id}/Views?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -396,9 +418,9 @@ class UgreenClient(_IMediaClient):
         """
         if not itemid:
             return {}
-        if not self._host or not self._api_key or not self._user_id:
+        if not self._host or not self._access_token or not self._user_id:
             return {}
-        req_url = f"{self._host}emby/Users/{self._user_id}/Items/{itemid}?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Users/{self._user_id}/Items/{itemid}?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res and res.status_code == 200:
@@ -413,10 +435,10 @@ class UgreenClient(_IMediaClient):
         """
         if not parent:
             yield {}
-        if not self._host or not self._api_key or not self._user_id:
+        if not self._host or not self._access_token or not self._user_id:
             yield {}
 
-        req_url = f"{self._host}emby/Users/{self._user_id}/Items?ParentId={parent}&api_key={self._api_key}"
+        req_url = f"{self._host}emby/Users/{self._user_id}/Items?ParentId={parent}&api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res and res.status_code == 200:
@@ -459,11 +481,11 @@ class UgreenClient(_IMediaClient):
         """
         获取正在播放的会话
         """
-        if not self._host or not self._api_key:
+        if not self._host or not self._access_token:
             return []
 
         playing_sessions = []
-        req_url = f"{self._host}emby/Sessions?api_key={self._api_key}"
+        req_url = f"{self._host}emby/Sessions?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res and res.status_code == 200:
@@ -537,10 +559,10 @@ class UgreenClient(_IMediaClient):
         """
         获取继续观看列表
         """
-        if not self._host or not self._api_key or not self._user_id:
+        if not self._host or not self._access_token or not self._user_id:
             return []
 
-        req_url = f"{self._host}Users/{self._user_id}/Items/Resume?Limit={num}&MediaTypes=Video&api_key={self._api_key}"
+        req_url = f"{self._host}Users/{self._user_id}/Items/Resume?Limit={num}&MediaTypes=Video&api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -556,7 +578,7 @@ class UgreenClient(_IMediaClient):
                     if item_type == MediaType.MOVIE.value:
                         title = item.get("Name")
                         if item.get("BackdropImageTags"):
-                            image = f"{self._host}Items/{item.get('Id')}/Images/Backdrop?tag={item.get('BackdropImageTags')[0]}&fillWidth=666&api_key={self._api_key}"
+                            image = f"{self._host}Items/{item.get('Id')}/Images/Backdrop?tag={item.get('BackdropImageTags')[0]}&fillWidth=666&api_key={self._access_token}"
                         else:
                             image = self.get_local_image_by_id(item.get("Id"), remote=False, inner=True)
                     else:
@@ -584,10 +606,10 @@ class UgreenClient(_IMediaClient):
         """
         获取最近添加
         """
-        if not self._host or not self._api_key or not self._user_id:
+        if not self._host or not self._access_token or not self._user_id:
             return []
 
-        req_url = f"{self._host}Users/{self._user_id}/Items/Latest?Limit={num}&MediaTypes=Video&api_key={self._api_key}"
+        req_url = f"{self._host}Users/{self._user_id}/Items/Latest?Limit={num}&MediaTypes=Video&api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
