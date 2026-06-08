@@ -6,10 +6,20 @@ import {
   Zap,
   CheckCircle2,
   ArrowRight,
-  Battery
+  Battery,
+  Download
 } from "lucide-react";
+import { generatePPT } from "@/utils/pptGenerator";
 
 const SummaryPage = () => {
+  const handleDownloadPPT = async () => {
+    try {
+      await generatePPT();
+    } catch (error) {
+      console.error("生成PPT失败:", error);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-8">
       <div className="max-w-7xl mx-auto">
@@ -187,8 +197,20 @@ const SummaryPage = () => {
           </div>
         </div>
 
-        {/* Footer */}
+        {/* Download button */}
         <div className="mt-12 text-center">
+          <button
+            onClick={handleDownloadPPT}
+            className="group relative inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-blue-500 to-emerald-500 text-white font-semibold rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105"
+          >
+            <Download className="w-6 h-6" />
+            <span>下载PPT报告</span>
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-blue-500 to-emerald-500 opacity-0 group-hover:opacity-50 blur-lg transition-opacity"></div>
+          </button>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-8 text-center">
           <div className="inline-flex items-center gap-4 px-8 py-4 bg-gradient-to-r from-blue-500/20 to-emerald-500/20 rounded-2xl border border-white/10">
             <span className="text-slate-400">报告完成时间</span>
             <span className="text-white font-bold">{new Date().getFullYear()}年</span>
