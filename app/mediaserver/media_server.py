@@ -229,7 +229,12 @@ class MediaServer:
             librarys = self.systemconfig.get(SystemConfigKey.SyncLibrary) or []
             # 汇总统计
             medias_count = self.get_medias_count()
-            total_media_count = medias_count.get("MovieCount") + medias_count.get("SeriesCount")
+            if not medias_count:
+                log.error("【MediaServer】获取媒体库统计信息失败，退出同步")
+                self.progress.update(ptype=ProgressKey.MediaSync, text="媒体库连接失败", value=100)
+                self.progress.end(ProgressKey.MediaSync)
+                return
+            total_media_count = (medias_count.get("MovieCount") or 0) + (medias_count.get("SeriesCount") or 0)
             total_count = 0
             movie_count = 0
             tv_count = 0

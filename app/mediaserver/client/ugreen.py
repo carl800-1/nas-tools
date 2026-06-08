@@ -86,6 +86,8 @@ class UgreenClient(_IMediaClient):
         """
         测试连通性
         """
+        if not self._host or not self._access_token:
+            return False
         return True if self.get_medias_count() else False
 
     def get_user_id(self):
@@ -175,16 +177,19 @@ class UgreenClient(_IMediaClient):
         获取电影、电视剧、音乐媒体数量
         """
         if not self._host or not self._access_token:
-            return {"MovieCount": 0, "SeriesCount": 0, "MusicCount": 0, "EpisodeCount": 0}
+            return {}
         req_url = f"{self._host}emby/Items/Counts?api_key={self._access_token}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
                 return res.json()
+            else:
+                log.error(f"【{self.client_name}】Items/Counts 未获取到返回数据")
+                return {}
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】连接Items/Counts出错：" + str(e))
-        return {"MovieCount": 0, "SeriesCount": 0, "MusicCount": 0, "EpisodeCount": 0}
+        return {}
 
     def get_movies(self, title, year=None):
         """

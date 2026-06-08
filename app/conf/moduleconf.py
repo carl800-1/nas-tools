@@ -947,6 +947,21 @@ class ModuleConf(object):
             "background": "bg-green",
             "test_command": "app.mediaserver.client.ugreen|UgreenClient",
             "config": {
+                "enabled": {
+                    "id": "ugreen.enabled",
+                    "required": False,
+                    "title": "启用媒体服务器",
+                    "tooltip": "",
+                    "type": "switch"
+                },
+                "name": {
+                    "id": "ugreen.name",
+                    "required": False,
+                    "title": "名称",
+                    "tooltip": "媒体服务器的别名",
+                    "type": "text",
+                    "placeholder": "绿联影视"
+                },
                 "host": {
                     "id": "ugreen.host",
                     "required": True,
@@ -978,6 +993,37 @@ class ModuleConf(object):
                     "tooltip": "绿联影视登录密码",
                     "type": "password",
                     "placeholder": ""
+                },
+                "sync_library": {
+                    "id": "ugreen.sync_library",
+                    "required": False,
+                    "title": "同步媒体库",
+                    "tooltip": "只有选中的媒体库才会被同步",
+                    "type": "select",
+                    "options": {
+                        "": "全部",
+                        "movie": "电影",
+                        "tv": "电视剧"
+                    }
+                },
+                "scan_mode": {
+                    "id": "ugreen.scan_mode",
+                    "required": False,
+                    "title": "扫描模式",
+                    "tooltip": "用于全库刷新和按库刷新：新添加和修改 / 补充缺失 / 覆盖扫描",
+                    "type": "select",
+                    "options": {
+                        "add": "新添加和修改",
+                        "missing": "补充缺失",
+                        "full": "覆盖扫描"
+                    }
+                },
+                "ssl_verify": {
+                    "id": "ugreen.ssl_verify",
+                    "required": False,
+                    "title": "校验SSL证书",
+                    "tooltip": "开启后会校验HTTPS证书；如使用自签名证书可关闭",
+                    "type": "switch"
                 }
             }
         },
