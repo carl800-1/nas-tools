@@ -950,26 +950,34 @@ class ModuleConf(object):
                 "host": {
                     "id": "ugreen.host",
                     "required": True,
-                    "title": "服务器地址",
-                    "tooltip": "配置IP地址和端口，如为https则需要增加https://前缀",
+                    "title": "地址",
+                    "tooltip": "服务端地址，格式: http(s)://ip:port",
                     "type": "text",
-                    "placeholder": "http://127.0.0.1:8096"
-                },
-                "api_key": {
-                    "id": "ugreen.api_key",
-                    "required": True,
-                    "title": "Api Key",
-                    "tooltip": "在绿联影视设置->高级->API密钥处生成",
-                    "type": "text",
-                    "placeholder": ""
+                    "placeholder": "http://192.168.3.3:9999"
                 },
                 "play_host": {
                     "id": "ugreen.play_host",
                     "required": False,
-                    "title": "媒体播放地址",
-                    "tooltip": "配置播放设备的访问地址，用于媒体详情页跳转播放页面；如为https则需要增加https://前缀，留空则默认与服务器地址一致",
+                    "title": "外网播放地址",
+                    "tooltip": "跳转播放页面使用的地址，格式: http(s)://domain:port",
                     "type": "text",
-                    "placeholder": "http://127.0.0.1:8096"
+                    "placeholder": "http://carlstation.top:9999"
+                },
+                "username": {
+                    "id": "ugreen.username",
+                    "required": True,
+                    "title": "用户名",
+                    "tooltip": "绿联影视登录用户名",
+                    "type": "text",
+                    "placeholder": ""
+                },
+                "password": {
+                    "id": "ugreen.password",
+                    "required": True,
+                    "title": "密码",
+                    "tooltip": "绿联影视登录密码",
+                    "type": "password",
+                    "placeholder": ""
                 }
             }
         },
