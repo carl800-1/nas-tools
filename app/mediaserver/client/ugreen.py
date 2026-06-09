@@ -181,6 +181,7 @@ class _UgreenApi:
     def __init__(self, host, client_version="76363", language="zh-CN",
                  ug_agent="PC/WEB", timeout=20, verify_ssl=True):
         self._host = self._normalize_base_url(host)
+        self._session = None
         self._token = None
         self._static_token = None
         self._is_ugk = False
@@ -193,6 +194,21 @@ class _UgreenApi:
         self._ug_agent = ug_agent
         self._timeout = timeout
         self._verify_ssl = verify_ssl
+        self._init_session()
+
+    def _init_session(self):
+        """初始化 HTTP 会话"""
+        try:
+            import requests as req_lib
+            self._session = req_lib.Session()
+        except ImportError:
+            self._session = None
+
+    def close(self):
+        """关闭 HTTP 会话"""
+        if self._session:
+            self._session.close()
+            self._session = None
 
     @staticmethod
     def _normalize_base_url(host):
@@ -259,14 +275,15 @@ class _UgreenApi:
     def _request_json(self, url, method="GET", headers=None, params=None, json_data=None):
         try:
             import requests as req_lib
+            session = self._session or req_lib
             method = method.upper()
             if method == "POST":
-                resp = req_lib.post(
+                resp = session.post(
                     url=url, headers=headers, params=params, json=json_data,
                     timeout=self._timeout, verify=self._verify_ssl,
                 )
             else:
-                resp = req_lib.get(
+                resp = session.get(
                     url=url, headers=headers, params=params,
                     timeout=self._timeout, verify=self._verify_ssl,
                 )
@@ -298,7 +315,8 @@ class _UgreenApi:
         headers = self._common_headers()
         try:
             import requests as req_lib
-            check_resp = req_lib.post(
+            session = self._session or req_lib
+            check_resp = session.post(
                 url=f"{self._host}/ugreen/v1/verify/check",
                 headers=headers, json={"username": username},
                 timeout=self._timeout, verify=self._verify_ssl,
@@ -360,7 +378,8 @@ class _UgreenApi:
                 url=f"{self._host}/ugreen/v1/verify/logout",
             )
             import requests as req_lib
-            req_lib.get(url, headers=headers, params=params,
+            session = self._session or req_lib
+            session.get(url, headers=headers, params=params,
                         timeout=self._timeout, verify=self._verify_ssl)
         except Exception:
             pass
@@ -532,6 +551,13 @@ class UgreenClient(_IMediaClient):
             log.error(f"【{self.client_name}】缺少 cryptography 库，请安装：pip install cryptography")
             return
         try:
+            # 关闭旧会话
+            if self._api:
+                try:
+                    self._api.close()
+                except Exception:
+                    pass
+                self._api = None
             api = _UgreenApi(host=self._host)
             token = api.login(self._username, self._password)
             if token:
