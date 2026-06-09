@@ -152,6 +152,27 @@ plex:
   username:
   # 【Plex用户密码】
   password:
+# 配置绿联影视服务器信息
+ugreen:
+  # 【是否启用绿联影视】：开启后才会连接绿联影视服务器
+  enabled: false
+  # 【绿联影视服务器名称】
+  name:
+  # 【绿联影视服务器IP地址和端口】：注意区分http和https，http时可以不加http://，https时必须加https://
+  host:
+  # 【绿联影视外网播放地址和端口】：跳转播放页面使用的地址，格式: http(s)://domain:port
+  play_host:
+  # 【绿联影视用户名】
+  username:
+  # 【绿联影视密码】
+  password:
+  # 【同步媒体库】：只有选中的媒体库才会被同步
+  sync_library:
+  # 【扫描模式】：新添加和修改 / 补充缺失 / 覆盖扫描
+  scan_mode:
+  # 【校验SSL证书】：开启后会校验HTTPS证书；如使用自签名证书可关闭
+  ssl_verify: true
+
 
 # 【配置站点搜索信息】
 pt:
