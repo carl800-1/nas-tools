@@ -1,7 +1,7 @@
 version: "3"
 services:
   nas-tools:
-    image: nas-tools-test:v3.6.5
+    image: nas-tools-test:v3.7.10
     ports:
       - 3000:3000
     volumes:
