@@ -923,12 +923,12 @@ class UgreenClient(_IMediaClient):
     def get_items(self, parent):
         """
         获取媒体库中的所有媒体
-        :param parent: 媒体库ID
+        :param parent: 媒体库ID (media_lib_set_id)
         """
         if not self._api:
             return []
         try:
-            # 先获取媒体库列表，找到目标库的路径
+            # 先获取媒体库列表，找到目标库
             libs = self._api.media_list()
             target_lib = None
             for lib in libs:
@@ -938,6 +938,7 @@ class UgreenClient(_IMediaClient):
             if not target_lib:
                 return []
             lib_path = target_lib.get("path", "")
+            lib_id = str(target_lib.get("media_lib_set_id") or target_lib.get("id", ""))
             if not lib_path:
                 return []
             # 使用 poster_wall_get_folder 遍历目录树获取所有视频
@@ -962,12 +963,20 @@ class UgreenClient(_IMediaClient):
                         continue
                     name = vi.get("name") or vi.get("title") or ""
                     item_type = MediaType.MOVIE.value if video_type == 1 else MediaType.TV.value
+                    item_info = self._api.video_info(item_id) or {}
                     link = f"/open?url={quote(self.get_play_url(item_id))}&type=ugreen"
                     image = self.get_local_image_by_id(item_id, remote=False, inner=True)
                     ret_items.append({
                         "id": item_id,
-                        "name": name,
+                        "library": item_info.get("media_lib_set_id") or lib_id,
                         "type": item_type,
+                        "title": name,
+                        "originalTitle": item_info.get("original_name") or vi.get("original_name") or "",
+                        "year": str(item_info.get("release_year") or vi.get("release_year") or ""),
+                        "tmdbid": item_info.get("tmdb_id") or vi.get("tmdb_id"),
+                        "imdbid": item_info.get("imdb_id") or vi.get("imdb_id"),
+                        "path": item_info.get("path") or vi.get("path") or "",
+                        "json": str(item_info),
                         "image": image,
                         "link": link,
                     })
