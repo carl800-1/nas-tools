@@ -465,6 +465,37 @@ class _UgreenApi:
             return result["data"]
         return None
 
+    def media_list(self):
+        """获取媒体库列表（v1/video/homepage/media_list）"""
+        result = self.request("v1/video/homepage/media_list")
+        if result["code"] == 200 and isinstance(result["data"], dict):
+            items = result["data"].get("media_lib_info_list")
+            return items if isinstance(items, list) else []
+        return []
+
+    def poster_wall_get_folder(self, path=None, page=1, page_size=100, sort_type=1, order_type=1):
+        """获取海报墙文件夹与条目（v1/video/poster_wall/media_lib/get_folder）"""
+        params = {
+            "page": page, "page_size": page_size,
+            "sort_type": sort_type, "order_type": order_type,
+        }
+        if path:
+            params["path"] = path
+        result = self.request("v1/video/poster_wall/media_lib/get_folder", params=params)
+        if result["code"] == 200 and isinstance(result["data"], dict):
+            return result["data"]
+        return None
+
+    def get_tv(self, item_id, folder_path="ALL"):
+        """获取剧集详情（含季/集信息）"""
+        result = self.request(
+            "v2/video/details/getTV",
+            params={"ug_video_info_id": item_id, "folder_path": folder_path},
+        )
+        if result["code"] == 200 and isinstance(result["data"], dict):
+            return result["data"]
+        return None
+
     def media_lib_scan(self, media_lib_set_id, scan_type=2, op_type=2):
         result = self.request(
             "v1/video/media_lib/scan",
@@ -678,6 +709,7 @@ class UgreenClient(_IMediaClient):
             return []
         try:
             if not item_id and title:
+                # 先搜索电视剧
                 result = self._api.request(
                     "v1/video/all",
                     params={
@@ -694,16 +726,23 @@ class UgreenClient(_IMediaClient):
                 if result["code"] == 200 and isinstance(result["data"], dict):
                     items = result["data"].get("video_arr") or []
                     for item in items:
-                        vi = item.get("video_info") if isinstance(item, dict) else {}
-                        if vi.get("name") == title:
+                        vi = item.get("video_info") if isinstance(item.get("video_info"), dict) else {}
+                        vi_name = vi.get("name", "")
+                        if vi_name == title and (not year or str(vi.get("release_year")) == str(year)):
                             item_id = vi.get("ug_video_info_id") or vi.get("id")
                             break
             if not item_id:
                 return []
-            info = self._api.video_info(item_id)
-            if not info:
-                return []
-            episodes = info.get("episodes") or info.get("episode_arr") or []
+            # 使用 get_tv API 获取剧集详情（含季/集）
+            tv_data = self._api.get_tv(item_id)
+            if not tv_data:
+                # 降级使用 video_info
+                info = self._api.video_info(item_id)
+                if not info:
+                    return []
+                episodes = info.get("episodes") or info.get("episode_arr") or []
+            else:
+                episodes = tv_data.get("episodes") or tv_data.get("episode_arr") or []
             exists_episodes = []
             for ep in episodes:
                 exists_episodes.append({
@@ -809,21 +848,20 @@ class UgreenClient(_IMediaClient):
 
     def refresh_root_library(self):
         """
-        刷新整个媒体库
+        刷新整个媒体库（遍历所有库逐个扫描）
         """
         if not self._api:
             return
         try:
-            lib_data = self._api.media_lib_get_all()
-            if not lib_data:
+            libs = self._api.media_list()
+            if not libs:
                 return
-            libs = lib_data.get("media_lib_info_list") or lib_data.get("media_lib_set_list") or []
             for lib in libs:
                 lib_id = lib.get("media_lib_set_id") or lib.get("id")
+                lib_name = lib.get("media_name") or lib.get("name", lib_id)
                 if lib_id:
                     self._api.media_lib_scan(lib_id)
-                    log.info(f"【{self.client_name}】媒体库刷新请求已发送：{lib.get('name', lib_id)}")
-                    break
+                    log.info(f"【{self.client_name}】媒体库刷新请求已发送：{lib_name}")
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】刷新媒体库出错：" + str(e))
@@ -843,22 +881,23 @@ class UgreenClient(_IMediaClient):
         if not self._api:
             return []
         try:
-            lib_data = self._api.media_lib_get_all()
-            if not lib_data:
+            libs = self._api.media_list()
+            if not libs:
                 return []
-            libs = lib_data.get("media_lib_info_list") or lib_data.get("media_lib_set_list") or []
             libraries = []
             for lib in libs:
-                collection_type = lib.get("media_lib_type", "")
-                if collection_type == "movies":
+                lib_id = str(lib.get("media_lib_set_id") or lib.get("id", ""))
+                lib_name = lib.get("media_name") or lib.get("name", "")
+                lib_type = lib.get("media_lib_type", "")
+                if lib_type == "movies":
                     library_type = MediaType.MOVIE.value
-                elif collection_type == "tv":
+                elif lib_type == "tv":
                     library_type = MediaType.TV.value
                 else:
-                    library_type = collection_type
+                    library_type = lib_type
                 libraries.append({
-                    "id": lib.get("media_lib_set_id") or lib.get("id"),
-                    "name": lib.get("name", ""),
+                    "id": lib_id,
+                    "name": lib_name,
                     "type": library_type,
                     "path": lib.get("path", ""),
                 })
@@ -889,10 +928,8 @@ class UgreenClient(_IMediaClient):
         if not self._api:
             return []
         try:
-            lib_data = self._api.media_lib_get_all()
-            if not lib_data:
-                return []
-            libs = lib_data.get("media_lib_info_list") or lib_data.get("media_lib_set_list") or []
+            # 先获取媒体库列表，找到目标库的路径
+            libs = self._api.media_list()
             target_lib = None
             for lib in libs:
                 if str(lib.get("media_lib_set_id") or lib.get("id")) == str(parent):
@@ -900,37 +937,43 @@ class UgreenClient(_IMediaClient):
                     break
             if not target_lib:
                 return []
-            classification = -102 if target_lib.get("media_lib_type") == "movies" else -103
-            result = self._api.request(
-                "v1/video/all",
-                params={
-                    "page": 1, "pageSize": 100,
-                    "classification": classification,
-                    "sort_type": 2, "order_type": 2,
-                    "release_date_begin": -9999999999,
-                    "release_date_end": -9999999999,
-                    "identify_status": 0, "watch_status": -1,
-                    "ug_style_id": 0, "ug_country_id": 0, "clarity": -1,
-                },
-            )
-            if result["code"] != 200 or not isinstance(result["data"], dict):
+            lib_path = target_lib.get("path", "")
+            if not lib_path:
                 return []
-            items = result["data"].get("video_arr") or []
+            # 使用 poster_wall_get_folder 遍历目录树获取所有视频
             ret_items = []
-            for item in items:
-                vi = item.get("video_info") if isinstance(item, dict) else {}
-                item_id = vi.get("ug_video_info_id") or vi.get("id")
-                name = vi.get("name") or vi.get("title") or ""
-                item_type = MediaType.MOVIE.value if classification == -102 else MediaType.TV.value
-                link = f"/open?url={quote(self.get_play_url(item_id))}&type=ugreen" if item_id else ""
-                image = self.get_local_image_by_id(item_id, remote=False, inner=True) if item_id else ""
-                ret_items.append({
-                    "id": item_id,
-                    "name": name,
-                    "type": item_type,
-                    "image": image,
-                    "link": link,
-                })
+            page = 1
+            while True:
+                data = self._api.poster_wall_get_folder(
+                    path=lib_path, page=page, page_size=100,
+                    sort_type=1, order_type=1,
+                )
+                if not data:
+                    break
+                for video in data.get("video_arr") or []:
+                    if not isinstance(video, dict):
+                        continue
+                    vi = video.get("video_info") if isinstance(video.get("video_info"), dict) else video
+                    video_type = vi.get("type", 0)
+                    if video_type not in [1, 2]:
+                        continue
+                    item_id = vi.get("ug_video_info_id") or vi.get("id")
+                    if not item_id:
+                        continue
+                    name = vi.get("name") or vi.get("title") or ""
+                    item_type = MediaType.MOVIE.value if video_type == 1 else MediaType.TV.value
+                    link = f"/open?url={quote(self.get_play_url(item_id))}&type=ugreen"
+                    image = self.get_local_image_by_id(item_id, remote=False, inner=True)
+                    ret_items.append({
+                        "id": item_id,
+                        "name": name,
+                        "type": item_type,
+                        "image": image,
+                        "link": link,
+                    })
+                if data.get("is_last_page"):
+                    break
+                page += 1
             return ret_items
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
