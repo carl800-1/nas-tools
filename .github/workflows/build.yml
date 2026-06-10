@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build Docker Image
     permissions:
-      contents: read
+      contents: write
       packages: write
       attestations: write
       id-token: write
@@ -74,3 +74,15 @@ jobs:
             APT_MIRROR=deb.debian.org
             PYPI_INDEX_URL=https://pypi.org/simple
             PYPI_TRUSTED_HOST=pypi.org
+      -
+        name: Create GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.app_version }}
+          name: v${{ env.app_version }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
