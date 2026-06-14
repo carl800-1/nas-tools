@@ -230,6 +230,7 @@ class MediaServer:
             sync_library = self.systemconfig.get(SystemConfigKey.SyncLibrary) or []
             # 获取所有媒体库
             all_libraries = self.get_libraries()
+            log.info(f"【MediaServer】获取到 {len(all_libraries)} 个媒体库")
             if not all_libraries:
                 log.error("【MediaServer】获取媒体库列表失败，退出同步")
                 self.progress.update(ptype=ProgressKey.MediaSync, text="媒体库列表获取失败", value=100)
@@ -256,9 +257,11 @@ class MediaServer:
                 self.progress.update(ptype=ProgressKey.MediaSync, text="没有需要同步的媒体库", value=100)
                 self.progress.end(ProgressKey.MediaSync)
                 return
+            log.info(f"【MediaServer】过滤后需要同步 {len(libraries_to_sync)} 个媒体库")
             # 汇总统计
             medias_count = self.get_medias_count()
             total_media_count = (medias_count.get("MovieCount") or 0) + (medias_count.get("SeriesCount") or 0)
+            log.info(f"【MediaServer】媒体服务器统计：MovieCount={medias_count.get('MovieCount')}, SeriesCount={medias_count.get('SeriesCount')}")
             total_count = 0
             movie_count = 0
             tv_count = 0
@@ -267,10 +270,13 @@ class MediaServer:
             for library in libraries_to_sync:
                 lib_id = library.get("id")
                 lib_name = library.get("name", lib_id)
+                log.info(f"【MediaServer】开始同步媒体库：{lib_name} (id={lib_id})")
                 # 获取媒体库所有项目
                 self.progress.update(ptype=ProgressKey.MediaSync,
                                      text="正在获取 %s 数据..." % lib_name)
-                for item in self.get_items(lib_id):
+                items = self.get_items(lib_id)
+                log.info(f"【MediaServer】媒体库 {lib_name} 获取到 {len(items)} 个条目")
+                for item in items:
                     if not item:
                         continue
                     # 更新进度

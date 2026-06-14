@@ -887,6 +887,7 @@ class UgreenClient(_IMediaClient):
         try:
             libs = self._api.media_list()
             if not libs:
+                log.warn(f"【{self.client_name}】media_list() 返回空列表")
                 return []
             libraries = []
             for lib in libs:
@@ -908,6 +909,7 @@ class UgreenClient(_IMediaClient):
                     "path": lib.get("path", ""),
                     "link": lib_link,
                 })
+                log.info(f"【{self.client_name}】发现媒体库：id={lib_id}, name={lib_name}, type={library_type}, path={lib.get('path','')}")
             return libraries
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
@@ -937,18 +939,24 @@ class UgreenClient(_IMediaClient):
         try:
             # 先获取媒体库列表，找到目标库
             libs = self._api.media_list()
+            log.info(f"【{self.client_name}】get_items: 从 media_list() 获得 {len(libs)} 个库, parent={parent}")
             target_lib = None
             for lib in libs:
-                if str(lib.get("media_lib_set_id") or lib.get("id")) == str(parent):
+                lib_match = str(lib.get("media_lib_set_id") or lib.get("id"))
+                log.info(f"【{self.client_name}】get_items: 比较库ID {lib_match} == {parent}")
+                if lib_match == str(parent):
                     target_lib = lib
                     break
             if not target_lib:
+                log.warn(f"【{self.client_name}】get_items: 未找到匹配的媒体库，parent={parent}")
                 return []
             lib_path = target_lib.get("path", "")
             lib_id = str(target_lib.get("media_lib_set_id") or target_lib.get("id", ""))
             lib_name = target_lib.get("media_name") or target_lib.get("name", lib_id)
             if not lib_path:
+                log.warn(f"【{self.client_name}】get_items: 媒体库 {lib_name} 的路径为空，无法遍历")
                 return []
+            log.info(f"【{self.client_name}】get_items: 开始遍历媒体库 {lib_name}, path={lib_path}")
             # 使用 poster_wall_get_folder 遍历目录树获取所有视频
             ret_items = []
             _local_video_cache = {}
@@ -963,13 +971,17 @@ class UgreenClient(_IMediaClient):
                     sort_type=1, order_type=1,
                 )
                 if not data:
+                    log.info(f"【{self.client_name}】get_items: poster_wall_get_folder 第{page}页返回空，结束遍历")
                     break
-                for video in data.get("video_arr") or []:
+                video_arr = data.get("video_arr") or []
+                log.info(f"【{self.client_name}】get_items: 第{page}页返回 {len(video_arr)} 个条目, is_last_page={data.get('is_last_page')}")
+                for video in video_arr:
                     if not isinstance(video, dict):
                         continue
                     vi = video.get("video_info") if isinstance(video.get("video_info"), dict) else video
                     video_type = vi.get("type", 0)
                     if video_type not in [1, 2]:
+                        log.info(f"【{self.client_name}】get_items: 跳过非媒体条目 type={video_type}, name={vi.get('name','')}")
                         continue
                     item_id = vi.get("ug_video_info_id") or vi.get("id")
                     if not item_id:
@@ -999,6 +1011,7 @@ class UgreenClient(_IMediaClient):
                 if data.get("is_last_page"):
                     break
                 page += 1
+            log.info(f"【{self.client_name}】get_items: 媒体库 {lib_name} 同步完成，共 {len(ret_items)} 个条目")
             return ret_items
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
