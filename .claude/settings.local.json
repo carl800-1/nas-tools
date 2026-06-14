@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -rn \"start_mediasync\\\\|同步媒体库\\\\|媒体库同步\" /Volumes/新加卷/program/nas-tool/nas-tools-main -include=\"*.html\")",
+      "Bash(grep -rn \"api/v1/library/sync\\\\|/sync/start\\\\|start_mediasync\\\\|postLibrary\\\\|refreshLib\" /Volumes/新加卷/program/nas-tool/nas-tools-main -include=\"*.py\")",
+      "Bash(grep -rn \"sync_mediaserver\\\\|start_mediasync\\\\|mediasync\\\\|MediaServer\" /Volumes/新加卷/program/nas-tool/nas-tools-main -include=\"*.js\")",
+      "Bash(grep -rn \"set_system_config\" /Volumes/新加卷/program/nas-tool/nas-tools-main -include=\"*.html\")",
+      "Bash(grep -rn \"update_config\" /Volumes/新加卷/program/nas-tool/nas-tools-main -include=\"*.html\")",
+      "Bash(python3 -m py_compile app/mediaserver/client/ugreen.py)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'fix: 修复绿联影视媒体服务器卡顿问题 *)",
+      "Bash(git branch *)"
+    ]
+  }
+}

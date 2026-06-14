@@ -1,0 +1,11 @@
+._*
+.DS_Store
+.git
+.gitignore
+__pycache__
+*.pyc
+.dockerignore
+README.md
+volume.png
+readme.md
+compose.yml
