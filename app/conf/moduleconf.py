@@ -320,6 +320,66 @@ class ModuleConf(object):
                     }
                 }
             },
+            "feishu": {
+                "name": "飞书",
+                "img_url": "../static/img/message/feishu.png",
+                "color": "#3370FF",
+                "search_type": SearchType.FEISHU,
+                "max_length": 3000,
+                "config": {
+                    "app_id": {
+                        "id": "feishu_app_id",
+                        "required": True,
+                        "title": "App ID",
+                        "tooltip": "飞书开放平台创建企业自建应用后获取，形如cli_xxxxxxxx，需为应用开启机器人能力并订阅im.message.receive_v1事件（长连接方式）",
+                        "type": "text",
+                        "placeholder": "cli_xxxxxxxxxxxx"
+                    },
+                    "app_secret": {
+                        "id": "feishu_app_secret",
+                        "required": True,
+                        "title": "App Secret",
+                        "tooltip": "飞书开放平台创建企业自建应用后获取",
+                        "type": "text"
+                    },
+                    "chat_id": {
+                        "id": "feishu_chat_id",
+                        "required": False,
+                        "title": "Chat ID",
+                        "tooltip": "接收消息通知的群组ID，形如oc_xxxxxxxx，可在消息日志中查看；留空则发送给下方的用户列表，需要先将机器人添加到该群组",
+                        "type": "text",
+                        "placeholder": "oc_xxxxxxxxxxxx"
+                    },
+                    "user_ids": {
+                        "id": "feishu_user_ids",
+                        "required": False,
+                        "title": "User IDs",
+                        "tooltip": "允许使用交互的用户open_id，留空则只允许管理用户使用；open_id形如ou_xxxxxxxx，可在消息日志或飞书开放平台查看",
+                        "type": "text",
+                        "placeholder": "使用,分隔多个Id"
+                    },
+                    "admin_ids": {
+                        "id": "feishu_admin_ids",
+                        "required": False,
+                        "title": "Admin IDs",
+                        "tooltip": "允许使用管理命令的用户open_id，留空则无法使用管理命令，admin会同时被视为可交互用户",
+                        "type": "text",
+                        "placeholder": "使用,分隔多个Id"
+                    },
+                    "domain": {
+                        "id": "feishu_domain",
+                        "required": False,
+                        "title": "接口域名",
+                        "tooltip": "飞书（中国）使用open.feishu.cn，Lark（国际版）使用open.larksuite.com，一般保持默认",
+                        "type": "select",
+                        "options": {
+                            "feishu": "飞书（中国）",
+                            "lark": "Lark（国际版）"
+                        },
+                        "default": "feishu"
+                    }
+                }
+            },
             "gotify": {
                 "name": "Gotify",
                 "img_url": "../static/img/message/gotify.png",

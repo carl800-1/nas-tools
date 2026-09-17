@@ -80,7 +80,18 @@ NAS-Tools 是一套运行在 NAS / 服务器上的 **媒体库自动化管理工
 - 索引器：Jackett / Prowlarr 可跳转各自服务；
 - 媒体服务器：每个服务器配置界面可直接跳转该服务。
 
-### 4. 其他
+### 4. 飞书消息通知（双向交互）
+
+基于 `lark-oapi` 的 WebSocket 长连接接入飞书自建应用，**无需公网 IP、域名或内网穿透**：
+
+| 能力 | 说明 |
+|---|---|
+| 通知推送 | 下载、入库、订阅、签到、刷流、站点消息、媒体服务器等全部推送开关 |
+| 交互式搜索 | 在飞书中直接发送关键字搜索站点资源，回复序号即可下载或订阅 |
+| 管理命令 | 支持 `/` 开头命令，支持用户白名单与管理员白名单（基于 `open_id`） |
+| 卡片消息 | 自动上传并展示海报图片，附带「查看详情」跳转按钮 |
+
+### 5. 其他
 
 - 优化用户认证与权限分级（WEB 登录 + 用户管理）；
 - 优化新手刷流体验；
@@ -126,7 +137,7 @@ NAS-Tools 是一套运行在 NAS / 服务器上的 **媒体库自动化管理工
 | **索引器** | 内置 PT 站点、MTeam、TNode、TorrentLeech、海胆、Jackett、Prowlarr、内置 BT |
 | **元数据源** | TMDB、豆瓣、Bangumi、Fanart |
 | **字幕** | 站点字幕下载、ChineseSubFinder、OpenSubtitles、AutoSub |
-| **消息通知** | Telegram、微信（企业应用）、Bark、Gotify、ntfy、PushDeer、PushPlus、ServerChan、Slack、Synology Chat、Chanify、IYUU、Webhook |
+| **消息通知** | 飞书（长连接，支持双向交互）、Telegram、微信（企业应用）、Bark、Gotify、ntfy、PushDeer、PushPlus、ServerChan、Slack、Synology Chat、Chanify、IYUU、Webhook |
 | **运行平台** | Docker（amd64 / arm64）、Linux、Windows；Python 3.10 |
 
 ## 快速开始

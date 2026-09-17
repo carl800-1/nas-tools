@@ -28,6 +28,10 @@ class SecurityHelper:
     def check_slack_ip(self, ip):
         return self.allow_access({"ipve": "127.0.0.1"}, ip)
 
+    def check_feishu_ip(self, ip):
+        # 飞书消息由长连接接收后本地转发，只允许本机访问
+        return self.allow_access({"ipv4": "127.0.0.1", "ipv6": "::1"}, ip)
+
     @staticmethod
     def allow_access(allow_ips, ip):
         """

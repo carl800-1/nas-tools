@@ -1434,6 +1434,51 @@ def telegram():
     return 'Ok'
 
 
+# 飞书消息响应
+@App.route('/feishu', methods=['POST'])
+@require_auth(force=False)
+def feishu():
+    """
+    飞书消息由 lark-oapi 长连接接收后转发至本接口，报文格式：
+    {
+        "user_id": "ou_xxxxxxxxxxxxxxxx",
+        "text": "搜索 沙丘"
+    }
+    """
+    # 当前在用的交互渠道
+    interactive_client = Message().get_interactive_client(SearchType.FEISHU)
+    if not interactive_client:
+        return 'NAStool未启用飞书交互'
+    msg_json = request.get_json()
+    if not SecurityHelper().check_feishu_ip(request.remote_addr):
+        log.error("收到来自 %s 的非法飞书消息：%s" % (request.remote_addr, msg_json))
+        return '不允许的IP地址请求'
+    if msg_json:
+        text = msg_json.get("text")
+        user_id = msg_json.get("user_id")
+        if text and user_id:
+            log.info(f"收到飞书消息：userid={user_id}, text={text}")
+            # 检查权限
+            if text.startswith("/"):
+                if str(user_id) not in interactive_client.get("client").get_admin():
+                    Message().send_channel_msg(channel=SearchType.FEISHU,
+                                               title="只有管理员才有权限执行此命令",
+                                               user_id=user_id)
+                    return '只有管理员才有权限执行此命令'
+            else:
+                if str(user_id) not in interactive_client.get("client").get_users():
+                    Message().send_channel_msg(channel=SearchType.FEISHU,
+                                               title="你不在用户白名单中，无法使用此机器人",
+                                               user_id=user_id)
+                    return '你不在用户白名单中，无法使用此机器人'
+            # 处理消息
+            WebAction().handle_message_job(msg=text,
+                                           in_from=SearchType.FEISHU,
+                                           user_id=user_id,
+                                           user_name=user_id)
+    return 'Ok'
+
+
 # Synology Chat消息响应
 @App.route('/synology', methods=['POST'])
 @require_auth(force=False)
