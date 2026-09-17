@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -62,8 +63,10 @@ _ERROR_HINTS = {
     10003: "App ID 不存在，请检查是否为 cli_ 开头的正确 App ID",
 }
 
-# 当前进程内的长连接实例（lark-oapi 的 ws 客户端共用模块级事件循环，同一进程只能存在一个连接）
+# 当前进程内的长连接实例及其独占的事件循环（lark-oapi 的 ws 客户端共用模块级事件循环，
+# 且没有 stop() 方法，拆除连接只能把该循环停掉，因此每条连接都必须独占一个新的循环）
 _WS_CLIENT = None
+_WS_LOOP = None
 
 
 class Feishu(_IMessageClient):
@@ -82,6 +85,7 @@ class Feishu(_IMessageClient):
     _enabled = True
     _ws_client = None
     _ws_thread = None
+    _ws_loop = None
     _tenant_token = None
     _token_expire_at = 0
     _image_cache = {}
@@ -142,13 +146,14 @@ class Feishu(_IMessageClient):
         self._ws_client = None
         if not ws_client:
             return
-        global _WS_CLIENT
+        global _WS_CLIENT, _WS_LOOP
         with lock:
             if _WS_CLIENT is ws_client:
                 _WS_CLIENT = None
-        # lark-oapi 的 ws 客户端未提供公开的停止方法，只能停掉它内部使用的模块级事件循环，
+                _WS_LOOP = None
+        # lark-oapi 的 ws 客户端未提供公开的停止方法，只能停掉它独占的事件循环，
         # 阻塞在 start() 的线程会随之返回（见 __run_ws_client）
-        self.__shutdown_ws_client(ws_client)
+        self.__shutdown_ws_client(ws_client, self._ws_loop)
         log.info("【Feishu】消息接收服务已停止")
 
     def send_msg(self, title, text="", image="", url="", user_id=""):
@@ -294,6 +299,8 @@ class Feishu(_IMessageClient):
         if lark is None:
             log.error("【Feishu】未安装 lark-oapi，无法接收飞书消息，请先安装依赖：pip install lark-oapi")
             return
+        # 每条连接独占一个全新的事件循环，避免与未拆除干净的旧连接互相干扰
+        ws_loop = self.__install_ws_loop()
         try:
             event_handler = self.__build_event_handler()
             # 长连接使用与服务端接口相同的域名，Lark国际版需显式指定
@@ -306,24 +313,81 @@ class Feishu(_IMessageClient):
             ExceptionUtils.exception_traceback(err)
             log.error("【Feishu】消息接收服务初始化失败：%s" % str(err))
             return
-        global _WS_CLIENT
+        global _WS_CLIENT, _WS_LOOP
         with lock:
-            old_client = _WS_CLIENT
+            old_client, old_loop = _WS_CLIENT, _WS_LOOP
             _WS_CLIENT = ws_client
+            _WS_LOOP = ws_loop
             self._ws_client = ws_client
+            self._ws_loop = ws_loop
+        # 兜底：正常路径下旧连接已由 Message.init_config 调用 stop_service 回收，
+        # 这里再补一次，防止遗留连接与新连接同时收消息
         if old_client and old_client is not ws_client:
-            self.__shutdown_ws_client(old_client)
+            self.__shutdown_ws_client(old_client, old_loop)
         # 长连接是常驻线程，不占用 ThreadHelper 的线程池
         self._ws_thread = threading.Thread(target=self.__run_ws_client,
-                                           args=(ws_client,),
+                                           args=(ws_client, ws_loop),
                                            name="feishu-ws",
                                            daemon=True)
         self._ws_thread.start()
 
-    def __run_ws_client(self, ws_client):
+    @staticmethod
+    def __install_ws_loop():
+        """
+        为下一条长连接安装全新的事件循环，返回该循环（失败返回None）
+
+        lark-oapi 的 ws 客户端把事件循环定义在模块级（lark_oapi.ws.client.loop），
+        Client.start() 直接对它 run_until_complete，且没有提供 stop() 方法：拆除旧连接
+        只能把该循环停掉（见 __shutdown_ws_client），而 stop 的动作是在 0.5 秒后才生效的。
+        一次「保存」的流程恰好卡在这个空档里：web/action.py 的 __update_message_client
+        先删旧配置触发 init_config 把旧连接停掉（此时循环仍在运行），紧接着插入新配置再触发
+        init_config 立刻新建客户端并 start()，于是新的 run_until_complete 撞上那个还没停下的
+        循环，抛 RuntimeError: This event loop is already running，新连接当场失效；0.5 秒后
+        旧循环停止，把旧连接一并带走 —— 最终一条连接都不剩，表现就是飞书里发消息毫无反应。
+        因此这里让每条连接各用一个新循环，从根上隔离。
+        """
+        try:
+            from lark_oapi.ws import client as ws_client_module
+            new_loop = asyncio.new_event_loop()
+            ws_client_module.loop = new_loop
+            asyncio.set_event_loop(new_loop)
+            return new_loop
+        except Exception as err:
+            log.error("【Feishu】事件循环初始化失败：%s" % str(err))
+            return None
+
+    @staticmethod
+    def __close_ws_loop(ws_loop):
+        """
+        关闭已停止且不再使用的事件循环，避免反复保存配置时泄漏文件描述符
+
+        关闭前先把残留任务（如 SDK 的 ping 循环）取消掉，否则解释器会在日志里刷
+        「Task was destroyed but it is pending!」。
+        """
+        if ws_loop is None or ws_loop.is_closed() or ws_loop.is_running():
+            return
+        try:
+            pending = [task for task in asyncio.all_tasks(ws_loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                ws_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            ws_loop.close()
+        except Exception:
+            pass
+
+    def __run_ws_client(self, ws_client, ws_loop):
         """
         阻塞运行长连接（lark-oapi 的 start() 会一直阻塞到连接结束）
         """
+        global _WS_CLIENT
+        with lock:
+            superseded = _WS_CLIENT is not None and _WS_CLIENT is not ws_client
+        if superseded:
+            # 本连接已被后续的配置变更取代，不再建立连接
+            log.info("【Feishu】消息接收服务已被后续配置取代，跳过启动")
+            self.__close_ws_loop(ws_loop)
+            return
         try:
             log.info("【Feishu】消息接收服务启动")
             ws_client.start()
@@ -333,17 +397,23 @@ class Feishu(_IMessageClient):
                 log.error("【Feishu】消息接收服务异常退出：%s" % str(err))
             else:
                 log.info("【Feishu】消息接收服务已停止")
+        finally:
+            with lock:
+                current = _WS_CLIENT is ws_client
+            if not current:
+                self.__close_ws_loop(ws_loop)
 
     @staticmethod
-    def __shutdown_ws_client(ws_client):
+    def __shutdown_ws_client(ws_client, ws_loop=None):
         """
         释放遗留的长连接实例
         """
-        try:
-            from lark_oapi.ws.client import loop as ws_loop
-        except Exception:
-            return
-        if not ws_loop.is_running():
+        if ws_loop is None:
+            try:
+                from lark_oapi.ws.client import loop as ws_loop
+            except Exception:
+                return
+        if ws_loop is None or ws_loop.is_closed() or not ws_loop.is_running():
             return
 
         def _graceful_stop():
