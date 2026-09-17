@@ -1,3 +1,13 @@
+# v3.8.0 (2026-09-17)
+
+## 界面优化：页脚版本号精简
+- `web/backend/web_utils.py` 的 `WebUtils.get_current_version()` 去除短提交哈希后缀，页脚仅显示版本号（如 `v3.8.0`，原为 `v3.7.11 aaa0ded`）
+- 移除对 `git rev-parse HEAD` 的调用，避免在非 git 环境（如 Docker 构建产物）下取不到提交号
+- 更新检测逻辑不受影响：`get_latest_version()` 走 `releases_update_only=True` 分支只返回 tag，前端 `compareVersion` 的哈希对比分支本就不可达
+
+## 版本号
+- 从 `v3.7.11` 升级至 `v3.8.0`
+
 # v3.7.11 (2026-06-14)
 
 ## 性能修复：绿联影视媒体库同步卡顿问题
