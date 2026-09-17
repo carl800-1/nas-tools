@@ -190,22 +190,48 @@
 </div>
 <div class="modal modal-blur fade" id="modal-backup" tabindex="-1" role="dialog" aria-hidden="true"
   data-bs-backdrop="static" data-bs-keyboard="false">
-  <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title">备份&恢复</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <form class="dropzone" id="back_file" action="/upload">
-          <div class="fallback">
-            <input name="file" type="file" accept="*.zip" />
+        <div class="mb-2">
+          <div class="d-flex align-items-center">
+            <div class="me-auto">
+              <strong>① 备份当前配置</strong>
+              <span class="text-muted ms-1">勾选需要备份的内容</span>
+            </div>
+            <a href="javascript:void(0)" class="me-3" id="backup_all">全选</a>
+            <a href="javascript:void(0)" id="backup_none">全不选</a>
           </div>
-          <div class="dz-message">
-            <h3 class="dropzone-msg-title">上传备份文件</h3>
-            <span class="dropzone-msg-desc">点击或者拖动备份文件到此处</span>
+          <div class="row mt-2" id="backup_items">
+            <div class="text-muted">正在加载备份项...</div>
           </div>
-        </form>
+        </div>
+        <hr>
+        <div class="mb-2">
+          <div class="d-flex align-items-center">
+            <div class="me-auto">
+              <strong>② 恢复配置</strong>
+              <span class="text-muted ms-1">上传备份文件后，勾选需要恢复的内容</span>
+            </div>
+            <a href="javascript:void(0)" class="me-3" id="restore_all">全选</a>
+            <a href="javascript:void(0)" id="restore_none">全不选</a>
+          </div>
+          <form class="dropzone mt-2" id="back_file" action="/upload">
+            <div class="fallback">
+              <input name="file" type="file" accept="*.zip" />
+            </div>
+            <div class="dz-message">
+              <h3 class="dropzone-msg-title">上传备份文件</h3>
+              <span class="dropzone-msg-desc">点击或者拖动备份文件到此处</span>
+            </div>
+          </form>
+          <div id="restore_info" class="text-muted mt-2"></div>
+          <div class="row mt-1" id="restore_items"></div>
+        </div>
       </div>
       <div class="modal-footer">
         <button id="backup_btn" class="btn btn-primary">备份当前配置</button>
@@ -314,6 +340,7 @@
         break;
       case "backup":
         $('#modal-backup').modal('show');
+        init_backup_modal();
         break;
       case "sync":
         $('#modal-service-sync').modal('show');
@@ -363,31 +390,139 @@
     }
   });
 
+  // ======================= 备份&恢复 =======================
+
+  // 备份/恢复条目定义（服务端下发，避免前后端名称不一致）
+  let backup_item_defs = [];
+
+  // HTML转义
+  function escape_text(text) {
+    return String(text == null ? "" : text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+  }
+
+  // 收集勾选的条目
+  function get_checked_items(container) {
+    let items = [];
+    $(container).find("input[type=checkbox]:checked").each(function () {
+      items.push($(this).val());
+    });
+    return items;
+  }
+
+  // 设置勾选状态
+  function set_checked_items(container, checked) {
+    $(container).find("input[type=checkbox]").prop("checked", checked);
+  }
+
+  // 渲染条目勾选框
+  // items: [{key, name, desc, detail}]，只渲染备份文件中实际包含的内容
+  function render_backup_items(container, items) {
+    let html = "";
+    items.forEach(function (item, index) {
+      const id = container.substring(1) + "_" + index;
+      const detail = item.detail ? `（${item.detail.length} 项）` : "";
+      html += `<div class="col-md-6">
+          <label class="form-check mb-1" for="${id}" title="${escape_text(item.desc)}">
+            <input class="form-check-input" type="checkbox" id="${id}" value="${escape_text(item.key)}" checked>
+            <span class="form-check-label">${escape_text(item.name)}${detail}</span>
+          </label>
+        </div>`;
+    });
+    $(container).html(html || `<div class="text-muted">没有可用的内容</div>`);
+  }
+
+  // 加载备份项定义
+  function load_backup_item_defs(handler) {
+    if (backup_item_defs.length > 0) {
+      handler(backup_item_defs);
+      return;
+    }
+    ajax_post("get_backup_items", {}, function (ret) {
+      if (ret.code === 0 && ret.items) {
+        backup_item_defs = ret.items;
+      }
+      handler(backup_item_defs);
+    }, true, false);
+  }
+
+  // 打开备份&恢复窗口时初始化
+  function init_backup_modal() {
+    load_backup_item_defs(function (items) {
+      render_backup_items("#backup_items", items);
+    });
+    $("#restore_info").text("");
+    $("#restore_items").empty();
+  }
+
   // 备份
   $("#backup_btn").unbind("click").click(function () {
+    const items = get_checked_items("#backup_items");
+    if (items.length === 0) {
+      show_fail_modal("请至少勾选一项需要备份的内容");
+      return;
+    }
     $(this).text("备份中...").attr("disabled", true);
-    ajax_backup(function () {
-      $(this).attr("disabled", false).text("备份当前配置");
-    });
+    ajax_backup(function (status) {
+      $("#backup_btn").attr("disabled", false).text("备份当前配置");
+      if (status !== 200) {
+        show_fail_modal("备份失败，请查看系统日志");
+        return;
+      }
+      show_success_modal("备份成功，请妥善保存下载的备份文件");
+    }, items);
   });
 
   // 恢复备份
   $("#restore_btn").unbind("click").click(function () {
     if (!backup_dropzone || !backup_dropzone.files || !backup_dropzone.files[0]) {
+      show_fail_modal("请先上传备份文件");
+      return;
+    }
+    const items = get_checked_items("#restore_items");
+    if (items.length === 0) {
+      show_fail_modal("请至少勾选一项需要恢复的内容");
       return;
     }
     $(this).text("恢复中...").attr("disabled", true);
-    ajax_post("restory_backup", { file_name: backup_dropzone.files[backup_dropzone.files.length - 1].name }, function (ret) {
-      $(this).attr("disabled", false).text("恢复配置");
+    ajax_post("restory_backup", {
+      file_name: backup_dropzone.files[backup_dropzone.files.length - 1].name,
+      items: items
+    }, function (ret) {
+      $("#restore_btn").attr("disabled", false).text("恢复配置");
       $("#modal-backup").modal('hide');
       if (ret.code === 0) {
-        show_success_modal("备份恢复成功，请重启系统生效！");
+        const names = (ret.restored || []).join("、");
+        // 备份文件已按条目写入配置，清空列表避免误用
+        if (backup_dropzone) {
+          backup_dropzone.removeAllFiles(true);
+        }
+        $("#restore_info").text("");
+        $("#restore_items").empty();
+        show_success_modal(`已恢复：${names || "所勾选的内容"}，请重启系统生效！`);
       } else {
         show_fail_modal(`备份恢复失败：${ret.msg}`, function() {
           $("#modal-backup").modal('show');
         });
       }
     });
+  });
+
+  // 全选/全不选
+  $("#backup_all").unbind("click").click(function () {
+    set_checked_items("#backup_items", true);
+  });
+  $("#backup_none").unbind("click").click(function () {
+    set_checked_items("#backup_items", false);
+  });
+  $("#restore_all").unbind("click").click(function () {
+    set_checked_items("#restore_items", true);
+  });
+  $("#restore_none").unbind("click").click(function () {
+    set_checked_items("#restore_items", false);
   });
 
   //名称识别测试
@@ -512,5 +647,30 @@
   // 初始化DropZone
   backup_dropzone = new Dropzone("#back_file");
   backup_dropzone.options.acceptedFiles = ".zip";
+  // 上传完成后解析备份文件内容，按实际包含的条目渲染恢复勾选项
+  backup_dropzone.on("success", function (file, response) {
+    $("#restore_info").text("正在解析备份文件...");
+    ajax_post("get_backup_info", { file_name: file.name }, function (ret) {
+      if (ret.code !== 0) {
+        $("#restore_info").html(`<span class="text-danger">${escape_text(ret.msg || "备份文件解析失败")}</span>`);
+        $("#restore_items").empty();
+        return;
+      }
+      const info = ret.info || {};
+      let text = "备份文件包含以下内容，请勾选需要恢复的部分：";
+      if (info.app_version || info.created_at) {
+        text = `备份版本 ${escape_text(info.app_version || "未知")}`
+             + `，创建于 ${escape_text(info.created_at || "未知")}。请勾选需要恢复的部分：`;
+      }
+      if (ret.legacy) {
+        text = "该备份文件由旧版本生成（无备份说明），已按文件内容识别可恢复项。请勾选需要恢复的部分：";
+      }
+      $("#restore_info").text(text);
+      render_backup_items("#restore_items", ret.items || []);
+    }, true, false);
+  });
+  backup_dropzone.on("error", function (file, message) {
+    $("#restore_info").html(`<span class="text-danger">上传失败：${escape_text(message)}</span>`);
+  });
 
 </script>

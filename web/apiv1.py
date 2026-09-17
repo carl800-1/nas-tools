@@ -1060,6 +1060,7 @@ class ConfigTest(ClientResource):
 class ConfigRestore(ClientResource):
     parser = reqparse.RequestParser()
     parser.add_argument('file_name', type=str, help='备份文件名', location='form', required=True)
+    parser.add_argument('items', type=str, help='需要恢复的条目，逗号分隔，留空恢复全部', location='form')
 
     @config.doc(parser=parser)
     def post(self):
@@ -1067,6 +1068,29 @@ class ConfigRestore(ClientResource):
         恢复备份的配置
         """
         return WebAction().api_action(cmd='restory_backup', data=self.parser.parse_args())
+
+
+@config.route('/backup_items')
+class ConfigBackupItems(ClientResource):
+    @staticmethod
+    def post():
+        """
+        获取备份/恢复的条目列表
+        """
+        return WebAction().api_action(cmd='get_backup_items', data={})
+
+
+@config.route('/backup_info')
+class ConfigBackupInfo(ClientResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('file_name', type=str, help='备份文件名', location='form', required=True)
+
+    @config.doc(parser=parser)
+    def post(self):
+        """
+        解析备份文件，返回其中包含的可恢复条目
+        """
+        return WebAction().api_action(cmd='get_backup_info', data=self.parser.parse_args())
 
 
 @config.route('/info')

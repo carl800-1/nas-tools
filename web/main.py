@@ -1751,7 +1751,8 @@ def backup():
     备份用户设置文件
     :return: 备份文件.zip_file
     """
-    zip_file = WebAction().backup()
+    content = request.get_json(silent=True) or {}
+    zip_file = WebAction().backup(items=content.get("items"))
     if not zip_file:
         return make_response("创建备份失败", 400)
     return send_file(zip_file)

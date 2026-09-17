@@ -65,15 +65,18 @@ function ajax_post(cmd, params, handler, aync = true, show_progress = true) {
 }
 
 // 备份文件下载
-function ajax_backup(handler) {
+// items: 需要备份的条目，为空则使用默认条目
+function ajax_backup(handler, items) {
   const downloadURL = "/backup";
   let xhr = new XMLHttpRequest()
   xhr.open('POST', downloadURL, true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
   xhr.responseType = 'arraybuffer';
   xhr.onload = function () {
+    let fileName = '';
     if (this.status === 200) {
       let type = xhr.getResponseHeader('Content-Type')
-      let fileName = xhr.getResponseHeader('Content-Disposition')
+      fileName = xhr.getResponseHeader('Content-Disposition')
           .split(';')[1]
           .split('=')[1]
           .replace(/\"/g, '')
@@ -108,10 +111,10 @@ function ajax_backup(handler) {
       }
     }
     if (handler) {
-      handler();
+      handler(this.status, fileName);
     }
   };
-  xhr.send();
+  xhr.send(JSON.stringify({items: items || []}));
 }
 
 // 获取链接参数

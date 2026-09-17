@@ -7,10 +7,8 @@ import os.path
 import re
 import shutil
 import signal
-import sqlite3
 import time
 from math import floor
-from pathlib import Path
 from urllib.parse import unquote
 import ast
 import copy
@@ -27,7 +25,7 @@ from app.filetransfer import FileTransfer
 from app.filter import Filter
 from app.helper import DbHelper, ProgressHelper, ThreadHelper, \
     MetaHelper, DisplayHelper, WordsHelper
-from app.helper import RssHelper, PluginHelper
+from app.helper import RssHelper, PluginHelper, BackupHelper
 from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
 from app.media.meta import MetaInfo, MetaBase
@@ -151,6 +149,8 @@ class WebAction:
             "check_site_attr": self.__check_site_attr,
             "refresh_process": self.refresh_process,
             "restory_backup": self.__restory_backup,
+            "get_backup_items": self.__get_backup_items,
+            "get_backup_info": self.__get_backup_info,
             "start_mediasync": self.__start_mediasync,
             "start_mediaDisplayModuleSync": self.__start_mediaDisplayModuleSync,
             "mediasync_state": self.__mediasync_state,
@@ -2655,21 +2655,9 @@ class WebAction:
         解压恢复备份文件
         """
         filename = data.get("file_name")
-        if filename:
-            config_path = Config().get_config_path()
-            temp_path = Config().get_temp_path()
-            file_path = os.path.join(temp_path, filename)
-            try:
-                shutil.unpack_archive(file_path, config_path, format='zip')
-                return {"code": 0, "msg": ""}
-            except Exception as e:
-                ExceptionUtils.exception_traceback(e)
-                return {"code": 1, "msg": str(e)}
-            finally:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-
-        return {"code": 1, "msg": "文件不存在"}
+        if not filename:
+            return {"code": 1, "msg": "文件不存在"}
+        return BackupHelper().restore(filename, items=data.get("items"))
 
     @staticmethod
     def __get_resume(data):
@@ -5395,55 +5383,31 @@ class WebAction:
         return {"code": 0, "text": category_text}
 
     @staticmethod
-    def backup(full_backup=False, bk_path=None):
+    def backup(items=None, full_backup=False, bk_path=None):
         """
-        @param full_backup  是否完整备份
+        备份用户设置文件
+        @param items        需要备份的条目（备份&恢复界面勾选的条目），为空时按默认项
+        @param full_backup  是否完整备份（含历史记录等全部条目）
         @param bk_path     自定义备份路径
         """
-        try:
-            # 创建备份文件夹
-            config_path = Path(Config().get_config_path())
-            backup_file = f"bk_{time.strftime('%Y%m%d%H%M%S')}"
-            if bk_path:
-                backup_path = Path(bk_path) / backup_file
-            else:
-                backup_path = config_path / "backup_file" / backup_file
-            backup_path.mkdir(parents=True)
-            # 把现有的相关文件进行copy备份
-            shutil.copy(f'{config_path}/config.yaml', backup_path)
-            shutil.copy(f'{config_path}/default-category.yaml', backup_path)
-            shutil.copy(f'{config_path}/user.db', backup_path)
+        return BackupHelper().backup(items=items, full_backup=full_backup, bk_path=bk_path)
 
-            # 完整备份不删除表
-            if not full_backup:
-                conn = sqlite3.connect(f'{backup_path}/user.db')
-                cursor = conn.cursor()
-                # 执行操作删除不需要备份的表
-                table_list = [
-                    'SEARCH_RESULT_INFO',
-                    'RSS_TORRENTS',
-                    'DOUBAN_MEDIAS',
-                    'TRANSFER_HISTORY',
-                    'TRANSFER_UNKNOWN',
-                    'TRANSFER_BLACKLIST',
-                    'SYNC_HISTORY',
-                    'DOWNLOAD_HISTORY',
-                    'alembic_version'
-                ]
-                for table in table_list:
-                    cursor.execute(f"""DROP TABLE IF EXISTS {table};""")
-                conn.commit()
-                cursor.close()
-                conn.close()
-            zip_file = str(backup_path) + '.zip'
-            if os.path.exists(zip_file):
-                zip_file = str(backup_path) + '.zip'
-            shutil.make_archive(str(backup_path), 'zip', str(backup_path))
-            shutil.rmtree(str(backup_path))
-            return zip_file
-        except Exception as e:
-            ExceptionUtils.exception_traceback(e)
-            return None
+    @staticmethod
+    def __get_backup_items(data):
+        """
+        获取备份/恢复的条目列表
+        """
+        return {"code": 0, "items": BackupHelper().get_items()}
+
+    @staticmethod
+    def __get_backup_info(data):
+        """
+        解析上传的备份文件，返回可恢复的条目
+        """
+        filename = data.get("file_name")
+        if not filename:
+            return {"code": 1, "msg": "请先上传备份文件"}
+        return BackupHelper().get_info(filename)
 
     @staticmethod
     def get_system_processes():
