@@ -52,6 +52,16 @@ _NOOP_EVENTS = (
     "im.chat.access_event.bot_p2p_chat_entered_v1",
 )
 
+# 常见错误码的可操作排查提示，便于在设置页「测试失败」时定位原因
+_ERROR_HINTS = {
+    230013: "机器人对该用户不可用：请到开放平台-应用发布-版本管理与发布，确认「可用范围」包含该用户，且应用版本已发布（仅保存草稿不生效）",
+    230002: "接收者ID无效：open_id/chat_id 填写有误，或机器人尚未被添加到该群",
+    230098: "机器人不在该群中：请先把机器人添加进目标群，再填写该群的 Chat ID",
+    99991663: "tenant_access_token 无效或已过期，请检查 App ID / App Secret",
+    99991664: "App ID 或 App Secret 错误，请核对应用凭证",
+    10003: "App ID 不存在，请检查是否为 cli_ 开头的正确 App ID",
+}
+
 # 当前进程内的长连接实例（lark-oapi 的 ws 客户端共用模块级事件循环，同一进程只能存在一个连接）
 _WS_CLIENT = None
 
@@ -409,7 +419,7 @@ class Feishu(_IMessageClient):
         """
         targets = self.__get_targets(user_id)
         if not targets:
-            return False, "未配置消息接收对象"
+            return False, "未配置消息接收对象：请在渠道配置里填写 Chat ID，或填写 User IDs / Admin IDs（open_id）"
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
@@ -471,7 +481,18 @@ class Feishu(_IMessageClient):
             return False, "返回内容解析失败：%s" % res.text
         if ret.get("code") == 0:
             return True, ""
-        return False, "错误码：%s，错误信息：%s" % (ret.get("code"), ret.get("msg"))
+        return False, self.__describe_error(ret.get("code"), ret.get("msg"))
+
+    @staticmethod
+    def __describe_error(code, msg):
+        """
+        把飞书错误码翻译成带排查提示的描述，便于在日志/设置页直接定位原因
+        """
+        desc = "错误码：%s，错误信息：%s" % (code, msg)
+        hint = _ERROR_HINTS.get(code)
+        if hint:
+            desc = "%s；排查建议：%s" % (desc, hint)
+        return desc
 
     def __get_tenant_token(self):
         """
@@ -496,7 +517,7 @@ class Feishu(_IMessageClient):
                 ExceptionUtils.exception_traceback(err)
                 return None, str(err)
             if ret.get("code") != 0:
-                return None, "获取token失败，错误码：%s，错误信息：%s" % (ret.get("code"), ret.get("msg"))
+                return None, "获取token失败，" + self.__describe_error(ret.get("code"), ret.get("msg"))
             self._tenant_token = ret.get("tenant_access_token")
             self._token_expire_at = time.time() + int(ret.get("expire") or 7200) - _TOKEN_REFRESH_AHEAD
             return self._tenant_token, ""
