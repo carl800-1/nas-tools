@@ -108,6 +108,7 @@ class Feishu(_IMessageClient):
         self._admin_ids = self.__split_ids(self._client_config.get("admin_ids"))
         self._user_ids = list(self._admin_ids)
         self._user_ids.extend(self.__split_ids(self._client_config.get("user_ids")))
+        self.__check_id_format()
         if not self._app_id or not self._app_secret:
             return
         _web_port = self._config.get_config("app").get("web_port")
@@ -419,7 +420,10 @@ class Feishu(_IMessageClient):
         """
         targets = self.__get_targets(user_id)
         if not targets:
-            return False, "未配置消息接收对象：请在渠道配置里填写 Chat ID，或填写 User IDs / Admin IDs（open_id）"
+            return False, ("未配置消息接收对象：请先按下面两步拿到自己的ID——"
+                           "①保存本页配置并打开「交互」开关；②在飞书中给机器人发一条消息，"
+                           "NAS日志会打印 open_id=ou_xxx；把该ID填入「管理员 Open ID」后即可测试通过。"
+                           "（若要把通知发到群，请把机器人拉进群后取日志中的 chat_id=oc_xxx 填入「群 Chat ID」）")
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
@@ -439,15 +443,44 @@ class Feishu(_IMessageClient):
                 return flag, msg
         return True, ""
 
+    def __check_id_format(self):
+        """
+        校验配置里填写的ID是否符合飞书的命名约定。
+        飞书的用户与群ID都有固定前缀，填错时直到发送阶段才会报错，这里提前给出提示
+        """
+        for one in self._user_ids:
+            if not (one.startswith(("ou_", "on_", "oc_")) or "@" in one):
+                log.warn("【Feishu】配置的ID「%s」不像飞书的用户ID，"
+                         "用户open_id形如ou_xxxxxxxx，可在NAS日志中查看" % one)
+        if self._chat_id and not str(self._chat_id).startswith("oc_"):
+            log.warn("【Feishu】配置的Chat ID「%s」不像飞书的群ID，"
+                     "群chat_id形如oc_xxxxxxxx，可在NAS日志中查看" % self._chat_id)
+
+    @staticmethod
+    def __resolve_target(receive_id):
+        """
+        按ID前缀推断飞书的接收者类型，避免把群ID填进用户列表后发送失败
+        :param receive_id: 配置里填写的ID
+        :return: (receive_id_type, receive_id)
+        """
+        rid = str(receive_id).strip()
+        if rid.startswith("oc_"):
+            return "chat_id", rid
+        if rid.startswith("on_"):
+            return "union_id", rid
+        if "@" in rid:
+            return "email", rid
+        return "open_id", rid
+
     def __get_targets(self, user_id=""):
         """
         计算消息接收对象，返回[(receive_id_type, receive_id)]
         """
         if user_id:
-            return [("open_id", str(user_id))]
+            return [self.__resolve_target(user_id)]
         if self._chat_id:
-            return [("chat_id", str(self._chat_id))]
-        return [("open_id", str(uid)) for uid in self._user_ids]
+            return [self.__resolve_target(self._chat_id)]
+        return [self.__resolve_target(uid) for uid in self._user_ids]
 
     def __send_message(self, receive_id_type, receive_id, msg_type, content):
         """

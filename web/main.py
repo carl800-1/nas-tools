@@ -1463,12 +1463,18 @@ def feishu():
                 if str(user_id) not in interactive_client.get("client").get_admin():
                     Message().send_channel_msg(channel=SearchType.FEISHU,
                                                title="只有管理员才有权限执行此命令",
+                                               text=("你的用户ID（open_id）：%s\n"
+                                                     "如需使用管理命令，请让管理员把该ID加入飞书渠道配置的「管理员 Open ID」"
+                                                     % user_id),
                                                user_id=user_id)
                     return '只有管理员才有权限执行此命令'
             else:
                 if str(user_id) not in interactive_client.get("client").get_users():
                     Message().send_channel_msg(channel=SearchType.FEISHU,
                                                title="你不在用户白名单中，无法使用此机器人",
+                                               text=("你的用户ID（open_id）：%s\n"
+                                                     "请让管理员把该ID加入飞书渠道配置的「用户 Open ID」或「管理员 Open ID」"
+                                                     % user_id),
                                                user_id=user_id)
                     return '你不在用户白名单中，无法使用此机器人'
             # 处理消息

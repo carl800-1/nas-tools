@@ -345,26 +345,26 @@ class ModuleConf(object):
                     "chat_id": {
                         "id": "feishu_chat_id",
                         "required": False,
-                        "title": "Chat ID",
-                        "tooltip": "接收消息通知的群组ID，形如oc_xxxxxxxx，可在消息日志中查看；留空则发送给下方的用户列表，需要先将机器人添加到该群组",
+                        "title": "群 Chat ID",
+                        "tooltip": "接收消息通知的群组ID，形如oc_xxxxxxxx。获取方法：先把机器人拉进目标群，在群里随意发一条消息，NAS日志会打印chat_id=oc_xxxxxxxx；留空则只发给下方的用户列表",
                         "type": "text",
                         "placeholder": "oc_xxxxxxxxxxxx"
                     },
                     "user_ids": {
                         "id": "feishu_user_ids",
                         "required": False,
-                        "title": "User IDs",
-                        "tooltip": "允许使用交互的用户open_id，留空则只允许管理用户使用；open_id形如ou_xxxxxxxx，可在消息日志或飞书开放平台查看",
+                        "title": "用户 Open ID",
+                        "tooltip": "允许使用交互的用户open_id，形如ou_xxxxxxxx，多个用英文逗号分隔。获取方法：让该用户在飞书中给机器人发一条消息，NAS日志会打印open_id=ou_xxxxxxxx（被拒绝时机器人也会回复对方自己的ID）；留空则仅下方管理员可用",
                         "type": "text",
-                        "placeholder": "使用,分隔多个Id"
+                        "placeholder": "ou_xxxxxxxxxxxx,ou_yyyyyyyyyyyy"
                     },
                     "admin_ids": {
                         "id": "feishu_admin_ids",
                         "required": False,
-                        "title": "Admin IDs",
-                        "tooltip": "允许使用管理命令的用户open_id，留空则无法使用管理命令，admin会同时被视为可交互用户",
+                        "title": "管理员 Open ID",
+                        "tooltip": "允许执行管理命令的用户open_id，形如ou_xxxxxxxx。建议先把自己的open_id填在这里再点「测试」，否则没有接收对象会导致测试失败；留空则无法使用管理命令，admin会同时被视为可交互用户",
                         "type": "text",
-                        "placeholder": "使用,分隔多个Id"
+                        "placeholder": "ou_xxxxxxxxxxxx"
                     },
                     "domain": {
                         "id": "feishu_domain",
