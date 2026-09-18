@@ -212,6 +212,10 @@ openai:
   agent_max_rounds: 5
   # 【危险操作二次确认】：删除/重启/升级/清空历史等操作需回复“确认”才执行
   agent_confirm_dangerous: true
+  # 【引导式询问】：信息不足或用户不知能做什么时，AI主动询问需要哪些功能、要操作哪一项
+  agent_guide_enable: true
+  # 【AI优先接管】：所有文本消息都优先交给AI理解（含以「订阅」「搜索」「下载」开头的消息）
+  agent_first: false
   # 【显示工具调用】：在回复中标注本次调用了哪些工具，便于排查问题
   agent_show_tools: false
 

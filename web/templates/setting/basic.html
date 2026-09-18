@@ -772,6 +772,30 @@
               <div class="col-12 col-xl-6">
                 <div class="mb-3">
                   <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_guide_enable" {% if
+                      openai_conf.agent_guide_enable | default(true) %}checked{% endif %}>
+                    <span class="form-check-label">引导式询问 <span class="form-help"
+                                                                  title="开启后，当你说得不够清楚（比如只说「帮我订阅」没说片名）或不知道能做什么时，AI会主动问你需要哪些功能、要操作哪一项，你回答后它再执行，不需要记住任何指令格式；关闭后AI只做它确定的事，信息不足时直接告诉你缺什么"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_first" {% if
+                      openai_conf.agent_first | default(false) %}checked{% endif %}>
+                    <span class="form-check-label">AI优先接管 <span class="form-help"
+                                                                  title="开启后，消息渠道收到的所有文本都优先交给AI理解（包括以「订阅」「搜索」「下载」开头的消息），由AI调用相应功能完成，原来的关键词指令仍可通过AI等效完成；关闭时，以这些关键词开头的消息仍走原来的规则流程。注：AI追问等待你回答期间，你的回复始终会交给AI，不受本开关影响"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="openai.agent_confirm_dangerous" {% if
                       openai_conf.agent_confirm_dangerous | default(true) %}checked{% endif %}>
                     <span class="form-check-label">危险操作需确认 <span class="form-help"

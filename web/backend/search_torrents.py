@@ -235,7 +235,18 @@ def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=N
                         user_name=user_name)
     # 接收到文本
     else:
-        if input_str.startswith("订阅"):
+        # AI 助手接管判定（放在关键词规则之前，否则 AI 的追问会被截断）：
+        #   1. 该用户正处于「追问补全」流程中 —— 他对追问的回答往往就是「沙丘」这种
+        #      极短文本，若交给下面的关键词分支，追问流程会直接断掉；
+        #   2. 开启了 openai.agent_first —— 希望所有文本都先交给 AI 理解，
+        #      AI 能通过工具完成原来关键词路径的同等操作。
+        _agent_owns = OpenAiHelper().get_state() and (
+                OpenAiHelper().has_pending(user_id)
+                or bool((Config().get_config("openai") or {}).get("agent_first")))
+
+        if _agent_owns:
+            SEARCH_MEDIA_TYPE[user_id] = "ASK"
+        elif input_str.startswith("订阅"):
             # 订阅
             SEARCH_MEDIA_TYPE[user_id] = "SUBSCRIBE"
             input_str = re.sub(r"订阅[:：\s]*", "", input_str)

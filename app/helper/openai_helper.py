@@ -28,6 +28,7 @@ class OpenAiHelper:
     _agent_max_rounds = 5
     _agent_confirm_dangerous = True
     _agent_show_tools = False
+    _agent_guide_enable = True
     _agent_protocol = "auto"
 
     # 配置快照：用于检测配置是否在进程运行期间被界面保存修改（见 __ensure_fresh）
@@ -38,15 +39,27 @@ class OpenAiHelper:
     # （__ensure_fresh 会在配置变更时重新调用 init_config）
     _pending_confirm = {}
 
+    # 追问补全队列：user_id -> {"tool": 目标工具, "args": 已知参数,
+    #                          "missing": 待补参数列表, "time": 时间戳}
+    # 与 _pending_confirm 同理，不能被 init_config 重置
+    _pending_ask = {}
+
     # 待确认状态的有效期（秒），超时视为用户已放弃
     _CONFIRM_TTL = 300
+
+    # 追问的有效期（秒）。比确认长一些，因为用户可能要想一下片名/站点名
+    _ASK_TTL = 600
 
     # 用户表示确认的常见措辞
     _CONFIRM_WORDS = ("确认", "确定", "执行", "可以", "好的", "好", "是的", "是", "嗯",
                       "y", "yes", "ok", "confirm")
 
+    # 用户表示放弃的常见措辞
+    _CANCEL_WORDS = ("取消", "算了", "不用了", "不弄了", "不需要", "别弄了", "cancel")
+
     def __init__(self):
         self._pending_confirm = {}
+        self._pending_ask = {}
         self.init_config()
 
     def init_config(self):
@@ -67,6 +80,7 @@ class OpenAiHelper:
         self._agent_max_rounds = int(openai_conf.get("agent_max_rounds") or 5)
         self._agent_confirm_dangerous = openai_conf.get("agent_confirm_dangerous", True)
         self._agent_show_tools = bool(openai_conf.get("agent_show_tools", False))
+        self._agent_guide_enable = openai_conf.get("agent_guide_enable", True)
         self._agent_protocol = (openai_conf.get("agent_protocol") or "auto").lower()
         self._conf_snapshot = self.__make_snapshot(openai_conf)
 
@@ -79,7 +93,8 @@ class OpenAiHelper:
             openai_conf.get("api_key"), openai_conf.get("api_url"),
             openai_conf.get("model"), openai_conf.get("agent_enable"),
             openai_conf.get("agent_max_rounds"), openai_conf.get("agent_confirm_dangerous"),
-            openai_conf.get("agent_show_tools"), openai_conf.get("agent_protocol"),
+            openai_conf.get("agent_show_tools"), openai_conf.get("agent_guide_enable"),
+            openai_conf.get("agent_protocol"),
         )
 
     def __ensure_fresh(self):
@@ -99,6 +114,24 @@ class OpenAiHelper:
     def get_state(self):
         self.__ensure_fresh()
         return True if self._api_key else False
+
+    def has_pending(self, userid):
+        """
+        该用户是否正处于「追问补全」流程中。
+
+        消息路由需要这个判断：用户对追问的回答（比如「沙丘」）往往不以
+        「搜索/下载」等关键词开头，若不加干预会被别的分支截走，
+        追问流程就断了。
+        """
+        if not userid:
+            return False
+        info = self._pending_ask.get(str(userid))
+        if not info:
+            return False
+        if time.time() - info.get("time", 0) > self._ASK_TTL:
+            self._pending_ask.pop(str(userid), None)
+            return False
+        return True
 
     @staticmethod
     def __save_session(session_id, message):
@@ -216,7 +249,8 @@ class OpenAiHelper:
         """
         获取答案
 
-        Agent 模式（默认）：大模型可自主调用工具查询、操作系统（下载器/站点/订阅/媒体库等）。
+        Agent 模式（默认）：大模型可自主调用工具查询、操作系统（下载器/站点/订阅/媒体库等），
+        信息不全时会主动向用户追问，用户回答后自动补全并执行。
         关闭 openai.agent_enable 后退回纯文本聊天，行为与旧版一致。
 
         :param text: 输入文本
@@ -235,6 +269,7 @@ class OpenAiHelper:
         if text and text.strip() == "#清除":
             self.__clear_session(userid)
             self._pending_confirm.pop(userid, None)
+            self._pending_ask.pop(userid, None)
             return "会话已清除"
 
         try:
@@ -267,6 +302,9 @@ class OpenAiHelper:
     def __agent_run(self, text, userid, context):
         """
         Agent 模式主流程
+
+        触发顺序：危险操作确认 → 追问补全 → 正常处理。
+        前两者都是"上一轮遗留的待办"，必须先结清，否则用户这轮的回复会被误解。
         """
         from app.helper.agent_tools import AgentTools
         tools = AgentTools()
@@ -285,20 +323,33 @@ class OpenAiHelper:
                                         result)
             # 用户没有确认：丢弃该待办，继续按普通消息处理
 
-        # 二、按协议执行，functions 不被支持时自动降级为文本协议
+        # 二、处理上一步遗留的追问补全
+        ask_ctx = self._pending_ask.pop(userid, None)
+        if ask_ctx and time.time() - ask_ctx.get("time", 0) > self._ASK_TTL:
+            ask_ctx = None
+        if ask_ctx and self.__is_cancel(text):
+            return "好的，已取消。还需要我做什么，直接说就行。"
+
+        # 三、是否是与该用户的首次对话（用于主动介绍能力）
+        first_time = not OpenAISessionCache.get(userid)
+
+        # 四、按协议执行，functions 不被支持时自动降级为文本协议
         if self._agent_protocol == "prompt":
-            return self.__agent_loop_prompt(userid, text, context, tools)
+            return self.__agent_loop_prompt(userid, text, context, tools, ask_ctx, first_time)
         try:
-            return self.__agent_loop_functions(userid, text, context, tools)
+            return self.__agent_loop_functions(userid, text, context, tools, ask_ctx, first_time)
         except _UnsupportedToolsError as err:
             log.warn("【Agent】当前模型不支持 function calling（%s），改用文本协议" % str(err))
-            return self.__agent_loop_prompt(userid, text, context, tools)
+            return self.__agent_loop_prompt(userid, text, context, tools, ask_ctx, first_time)
 
-    def __agent_loop_functions(self, userid, text, context, tools):
+    def __agent_loop_functions(self, userid, text, context, tools, ask_ctx=None, first_time=False):
         """
         协议一：原生 function calling
         """
-        messages = self.__agent_messages(userid, text, self.__agent_prompt(tools))
+        messages = self.__agent_messages(userid, text,
+                                         self.__agent_prompt(tools,
+                                                             ask_ctx=ask_ctx,
+                                                             first_time=first_time))
         functions = tools.get_schemas()
         tool_calls = []
 
@@ -328,9 +379,15 @@ class OpenAiHelper:
             # 危险操作不直接执行，转为待用户确认
             if tools.is_dangerous(name) and self._agent_confirm_dangerous:
                 self._pending_confirm[userid] = {"tool": name, "args": args, "time": time.time()}
+                self.__save_turn(userid, text, tools.get_danger_prompt(name, args))
                 return tools.get_danger_prompt(name, args)
 
             tool_result = tools.call(name, args, context)
+
+            # 缺参数会返回追问载荷：直接把问题发给用户，并挂起待办
+            if tools.is_ask(tool_result):
+                return self.__handle_ask(userid, text, tool_result)
+
             self.__audit(userid, name, args)
             messages.append({
                 "role": "assistant",
@@ -342,12 +399,15 @@ class OpenAiHelper:
 
         return self.__too_many_rounds(tool_calls)
 
-    def __agent_loop_prompt(self, userid, text, context, tools):
+    def __agent_loop_prompt(self, userid, text, context, tools, ask_ctx=None, first_time=False):
         """
         协议二：文本 JSON 协议（后端不支持 function calling 时的兜底）
         """
         messages = self.__agent_messages(userid, text,
-                                         self.__agent_prompt(tools, text_protocol=True))
+                                         self.__agent_prompt(tools,
+                                                             text_protocol=True,
+                                                             ask_ctx=ask_ctx,
+                                                             first_time=first_time))
         tool_calls = []
 
         for _ in range(max(1, self._agent_max_rounds)):
@@ -363,9 +423,14 @@ class OpenAiHelper:
 
             if tools.is_dangerous(name) and self._agent_confirm_dangerous:
                 self._pending_confirm[userid] = {"tool": name, "args": args, "time": time.time()}
+                self.__save_turn(userid, text, tools.get_danger_prompt(name, args))
                 return tools.get_danger_prompt(name, args)
 
             tool_result = tools.call(name, args, context)
+
+            if tools.is_ask(tool_result):
+                return self.__handle_ask(userid, text, tool_result)
+
             self.__audit(userid, name, args)
             messages.append({"role": "assistant", "content": content})
             messages.append({
@@ -375,6 +440,33 @@ class OpenAiHelper:
             })
 
         return self.__too_many_rounds(tool_calls)
+
+    def __handle_ask(self, userid, text, tool_result):
+        """
+        工具返回追问载荷时的统一处理
+
+        追问是确定性行为（缺参数就是缺参数），所以问题由工具表生成后直接发给用户，
+        不再绕模型一圈 —— 这样不会因为模型"忘了问"而带着残缺参数硬执行。
+        """
+        from app.helper.agent_tools import AgentTools
+        ask = AgentTools.extract_ask(tool_result)
+        question = ask.get("question") or "请再具体说明一下你的需求。"
+
+        if not self._agent_guide_enable:
+            # 用户关掉了引导式询问：不挂起待办，只说明缺什么
+            log.info("【Agent】引导式询问已关闭，放弃追问：%s" % question)
+            return "还缺少必要信息，暂时没法继续。请把需求说得更具体一些。\n\n" + question
+
+        self._pending_ask[userid] = {
+            "tool": ask.get("tool"),
+            "args": ask.get("args") or {},
+            "missing": ask.get("missing") or [],
+            "time": time.time(),
+        }
+        log.info("【Agent】向用户 %s 追问（目标工具 %s）：%s"
+                 % (userid, ask.get("tool") or "未定", question))
+        self.__save_turn(userid, text, question)
+        return question
 
     def __summarize(self, userid, instruction, tool_result):
         """
@@ -394,9 +486,11 @@ class OpenAiHelper:
             log.error("【Agent】结果转述失败：%s" % str(err))
         return "操作已执行。"
 
-    def __agent_prompt(self, tools=None, text_protocol=False):
+    def __agent_prompt(self, tools=None, text_protocol=False, ask_ctx=None, first_time=False):
         """
         构造 Agent 的系统提示词
+
+        这是"询问与调用"的中枢：模型据此决定该直接干活、还是先问用户。
         """
         from app.helper.agent_tools import AgentTools
         tools = tools or AgentTools()
@@ -405,19 +499,25 @@ class OpenAiHelper:
             "NAStool 是 PT 下载与媒体库管理工具，负责搜索资源、下载、整理入库、站点签到、刷流等。\n\n"
             "你可以调用下列工具来查询和操作系统，工具返回的是真实数据：\n"
             "%s\n\n"
-            "工作原则：\n"
+            "【调用原则】\n"
             "1. 用户询问系统状态（下载、站点、订阅、媒体库、磁盘空间等）时，必须调用工具获取真实数据，"
             "绝不能凭想象编造数字或列表。\n"
             "2. 用户要求执行操作时，调用对应工具。\n"
             "3. 不确定片名对应哪部作品时，先用 query_media_info 确认，再执行订阅等操作。\n"
             "4. 涉及删除、重启、升级、清空历史的操作，直接调用工具即可，"
             "系统会自动向用户请求确认，你不需要自己再问一遍。\n"
-            "5. 工具返回的结果要提炼成简洁的中文回复，不要输出原始 JSON。\n"
-            "6. 一次回复最多调用一个工具；拿到结果后若还需要其它信息，可以继续调用。\n"
-            "7. 工具执行失败时如实说明原因，不要假装成功。\n"
-            "8. 与系统无关的普通问题（闲聊、常识、技术问答）直接回答，不要调用工具。\n"
-            "9. 用户问「你能做什么」或寻求帮助时，用简洁的中文列出你能查询和操作的范围"
-            "（下载任务、PT站点、订阅、媒体库、刷流、系统运维等），并给两三个示例说法。\n"
+            "5. 工具执行失败时如实说明原因，不要假装成功。\n"
+            "6. 一次回复最多调用一个工具；拿到结果后若还需要其它信息，可以继续调用。\n\n"
+            "【询问原则】\n"
+            "7. 意图明确、信息齐备时，直接调用工具，不要多余地问东问西。\n"
+            "8. 缺少关键信息时（不知道订阅哪部片、删哪个任务、查哪个站点等），"
+            "调用 ask_user 只问最关键的一项，可以给两三个候选；不要一次抛出一堆问题。\n"
+            "9. 用户问「你能做什么」「有什么功能」「帮助」「菜单」「怎么用」，"
+            "或只是打招呼、说了一句无法判断意图的话时，调用 list_capabilities "
+            "把能力清单发给用户，并邀请用户直接说出需求。\n"
+            "10. 用户补充信息后，把信息合并进参数直接执行，不要重复追问同一项。\n"
+            "11. 与系统无关的普通问题（闲聊、常识、技术问答）直接回答，不要调用工具。\n"
+            "12. 面向用户的回复都要提炼成简洁的中文，不要输出原始 JSON。\n"
         ) % tools.get_tools_prompt()
         if text_protocol:
             prompt += (
@@ -425,6 +525,22 @@ class OpenAiHelper:
                 "需要调用工具时，只输出一个 JSON，前后不要有任何其它文字：\n"
                 '{"tool": "工具名", "args": {"参数名": "参数值"}}\n'
                 "不需要调用工具时，直接输出给用户的自然语言回复即可。\n"
+            )
+        if first_time:
+            prompt += (
+                "\n【首次对话】这是你与该用户的第一次对话。"
+                "请先调用 list_capabilities 拿到能力清单，用简短的几句话介绍你能帮他做什么"
+                "（不要照抄整个清单，挑主要几类），然后回答他的问题。\n"
+            )
+        if ask_ctx:
+            prompt += (
+                "\n【追问补全中】你上一轮已经向用户提过问，正在等他补充信息。"
+                "打算执行的操作是「%s」，已知参数 %s，还缺 %s。\n"
+                "若用户本轮的回复是在补充这些信息，请合并参数后直接调用该工具；"
+                "若用户换了话题或提出新需求，就忽略这个待办，按新需求处理。\n"
+                % (ask_ctx.get("tool") or "尚未确定",
+                   json.dumps(ask_ctx.get("args") or {}, ensure_ascii=False),
+                   "、".join(ask_ctx.get("missing") or []) or "不限")
             )
         return prompt
 
@@ -495,6 +611,12 @@ class OpenAiHelper:
         """
         return (text or "").strip().lower() in self._CONFIRM_WORDS
 
+    def __is_cancel(self, text):
+        """
+        判断用户输入是否为放弃
+        """
+        return (text or "").strip().lower() in self._CANCEL_WORDS
+
     def __decorate(self, answer, tool_calls):
         """
         按配置决定是否在回复前标注本次调用了哪些工具
@@ -529,7 +651,9 @@ class OpenAiHelper:
         审计：把 AI 实际执行的非查询操作记入系统消息中心，便于事后追溯
         """
         try:
-            if not tool_name or tool_name.startswith("query_"):
+            # 延迟导入：agent_tools 是纯数据+包装层，不会被本模块的导入顺序影响
+            from app.helper.agent_tools import AgentTools
+            if not AgentTools().is_action_tool(tool_name):
                 return
             # 延迟导入：app.message 会反向依赖 app.media，而本模块被 app.media 依赖
             from app.message.message_center import MessageCenter
