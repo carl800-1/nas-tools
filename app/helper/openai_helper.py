@@ -17,6 +17,65 @@ class _UnsupportedToolsError(Exception):
     pass
 
 
+# 默认的 OpenAI 官方地址（用户未填写 API Url 时使用）
+_DEFAULT_API_BASE = "https://api.openai.com"
+
+
+def _normalize_api_url(api_url):
+    """
+    规整用户填写的 API 地址：去掉末尾斜杠与多余的 /v1
+
+    调用方统一在末尾追加 /v1，所以用户填 https://xx 、 https://xx/ 、
+    https://xx/v1 三种写法都能得到同一个请求地址，避免出现 //v1 或 /v1/v1。
+    """
+    url = (api_url or "").strip().rstrip("/")
+    if url.endswith("/v1"):
+        url = url[:-3].rstrip("/")
+    return url
+
+
+def _describe_error(err, base, model, timeout):
+    """
+    把 SDK 异常翻译成用户能直接照做的结论
+
+    注意：openai 0.28 的异常体系与 1.x 不同——
+    没有 NotFoundError，HTTP 404 也归到 InvalidRequestError，
+    状态码要从 err.http_status 取；而且这些异常都直接继承 OpenAIError。
+    """
+    status = getattr(err, "http_status", None)
+    detail = ""
+    json_body = getattr(err, "json_body", None)
+    if isinstance(json_body, dict):
+        detail = ((json_body.get("error") or {}).get("message") or "").strip()
+    if not detail:
+        detail = str(err).strip()
+
+    if isinstance(err, openai.error.AuthenticationError):
+        return "连接失败：API Key 无效或未授权（HTTP 401），请检查 Key 是否正确、是否已失效"
+    if isinstance(err, openai.error.PermissionError):
+        return "连接失败：API Key 无权访问该接口（HTTP 403）"
+    if isinstance(err, openai.error.RateLimitError):
+        return "连接失败：被限流或余额不足（HTTP 429），请稍后重试或检查账户额度"
+    if isinstance(err, openai.error.Timeout):
+        return "连接超时：%d 秒内没有收到响应。地址是通的，但服务未及时返回，" \
+               "请确认推理服务已启动、模型已加载" % timeout
+    if isinstance(err, openai.error.APIConnectionError):
+        cause = err.__cause__
+        return "连接失败：无法访问 %s（%s）。请检查地址、端口、网络与代理设置" % (
+            base, str(cause) if cause else "网络不可达")
+    if status == 404 or "not found" in detail.lower():
+        return "连接失败：接口地址不存在（HTTP 404）。请检查 API Url 是否正确" \
+               "（程序会自动补 /v1，无需自己填），以及该地址是否提供 OpenAI 兼容接口"
+    if isinstance(err, openai.error.InvalidRequestError):
+        return "连接失败：请求被拒绝（HTTP %s）：%s。常见原因是模型名 %s 不存在或参数不受支持" % (
+            status or 400, detail, model)
+    if isinstance(err, (openai.error.ServiceUnavailableError, openai.error.TryAgain)):
+        return "连接失败：后端服务暂时不可用（HTTP %s）：%s，请稍后重试" % (status or "5xx", detail)
+    if status:
+        return "连接失败：后端返回 HTTP %s：%s" % (status, detail)
+    return "连接失败：%s：%s" % (type(err).__name__, detail or "未知错误")
+
+
 @singleton
 class OpenAiHelper:
     _api_key = None
@@ -67,7 +126,7 @@ class OpenAiHelper:
         self._api_key = openai_conf.get("api_key")
         if self._api_key:
             openai.api_key = self._api_key
-        self._api_url = openai_conf.get("api_url")
+        self._api_url = _normalize_api_url(openai_conf.get("api_url"))
         if self._api_url:
             openai.api_base = self._api_url + "/v1"
         else:
@@ -114,6 +173,89 @@ class OpenAiHelper:
     def get_state(self):
         self.__ensure_fresh()
         return True if self._api_key else False
+
+    @staticmethod
+    def test_connection(api_url=None, api_key=None, model=None, timeout=12):
+        """
+        连通性测试：用传入的参数（可以是界面上还没保存的内容）向 OpenAI 兼容后端
+        发一次最小请求，返回结构化的结果供设置页「测试连接」展示。
+
+        - 只使用**请求级** api_key / api_base，不改动 openai 模块的全局配置，
+          因此测试不会影响正在运行的 AI 助手（不会把它切到未保存的地址上）。
+        - 地址规整规则与 init_config 完全一致，所以「测试通过」约等于「保存后可用」。
+
+        :return: {"success": bool, "msg": str, "model": str,
+                  "elapsed": int(毫秒), "functions": True/False/None,
+                  "reply": str, "hint": str}
+        """
+        result = {
+            "success": False,
+            "msg": "",
+            "model": (model or "").strip() or "gpt-3.5-turbo",
+            "elapsed": 0,
+            "functions": None,
+            "reply": "",
+            "hint": "",
+        }
+        raw_url = api_url or ""
+        api_url = _normalize_api_url(raw_url)
+        api_key = (api_key or "").strip()
+        result["model"] = (model or "").strip() or "gpt-3.5-turbo"
+        if raw_url.strip() and raw_url.strip() != api_url:
+            result["hint"] = "已自动规整地址末尾的 / 或 /v1"
+        if not api_key:
+            result["msg"] = "未填写 API Key：使用 OpenAI 官方或第三方中转时必须填写；" \
+                            "接入本地模型时填任意非空值即可"
+            return result
+
+        base = (api_url or _DEFAULT_API_BASE) + "/v1"
+        # ① 最小对话请求：能返回就说明「地址可通 + 鉴权通过 + 模型可用」
+        started = time.time()
+        try:
+            completion = openai.ChatCompletion.create(
+                model=result["model"],
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=16,
+                api_key=api_key,
+                api_base=base,
+                request_timeout=timeout,
+            )
+        except Exception as err:
+            result["elapsed"] = int((time.time() - started) * 1000)
+            result["msg"] = _describe_error(err, base, result["model"], timeout)
+            return result
+        result["elapsed"] = int((time.time() - started) * 1000)
+        result["success"] = True
+        try:
+            result["model"] = completion["model"] or result["model"]
+        except Exception:
+            pass
+        try:
+            reply = (completion["choices"][0]["message"]["content"] or "").strip()
+            result["reply"] = reply.replace("\n", " ")[:40]
+        except Exception:
+            pass
+        # ② 工具调用探测：AI 助手优先走原生 function calling，
+        #    后端不接受 functions 参数时会自动降级为文本协议（功能不受影响，仅效率略低）
+        try:
+            openai.ChatCompletion.create(
+                model=result["model"],
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=16,
+                api_key=api_key,
+                api_base=base,
+                request_timeout=timeout,
+                functions=[{
+                    "name": "noop",
+                    "description": "no operation",
+                    "parameters": {"type": "object", "properties": {}},
+                }],
+            )
+            result["functions"] = True
+        except Exception:
+            result["functions"] = False
+        result["msg"] = "连接成功"
+        return result
 
     def has_pending(self, userid):
         """

@@ -26,6 +26,7 @@ from app.filter import Filter
 from app.helper import DbHelper, ProgressHelper, ThreadHelper, \
     MetaHelper, DisplayHelper, WordsHelper
 from app.helper import RssHelper, PluginHelper, BackupHelper
+from app.helper.openai_helper import OpenAiHelper
 from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
 from app.media.meta import MetaInfo, MetaBase
@@ -217,6 +218,7 @@ class WebAction:
             "check_message_client": self.__check_message_client,
             "get_message_client": self.__get_message_client,
             "test_message_client": self.__test_message_client,
+            "test_openai": self.__test_openai,
             "get_sites": self.__get_sites,
             "get_indexers": self.__get_indexers,
             "get_download_dirs": self.__get_download_dirs,
@@ -4497,6 +4499,30 @@ class WebAction:
             return {"code": 0}
         else:
             return {"code": 1}
+
+    @staticmethod
+    def __test_openai(data):
+        """
+        测试 AI 助手（OpenAI 兼容后端）连接
+
+        使用界面上当前填写的内容测试，不需要先保存；
+        返回值中的 detail 带上模型名、耗时、是否支持工具调用等细节。
+        """
+        try:
+            result = OpenAiHelper().test_connection(
+                api_url=data.get("api_url"),
+                api_key=data.get("api_key"),
+                model=data.get("model")
+            )
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error("【OpenAI】连接测试异常：%s" % str(e))
+            return {"code": 1, "msg": "测试失败：%s" % str(e)}
+        return {
+            "code": 0 if result.get("success") else 1,
+            "msg": result.get("msg") or ("连接成功" if result.get("success") else "连接失败"),
+            "detail": result,
+        }
 
     @staticmethod
     def __get_indexers():

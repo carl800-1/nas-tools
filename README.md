@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v4.3.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v4.4.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -228,18 +228,43 @@ NAS-Tools 是一套运行在 NAS / 服务器上的 **媒体库自动化管理工
 
 #### 6.5 配置项
 
-（设定 → 基础设置 → **实验室**，与 Telegram Bot Api 代理同区）
+（设定 → 基础设置 → **实验室** → 「AI 助手」分区）
+
+实验室卡片内按 **三个分区**排列，互不混淆：
+
+| 分区 | 内容 |
+|---|---|
+| **Telegram Bot API 代理** | 只影响 Telegram 机器人的反代地址，**与 AI 助手无关** |
+| **AI 助手** | 本节所有配置（接入官方 / 第三方中转 / 本地模型都改这里） |
+| **识别与搜索** | 媒体识别与搜索策略开关，同样与 AI 助手无关 |
+
+所有选项统一四列对齐（窄屏自动堆叠），标签与控件同行同高。
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
-| OpenAI API Url | 官方地址 | 留空使用 `https://api.openai.com`；接本地模型时填本地推理服务地址 |
+| OpenAI API Url | 官方地址 | 留空使用 `https://api.openai.com`；接本地模型时填本地推理服务地址。末尾带不带 `/`、带不带 `/v1` 都会自动按 `/v1` 处理 |
 | OpenAI API Key | 空 | **必填**，留空则 AI 能力整体不可用；接本地模型时随便填一个非空值即可 |
 | OpenAI 模型 | `gpt-3.5-turbo` | 接入本地模型 / 第三方中转时填对应模型名 |
+| **测试连接** | — | 按钮：用**当前填写的内容**（无需先保存）实测一次，明确反馈成功或失败 |
 | AI助手 | **开** | 关闭后退回纯聊天（行为同旧版） |
 | 引导式询问 | **开** | 信息不足或不知能做什么时主动追问 / 列能力清单；关闭后信息不足只提示缺什么 |
 | AI优先接管 | 关 | 所有文本消息优先交给 AI（含以「订阅/搜索/下载」开头的）；关闭时这些消息仍走关键词规则 |
 | 危险操作需确认 | **开** | 关闭后 AI 可直接执行危险操作 |
 | 显示工具调用 | 关 | 在回复中标注本次调用了哪些工具，便于排查 |
+
+**「测试连接」会返回什么**：
+
+| 结果 | 含义 |
+|---|---|
+| 连接成功 ｜ 模型 xxx ｜ 耗时 xxx ms ｜ 支持原生工具调用 | 地址通、鉴权通过、模型可用，可直接使用 |
+| 连接成功 ｜ … ｜ 不支持原生工具调用，将自动降级为文本协议 | 后端未实现 function calling，AI 仍可用（效率略低） |
+| 连接失败：API Key 无效或未授权（HTTP 401） | Key 错误或已失效 |
+| 连接失败：接口地址不存在（HTTP 404） | API Url 填错，或该地址不是 OpenAI 兼容接口 |
+| 连接失败：请求被拒绝（HTTP 400）：The model … does not exist | 模型名不存在，多半是模型名拼错或后端没加载该模型 |
+| 连接失败：无法访问 xxx（Connection refused） | 地址/端口不通，或服务未启动 |
+| 连接超时：N 秒内没有收到响应 | 地址可达但推理服务未就绪（模型还在加载） |
+
+测试**不会修改任何配置**，也不会影响正在运行的 AI 助手。
 
 代码级参数（不提供界面，需要时直接改 `config.yaml` 的 `openai` 段）：
 `agent_max_rounds`（最大工具调用轮数，默认 5）、`agent_protocol`（工具调用协议，默认 `auto`）。
@@ -573,7 +598,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:4.3.0   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:4.4.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -676,4 +701,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-18 ｜ 当前版本 v4.3.0_
+_Last updated: 2026-09-18 ｜ 当前版本 v4.4.0_
