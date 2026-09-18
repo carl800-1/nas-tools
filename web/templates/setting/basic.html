@@ -260,72 +260,6 @@
                          id="app.tmdb_image_url" placeholder="https://image.tmdb.org" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
-                <div class="mb-3">
-                  <label class="form-label">OpenAI API Url <span class="form-help"
-                                                                        title="自定义openai请求地址（请注意格式，请求地址需带有请求头且最后没有/号），不填默认使用https://api.openai.com"
-                                                                        data-bs-toggle="tooltip">?</span></label>
-                  <input type="text" value="{% if Config.openai %}{{ Config.openai.api_url or '' }}{% endif %}" class="form-control"
-                         id="openai.api_url" placeholder="https://api.openai.com" autocomplete="off">
-                </div>
-              </div>
-              <div class="col-lg">
-                <div class="mb-3">
-                  <label class="form-label">OpenAI API Key <span class="form-help"
-                                                                        title="在platform.openai.com网站申请API Key，用于使用ChatGPT辅助识别文件名（需要打开增强识别开关）及聊天交互等；填写此项代表启用ChatGPT，根据API使用情况OpenAI官方会收取相应的费用"
-                                                                        data-bs-toggle="tooltip">?</span></label>
-                  <input type="text" value="{% if Config.openai %}{{ Config.openai.api_key or '' }}{% endif %}" class="form-control"
-                         id="openai.api_key" placeholder="sk-xxx" autocomplete="off">
-                </div>
-              </div>
-            </div>
-            {% set openai_conf = Config.openai | default({}) %}
-            <div class="row">
-              <div class="col-lg">
-                <div class="mb-3">
-                  <label class="form-label">OpenAI 模型 <span class="form-help"
-                                                                        title="使用的模型名称，留空默认 gpt-3.5-turbo。接入本地模型或第三方中转时填写对应模型名"
-                                                                        data-bs-toggle="tooltip">?</span></label>
-                  <input type="text" value="{{ openai_conf.model or '' }}" class="form-control"
-                         id="openai.model" placeholder="gpt-3.5-turbo" autocomplete="off">
-                </div>
-              </div>
-              <div class="col-lg">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="openai.agent_enable" {% if
-                      openai_conf.agent_enable | default(true) %}checked{% endif %}>
-                    <span class="form-check-label">AI助手 <span class="form-help"
-                                                                  title="开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管：可以查询下载、站点、订阅、媒体库等状态，也能执行订阅、搜索、重启等操作；关闭则退回纯聊天"
-                                                                  data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-lg">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="openai.agent_confirm_dangerous" {% if
-                      openai_conf.agent_confirm_dangerous | default(true) %}checked{% endif %}>
-                    <span class="form-check-label">危险操作需确认 <span class="form-help"
-                                                                  title="删除、重启、升级、清空历史等操作，AI会先征求确认，回复「确认」后才执行；关闭后AI可直接执行这些操作"
-                                                                  data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-lg">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="openai.agent_show_tools" {% if
-                      openai_conf.agent_show_tools | default(false) %}checked{% endif %}>
-                    <span class="form-check-label">显示工具调用 <span class="form-help"
-                                                                  title="在AI回复中标注本次调用了哪些工具，便于排查问题"
-                                                                  data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
             </div>
             <div class="row">
               <div class="col-lg">
@@ -782,6 +716,81 @@
                                                                             data-bs-toggle="tooltip">?</span></label>
                       <input type="text" value="{% if Config.laboratory %}{{ Config.laboratory.telegram_domain or '' }}{% endif %}" class="form-control"
                              id="laboratory.telegram_domain" placeholder="https://api.telegram.org" autocomplete="off">
+                </div>
+              </div>
+              {% set openai_conf = Config.openai | default({}) %}
+              <div class="col-12">
+                <div class="mb-3 pt-3 border-top">
+                  <span style="font-weight:500;">AI 助手</span>
+                  <span class="form-help"
+                        title="让消息渠道（飞书/微信/Telegram等）里的机器人听懂自然语言并直接操作系统：可查询下载、站点、订阅、媒体库等状态，也能加订阅、搜资源、启停任务、重启服务等。需要填写下面的 API 信息并打开「AI助手」开关后生效"
+                        data-bs-toggle="tooltip">?</span>
+                  <div class="text-muted" style="font-size:12px; margin-top:2px;">
+                    接入 OpenAI 官方、第三方中转或本地模型（OMLX / Ollama 等）均可，改完记得点本卡片右下角的「保存」。
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-label">OpenAI API Url <span class="form-help"
+                                                                        title="自定义openai请求地址（请注意格式，请求地址需带有请求头且最后没有/号），不填默认使用https://api.openai.com；接入本地模型时填本地服务地址，如 http://192.168.1.10:8000"
+                                                                        data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" value="{{ openai_conf.api_url or '' }}" class="form-control"
+                         id="openai.api_url" placeholder="https://api.openai.com" autocomplete="off">
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-label">OpenAI API Key <span class="form-help"
+                                                                        title="在platform.openai.com网站申请API Key，用于使用ChatGPT辅助识别文件名（需要打开增强识别开关）及AI助手聊天交互等；填写此项代表启用AI能力。接入本地模型时随便填一个非空值即可"
+                                                                        data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" value="{{ openai_conf.api_key or '' }}" class="form-control"
+                         id="openai.api_key" placeholder="sk-xxx" autocomplete="off">
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-label">OpenAI 模型 <span class="form-help"
+                                                                        title="填写模型名称，如 gpt-4o-mini、deepseek-chat、qwen3-32b 等；接入本地模型或第三方中转时填对应的模型名。留空默认使用 gpt-3.5-turbo"
+                                                                        data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" value="{{ openai_conf.model or '' }}" class="form-control"
+                         id="openai.model" placeholder="gpt-3.5-turbo" autocomplete="off">
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_enable" {% if
+                      openai_conf.agent_enable | default(true) %}checked{% endif %}>
+                    <span class="form-check-label">AI助手 <span class="form-help"
+                                                                  title="开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管：可以查询下载、站点、订阅、媒体库等状态，也能执行订阅、搜索、重启等操作；关闭则退回纯聊天"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_confirm_dangerous" {% if
+                      openai_conf.agent_confirm_dangerous | default(true) %}checked{% endif %}>
+                    <span class="form-check-label">危险操作需确认 <span class="form-help"
+                                                                  title="删除、重启、升级、清空历史等操作，AI会先征求确认，回复「确认」后才执行；关闭后AI可直接执行这些操作"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-12 col-xl-6">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_show_tools" {% if
+                      openai_conf.agent_show_tools | default(false) %}checked{% endif %}>
+                    <span class="form-check-label">显示工具调用 <span class="form-help"
+                                                                  title="在AI回复中标注本次调用了哪些工具，便于排查问题"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
                 </div>
               </div>
               <div class="col-12 col-xl-3">

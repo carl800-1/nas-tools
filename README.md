@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v4.2.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v4.2.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -153,10 +153,12 @@ NAS-Tools 是一套运行在 NAS / 服务器上的 **媒体库自动化管理工
 
 **操作审计**：所有非查询类操作都会写入系统消息（界面「系统消息」与日志可见），可追溯是哪个账号在什么时间执行了什么。
 
-**配置项**（设定 → 基础设置）：
+**配置项**（设定 → 基础设置 → **实验室**，与 Telegram Bot Api 代理同区）：
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
+| OpenAI API Url | 官方地址 | 留空使用 `https://api.openai.com`；接本地模型时填本地推理服务地址 |
+| OpenAI API Key | 空 | **必填**，留空则 AI 能力整体不可用；接本地模型时随便填一个非空值即可 |
 | OpenAI 模型 | `gpt-3.5-turbo` | 接入本地模型 / 第三方中转时填对应模型名 |
 | AI助手 | **开** | 关闭后退回纯聊天（行为同旧版） |
 | 危险操作需确认 | **开** | 关闭后 AI 可直接执行危险操作 |
@@ -418,7 +420,7 @@ media:
 | 订阅 | `订阅 沙丘` | 加入订阅管理，后续自动追更 |
 | 直接下载 | 粘贴 `http://` 开头的种子 / 磁链地址 | 直接下载该资源 |
 | 管理命令 | `/rss` `/ssa` `/ptr` `/ptt` `/rst` `/tbl` `/trh` | 分别对应订阅、订阅搜索、自动删种、下载文件转移、目录同步、清理转移缓存、清理 RSS 缓存；**需为管理员** |
-| AI 助手 | 自然语言提问或下令：`在下载什么？`、`我的站点数据怎么样`、`帮我订阅沙丘 2021` | 需已配置 OpenAI 且「AI助手」开关开启，详见[第 6 条](#6-ai-助手消息远程控制) |
+| AI 助手 | 自然语言提问或下令：`在下载什么？`、`我的站点数据怎么样`、`帮我订阅沙丘 2021` | 需先在「基础设置 → 实验室」填好 OpenAI 配置并打开「AI助手」开关，详见[第 6 条](#6-ai-助手消息远程控制) |
 | 通知推送 | — | 下载、入库、签到、刷流、站点消息等按各渠道的推送开关生效 |
 
 > 普通用户（填入「用户 Open ID」的账号）只能使用搜索与订阅；`/` 开头的管理命令只对「管理员 Open ID」生效。
@@ -487,7 +489,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:4.2.0   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:4.2.1   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -590,4 +592,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-18 ｜ 当前版本 v4.2.0_
+_Last updated: 2026-09-18 ｜ 当前版本 v4.2.1_

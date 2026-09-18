@@ -30,8 +30,12 @@ class OpenAiHelper:
     _agent_show_tools = False
     _agent_protocol = "auto"
 
+    # 配置快照：用于检测配置是否在进程运行期间被界面保存修改（见 __ensure_fresh）
+    _conf_snapshot = None
+
     # 危险操作待确认队列：user_id -> {"tool": 工具名, "args": 参数, "time": 时间戳}
-    # 放在 __init__ 里初始化，不能在 init_config 里重置（配置保存会触发 init_config）
+    # 只在 __init__ 里初始化，不能被 init_config 重置
+    # （__ensure_fresh 会在配置变更时重新调用 init_config）
     _pending_confirm = {}
 
     # 待确认状态的有效期（秒），超时视为用户已放弃
@@ -64,8 +68,36 @@ class OpenAiHelper:
         self._agent_confirm_dangerous = openai_conf.get("agent_confirm_dangerous", True)
         self._agent_show_tools = bool(openai_conf.get("agent_show_tools", False))
         self._agent_protocol = (openai_conf.get("agent_protocol") or "auto").lower()
+        self._conf_snapshot = self.__make_snapshot(openai_conf)
+
+    @staticmethod
+    def __make_snapshot(openai_conf):
+        """
+        生成配置快照，用于检测配置是否被修改过
+        """
+        return (
+            openai_conf.get("api_key"), openai_conf.get("api_url"),
+            openai_conf.get("model"), openai_conf.get("agent_enable"),
+            openai_conf.get("agent_max_rounds"), openai_conf.get("agent_confirm_dangerous"),
+            openai_conf.get("agent_show_tools"), openai_conf.get("agent_protocol"),
+        )
+
+    def __ensure_fresh(self):
+        """
+        配置可能在进程运行期间被界面保存修改，这里按需重新加载，
+        避免出现「改了配置必须重启服务才生效」的问题。
+        配置未变化时只有一个元组比较的开销，不影响性能。
+        """
+        try:
+            conf = Config().get_config("openai") or {}
+            if self.__make_snapshot(conf) != self._conf_snapshot:
+                self.init_config()
+                log.info("【OpenAI】检测到配置变更，已重新加载")
+        except Exception as err:
+            log.error("【OpenAI】重新加载配置失败：%s" % str(err))
 
     def get_state(self):
+        self.__ensure_fresh()
         return True if self._api_key else False
 
     @staticmethod
