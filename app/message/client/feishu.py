@@ -178,13 +178,19 @@ class Feishu(_IMessageClient):
                     text = "\n".join(titles[1:])
                 else:
                     text = "%s\n%s" % ("\n".join(titles[1:]), text)
+            # 卡片头部只在「正文另有内容」时才显示。
+            # 调用方（app/message/message.py 的 __sendmsg）在只给了正文时会把正文顶到
+            # title 上并把 text 置空，此时若头部照旧显示标题，卡片头与正文就是同一段
+            # 文字 —— 用户看到的就是「标题和内容一样」。这里让正文区独自承载内容。
+            header_title = title if text else ""
+            body = text or title
             elements = []
-            if text:
+            if body:
                 elements.append({
                     "tag": "div",
                     "text": {
                         "tag": "lark_md",
-                        "content": text.replace("\n\n", "\n")
+                        "content": body.replace("\n\n", "\n")
                     }
                 })
             # 消息图片
@@ -194,7 +200,7 @@ class Feishu(_IMessageClient):
                     elements.append({
                         "tag": "img",
                         "img_key": image_key,
-                        "alt": {"tag": "plain_text", "content": title}
+                        "alt": {"tag": "plain_text", "content": title or body}
                     })
                 else:
                     elements.append({
@@ -220,7 +226,7 @@ class Feishu(_IMessageClient):
                     "tag": "div",
                     "text": {"tag": "lark_md", "content": title}
                 })
-            return self.__send_card(title=title, elements=elements, user_id=user_id)
+            return self.__send_card(title=header_title, elements=elements, user_id=user_id)
         except Exception as msg_e:
             ExceptionUtils.exception_traceback(msg_e)
             return False, str(msg_e)
@@ -496,12 +502,14 @@ class Feishu(_IMessageClient):
                            "（若要把通知发到群，请把机器人拉进群后取日志中的 chat_id=oc_xxx 填入「群 Chat ID」）")
         card = {
             "config": {"wide_screen_mode": True},
-            "header": {
-                "template": _CARD_TEMPLATE,
-                "title": {"tag": "plain_text", "content": title or ""}
-            },
             "elements": elements
         }
+        # 标题为空说明这段内容已由正文承载（见 send_msg），不再重复显示头部
+        if title:
+            card["header"] = {
+                "template": _CARD_TEMPLATE,
+                "title": {"tag": "plain_text", "content": title}
+            }
         content = json.dumps(card, ensure_ascii=False)
         for receive_id_type, receive_id in targets:
             flag, msg = self.__send_message(receive_id_type=receive_id_type,
