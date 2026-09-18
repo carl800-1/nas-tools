@@ -841,6 +841,18 @@
                   </label>
                 </div>
               </div>
+              <div class="col-12 col-xl-3">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="laboratory.chatgpt_enable" {% if
+                      Config.laboratory and Config.laboratory.chatgpt_enable %}checked{% endif %}>
+                    <span class="form-check-label">AI 识别文件名 <span class="form-help"
+                                                                    title="识别不出媒体信息时，把文件名交给上面配置的 AI 服务读一遍，再拿结果回查 TMDB。与 AI 助手共用 Api Url / Key / 模型，无需单独配置；未填 API Key 时此开关无效。位于识别回退链第 4 层（TMDB、WEB增强识别之后），会增加识别耗时"
+                                                                    data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
               {# 分区三：识别与搜索 —— 实验室原有的媒体识别与搜索策略开关 #}
               <div class="col-12">
                 <div class="mb-3 pt-3 border-top">
@@ -870,18 +882,6 @@
                     <span class="form-check-label">WEB增强识别 <span class="form-help"
                                                                      title="开启后，通过TMDB的API无法识别到媒体信息时，会尝试通过themoviedb.org网站再次搜索匹配，仅个别极端情况下有效，会大大增加识别耗时，一般情况下不建议开启"
                                                                      data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.chatgpt_enable" {% if
-                      Config.laboratory and Config.laboratory.chatgpt_enable %}checked{% endif %}>
-                    <span class="form-check-label">ChatGPT增强识别 <span class="form-help"
-                                                                  title="开启后，通过TMDB的API无法识别到媒体信息时，使用ChatGPT识别匹配，需要先填写OpenAI API Key"
-                                                                  data-bs-toggle="tooltip">?</span>
                     </span>
                   </label>
                 </div>

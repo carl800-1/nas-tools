@@ -34,6 +34,43 @@ def _normalize_api_url(api_url):
     return url
 
 
+def _strip_code_fence(text):
+    """
+    剥掉模型输出外层的 markdown 代码围栏（```json ... ```）
+
+    云端模型与本地模型都很容易把 JSON 包在围栏里返回，直接 json.loads 会
+    抛错，表现为「功能悄悄失效」。文本协议解析与文件名识别共用本函数。
+    """
+    if not text:
+        return ""
+    s = str(text).strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", s)
+        s = re.sub(r"\s*```\s*$", "", s).strip()
+    return s
+
+
+def _extract_json_object(text):
+    """
+    从模型输出里尽力取出一个 JSON 对象，成功返回 dict，否则返回 None
+
+    容忍两种常见偏差：外层 markdown 代码围栏、前后多余的说明文字。
+    """
+    s = _strip_code_fence(text)
+    if not s:
+        return None
+    if not (s.startswith("{") and s.endswith("}")):
+        start, end = s.find("{"), s.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        s = s[start:end + 1]
+    try:
+        data = json.loads(s)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _describe_error(err, base, model, timeout):
     """
     把 SDK 异常翻译成用户能直接照做的结论
@@ -370,6 +407,11 @@ class OpenAiHelper:
     def get_media_name(self, filename):
         """
         从文件名中提取媒体名称等要素
+
+        供「AI 辅助识别」（laboratory.chatgpt_enable）使用。与 AI 助手共用同一份
+        openai.* 配置和同一个客户端实例，不需要单独配置 API。
+        识别失败返回 {}，后端不可用返回 None，调用方据此区分。
+
         :param filename: 文件名
         :return: Json
         """
@@ -380,11 +422,23 @@ class OpenAiHelper:
             _filename_prompt = "I will give you a movie/tvshow file name.You need to return a Json." \
                                "\nPay attention to the correct identification of the film name." \
                                "\n{\"title\":string,\"version\":string,\"part\":string,\"year\":string,\"resolution\":string,\"season\":number|null,\"episode\":number|null}"
-            completion = self.__get_model(prompt=_filename_prompt, message=filename)
+            # 这是自动流程里的一次单轮调用，超时按 60 秒给足即可；
+            # 不传会走 SDK 默认的 600 秒，后端卡住时会把搜索/整理流程挂住
+            completion = self.__get_model(prompt=_filename_prompt,
+                                          message=filename,
+                                          timeout=60)
             result = completion.choices[0].message.content
-            return json.loads(result)
+            data = _extract_json_object(result)
+            if data is None:
+                # 模型回了内容但不是 JSON：把原始返回打出来。否则日志里只有
+                # 「识别失败」，无法判断是模型输出格式的问题还是接口的问题
+                log.error("【OpenAI】识别文件名返回的内容不是 JSON：%s"
+                          % str(result).replace("\n", " ")[:200])
+                return {}
+            return data
         except Exception as e:
-            print(f"{str(e)}：{result}")
+            log.error("【OpenAI】识别文件名失败：%s（原始返回：%s）"
+                      % (str(e), str(result).replace("\n", " ")[:200]))
             return {}
 
     def get_answer(self, text, userid, context=None):
@@ -732,10 +786,7 @@ class OpenAiHelper:
         """
         if not content:
             return None
-        text = content.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
-            text = re.sub(r"\s*```$", "", text).strip()
+        text = _strip_code_fence(content)
         if not (text.startswith("{") and text.endswith("}")):
             return None
         try:

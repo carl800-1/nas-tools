@@ -253,7 +253,9 @@ laboratory:
   search_keyword: false
   # 【WEB识别增强】：通过TMDB WEB检索
   search_tmdbweb: true
-  # 【ChatGPT识别增强】通过ChatGPT识别文件名
+  # 【AI识别文件名】识别不出媒体信息时，把文件名交给 AI 服务读一遍，再用结果回查 TMDB
+  #   与「AI 助手」共用 openai 段配置（api_url / api_key / model），不需要单独申请 API；
+  #   未填 API Key 时此开关无效。位于识别回退链第 4 层（TMDB、WEB识别增强之后）
   chatgpt_enable: false
   # 【增强识别V2】：开启后会使用增强识别V2识别，优先级最高，关闭后将使用原版的识别方式识别
   recognize_enhance_enable: true
