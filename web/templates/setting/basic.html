@@ -22,7 +22,7 @@
           </div>
           <div class="card-body">
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">日志输出类型</label>
                   <select class="form-select" id="app.logtype">
@@ -31,7 +31,7 @@
                   </select>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">日志中心地址 <span class="form-help"
                                                                title="日志输出类型为日志中心时需要配置该项；需要配置IP地址和端口，配置示例：127.0.0.1:514"
@@ -40,7 +40,7 @@
                          placeholder="127.0.0.1:514" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label">日志级别 <span class="form-help"
                                                                title="一般情况下请选择INFO，排查问题可选择DEBUG"
@@ -61,7 +61,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">WEB壁纸来源 <span class="form-help"
                                                                title="登录界面壁纸来源：TMDB、Bing，设置为TMDB时需在媒体配置TMDB API Key"
@@ -77,21 +77,21 @@
                   </select>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">WEB服务端口</label>
                   <input type="text" value="{{ Config.app.web_port or '' }}" class="form-control" id="app.web_port"
                          placeholder="3000" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">WEB管理用户</label>
                   <input type="text" value="{{ Config.app.login_user or '' }}" class="form-control" id="app.login_user"
                          placeholder="admin" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">WEB管理密码</label>
                   <input type="password" value="{{ Config.app.login_password or '' }}" class="form-control"
@@ -100,7 +100,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">HTTPS证书文件路径 <span class="form-help" title="需要是pem格式的证书文件"
                                                                     data-bs-toggle="tooltip">?</span></label>
@@ -108,14 +108,14 @@
                          id="app.ssl_cert" placeholder="" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">HTTPS证书密钥文件路径</label>
                   <input type="text" value="{{ Config.app.ssl_key or '' }}" class="form-control filetree-files-only"
                          id="app.ssl_key" placeholder="" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">代理服务器 <span class="form-help"
                                                              title="将使用代理访服务器访问themoviedb、telegram等境外网站及程序更新(git)，站点默认不使用代理，如需使用需在站点维护中开启；配置格式示例：127.0.0.1:7890（Http协议）、socks5://127.0.0.1:8018、socks5h://127.0.0.1:8018(remote DNS)"
@@ -124,7 +124,7 @@
                          placeholder="127.0.0.1:7890" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">外网访问地址 <span class="form-help"
                                                                title="使用该地址进行通知点击跳转以及设置Telegram机器人Webhook；需要配置IP地址和端口，如为https则需要加https://前缀；如启用Telegram机器人Webhook，则端口必须为：443, 80, 88, 8443之一，80、443一般运营商会封禁，建议使用88、8443"
@@ -191,7 +191,7 @@
           </div>
           <div class="card-body">
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">TMDB API Key <span class="form-help"
                                                                         title="在themoviedb.org网站申请API Key，该项必须配置，否则所有功能无法正常运行"
@@ -200,7 +200,7 @@
                          id="app.rmt_tmdbkey" placeholder="" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">TMDB API Url <span class="form-help"
                                                                     title="填写TMDB API时使用的地址域名即可，api.themoviedb.org、api.tmdb.org为官方地址，也可自行替换代理的TMDB地址"
@@ -209,7 +209,7 @@
                          id="app.tmdb_domain" placeholder="api.tmdb.org" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">TMDB匹配模式 <span class="form-help"
                                                                         title="正常模式下会提升识别成功率，但也可能会导致误识别率增加；严格模式可以降低误识别率，但可能导致很多文件名/种子名中年份不正确的无法被识别（特别是剧集，需要是首播年份）"
@@ -222,7 +222,7 @@
                   </select>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">二级分类策略 <span class="form-help"
                                                                title="启用二级分类后会在电影/电视剧/动漫媒体库目录下按二级分类名建立子目录；此处配置分类的策略名，保存后会自动生成默认配置；如不需要启动分类，则该项配置为空"
@@ -240,7 +240,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label">TMDB语言 <span class="form-help"
                                                                         title="选择TMDB语言，将会影响媒体信息展示、文件整理及刮削等所有涉及使用TMDB数据的内容语言"
@@ -251,7 +251,7 @@
                   </select>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label">TMDB图片代理 <span class="form-help"
                                                                         title="加速TMDB图片下载，留空使用TMDB官方地址"
@@ -262,7 +262,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">下载优先规则 <span class="form-help"
                                                                         title="订阅及远程搜索下载将按此优先规则选择下载资源，其中站点优先决定于维护的站点优先级或索引器中配置的站点顺序，默认为站点优先"
@@ -275,7 +275,7 @@
                   </select>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">默认文件转移方式 <span class="form-help"
                                                                         title="手动识别等未指定转移方式的场景默认使用的转移方式"
@@ -287,7 +287,7 @@
                   </select>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">转移最小文件大小(MB) <span class="form-help"
                                                                                 title="小于该大小的文件将会忽略，不进行转移重命名"
@@ -296,7 +296,7 @@
                          id="media.min_filesize" placeholder="200" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">文件管理默认路径 <span class="form-help"
                                                                title="文件管理、自定义识别等默认路径"
@@ -307,7 +307,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label">文件路径转移忽略词 <span class="form-help"
                                                                    title="文件路径包含忽略词的，忽略转移，支持正则表达式，注意特殊字符转义"
@@ -316,7 +316,7 @@
                          id="media.ignored_paths" placeholder="支持正则表达式，使用;分隔" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label">文件名转移忽略词 <span class="form-help"
                                                                  title="文件名（包括扩展名）包含忽略词的，忽略转移，支持正则表达式，注意特殊字符转义"
@@ -327,7 +327,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label required">电影重命名格式 <span class="form-help"
                                                                           title="程序会按定义的命名格式对电影进行重命名；/代表上下级目录，{}内为占位符，转义为&#123;&#123;&#125;&#125;；占位符会使用文件识别出来的实际值替换；占位符外的字符会当成普通字符，直接体现在名称上。<br>电影占位符：<br>{title}：标题<br>{en_title}：英文标题<br>{original_title}：原语种标题<br>{original_name}：原文件名<br>{rev_name}：识别词处理后的原文件名<br>{year}：年份<br>{decade_short}：短格式年代<br>{decade_long}：长格式年代<br>{edition}：版本(Bluray/WEB-DL等)<br>{videoFormat}：分辨率(1080p/4k等)<br>{videoCodec}：视频编码<br>{audioCodec}：音频编码及声道<br>{tmdbid}：TMDB的ID<br>{imdbid}：IMDB的ID<br>{rating}：评分<br>{rating_short}：短格式评分<br>{rating_long}：长格式评分<br>{part}：part1/disc1/dvd1<br>{releaseGroup}：制作组/字幕组<br>{name}：识别名称（文件名中识别出的名称，可用自定义识别词替换）<br><br>重命名使用Python的format格式化，可进行指定格式输出"
@@ -339,7 +339,7 @@
                          autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-label required">电视剧重命名格式 <span class="form-help"
                                                                             title="程序会按定义的命名格式对电视剧进行重命名；/代表上下级目录，{}内为占位符，转义为&#123;&#123;&#125;&#125;；占位符会使用文件识别出来的实际值替换，占位符外的字符会当成普通字符，直接体现在名称上。<br>电视剧占位符：<br>{title}：标题<br>{en_title}：英文标题<br>{original_title}：原语种标题<br>{original_name}：原文件名<br>{rev_name}：识别词处理后的原文件名<br>{year}：年份<br>{decade_short}：短格式年代<br>{decade_long}：长格式年代<br>{edition}：版本(Bluray/WEB-DL等)<br>{videoFormat}：分辨率(1080p/4k等)<br>{videoCodec}：视频编码<br>{audioCodec}：音频编码及声道<br>{tmdbid}：TMDB的ID<br>{imdbid}：IMDB的ID<br>{rating}：评分<br>{rating_short}：短格式评分<br>{rating_long}：长格式评分<br>{season}：季数<br>{episode}：集数<br>{episode_title}：集标题<br>{season_episode}：剧集SxxExx<br>{part}：part1/disc1/dvd1<br>{releaseGroup}：制作组/字幕组<br>{name}：识别名称（文件名中识别出的名称，可用自定义识别词替换）<br><br>重命名使用Python的format格式化，可进行指定格式输出"
@@ -353,7 +353,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="media.filesize_cover" {% if
@@ -364,7 +364,7 @@
                   </label>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="media.nfo_poster"
@@ -375,7 +375,7 @@
                   </label>
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="media.ffmpeg_video_meta" {% if
@@ -386,66 +386,62 @@
                   </label>
                 </div>
               </div>
-          </div>
-          <div class="row">
-            <div class="col-lg">
-              <div class="mb-3">
-                <label class="form-check form-switch">
-                  <input class="form-check-input" type="checkbox" id="media.filename_prefer_barre" {% if
-                    Config.media.filename_prefer_barre %}checked{% endif %}>
-                  <span class="form-check-label">使用横杠替换冒号 <span class="form-help"
-                                                                      title="开启后，文件名中的中英文冒号将替换为横杠"
-                                                                      data-bs-toggle="tooltip">?</span></span>
-                </label>
-              </div>
-            </div>
-            <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="media.tmdb_include_adult"
-                           {% if Config.media.tmdb_include_adult %}checked{% endif %}>
-                    <span class="form-check-label">搜索结果中包含成人内容条目 <span class="form-help"
-                                                                          title="开启该选项后将会在刮削或者检索时包含成人内容，请谨慎打开"
+                    <input class="form-check-input" type="checkbox" id="media.filename_prefer_barre" {% if
+                      Config.media.filename_prefer_barre %}checked{% endif %}>
+                    <span class="form-check-label">使用横杠替换冒号 <span class="form-help"
+                                                                        title="开启后，文件名中的中英文冒号将替换为横杠"
+                                                                        data-bs-toggle="tooltip">?</span></span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-lg-3">
+                  <div class="mb-3">
+                    <label class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" id="media.tmdb_include_adult"
+                             {% if Config.media.tmdb_include_adult %}checked{% endif %}>
+                      <span class="form-check-label">搜索结果中包含成人内容条目 <span class="form-help"
+                                                                            title="开启该选项后将会在刮削或者检索时包含成人内容，请谨慎打开"
+                                                                            data-bs-toggle="tooltip">?</span></span>
+                    </label>
+                  </div>
+              </div>
+              <div class="col-lg-3">
+                  <div class="mb-3">
+                    <label class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" id="media.name_follow_tmdb_changed"
+                             {% if Config.media.name_follow_tmdb_changed %}checked{% endif %}>
+                      <span class="form-check-label">已整理媒体名称跟随TMDB变化 <span class="form-help"
+                                                                            title="开启则会一直与TMDB同步但是会创建多个文件夹；关闭后将会保持与TMDB信息改变之前的名称一致，不会再创建新文件夹"
+                                                                            data-bs-toggle="tooltip">?</span></span>
+                    </label>
+                  </div>
+              </div>
+              <div class="col-lg-3">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="app.tmdb_image_proxy" {% if
+                    Config.app.tmdb_image_proxy %}checked{% endif %}>
+                    <span class="form-check-label">TMDB 图片经过代理 <span class="form-help"
+                                                                          title="开启后，TMDB 的图片刮削会经过配置的代理服务器"
                                                                           data-bs-toggle="tooltip">?</span></span>
                   </label>
                 </div>
-            </div>
-            <div class="col-lg">
+              </div>
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="media.name_follow_tmdb_changed"
-                           {% if Config.media.name_follow_tmdb_changed %}checked{% endif %}>
-                    <span class="form-check-label">已整理媒体名称跟随TMDB变化 <span class="form-help"
-                                                                          title="开启则会一直与TMDB同步但是会创建多个文件夹；关闭后将会保持与TMDB信息改变之前的名称一致，不会再创建新文件夹"
+                    <input class="form-check-input" type="checkbox" id="media.filename_keep_punctuation" {% if
+                    Config.media.filename_keep_punctuation %}checked{% endif %}>
+                    <span class="form-check-label">保留中文标点符号 <span class="form-help"
+                                                                          title="开启后，文件名中的中文问号、逗号将被保留。"
                                                                           data-bs-toggle="tooltip">?</span></span>
                   </label>
                 </div>
-            </div>
-          </div>
-          <div class="row">
-            <div class="col-lg">
-              <div class="mb-3">
-                <label class="form-check form-switch">
-                  <input class="form-check-input" type="checkbox" id="app.tmdb_image_proxy" {% if
-                  Config.app.tmdb_image_proxy %}checked{% endif %}>
-                  <span class="form-check-label">TMDB 图片经过代理 <span class="form-help"
-                                                                        title="开启后，TMDB 的图片刮削会经过配置的代理服务器"
-                                                                        data-bs-toggle="tooltip">?</span></span>
-                </label>
               </div>
             </div>
-            <div class="col-lg">
-              <div class="mb-3">
-                <label class="form-check form-switch">
-                  <input class="form-check-input" type="checkbox" id="media.filename_keep_punctuation" {% if
-                  Config.media.filename_keep_punctuation %}checked{% endif %}>
-                  <span class="form-check-label">保留中文标点符号 <span class="form-help"
-                                                                        title="开启后，文件名中的中文问号、逗号将被保留。"
-                                                                        data-bs-toggle="tooltip">?</span></span>
-                </label>
-              </div>
-            </div>
-          </div>
         </div>
           <div class="card-footer">
                 <div class="row align-items-center">
@@ -474,7 +470,7 @@
           </div>
           <div class="card-body">
             <div class="row">
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">订阅RSS周期(秒) <span class="form-help"
                                                                   title="RSS订阅刷新的时间间隔，需要在订阅管理中设置订阅站点；如配置为空则不启动RSS订阅功能；为了减小站点压力，最小周期不能小于300秒"
@@ -483,7 +479,7 @@
                          id="pt.pt_check_interval" placeholder="留空关闭RSS订阅" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">订阅搜索周期(小时) <span class="form-help"
                                                                    title="定时对电影/电视剧订阅进行站点存量资源检索下载，用于对RSS订阅进行查漏补缺。以小时为单位，最小间隔为6小时，设置小于6小时时将强制设定为6小时。该项会对站点造成压力，应尽量通过维护站点RSS实现订阅追新，如非必要请不要开启"
@@ -492,7 +488,7 @@
                          id="pt.search_rss_interval" placeholder="留空关闭订阅定时搜索" autocomplete="off">
                 </div>
               </div>
-              <div class="col-lg">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label">媒体库同步周期(小时) <span class="form-help"
                                                                        title="定时同步媒体服务器数据到本地，用于展示媒体是否存在，留空则不启用同步服务"
@@ -512,7 +508,7 @@
               </div>
             </div>
             <div class="row">
-              <div class="col-xl">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="pt.search_auto"
@@ -523,7 +519,7 @@
                   </label>
                 </div>
               </div>
-              <div class="col-xl">
+              <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="pt.search_no_result_rss" {% if
@@ -534,7 +530,7 @@
                   </label>
                 </div>
               </div>
-              <div class="col-xl">
+              <div class="col-lg-6">
                 <div class="mb-3">
                   <label class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="pt.force_enable_brush" {% if
