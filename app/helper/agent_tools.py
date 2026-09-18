@@ -120,7 +120,9 @@ AGENT_TOOLS = [
         "sample": "下载这个磁力链 …",
         "desc": "把一个磁力链（magnet:）或种子文件下载链接直接加入下载器。"
                 "当用户发来 magnet 链接或说「下载这个链接」时使用。"
-                "注意：普通 http 网页链接不适用，只有磁力链或 .torrent 地址才用本工具。",
+                "注意：普通 http 网页链接不适用，只有磁力链或 .torrent 地址才用本工具。"
+                "用户只给了片名、没有给链接时不要用本工具，改调 search_media 搜索，"
+                "不要向用户索要链接。",
         "params": {
             "type": "object",
             "properties": {
@@ -235,7 +237,9 @@ AGENT_TOOLS = [
         "sample": "查一下沙丘是哪一年的",
         "desc": "按名称查询影视作品的媒体资料（TMDB/豆瓣），返回片名、年份、TMDB ID、简介。"
                 "当用户问「某部片子是哪一年的」「帮我查一下这部电影」"
-                "或需要在添加订阅前确认是哪部片子时使用。",
+                "或需要在添加订阅前确认是哪部片子时使用。"
+                "注意：本工具只查资料、不搜资源。用户要「找片/下载」时，"
+                "查完还要接着调用 search_media，不能停在给简介。",
         "params": {
             "type": "object",
             "properties": {
@@ -333,8 +337,11 @@ AGENT_TOOLS = [
         "label": "搜站点资源并把结果发给你挑",
         "sample": "帮我找沙丘 2021",
         "desc": "按名称搜索站点资源，并把搜索结果推送给用户挑选下载。"
-                "当用户说「帮我找某部片」「搜索某部片子」时使用。"
-                "注意：本工具会直接把搜索结果推送给用户，无需你复述结果。",
+                "当用户说「帮我找某部片」「搜索某部片子」「想看某部片」，"
+                "或只发来一个片名时使用。"
+                "注意：本工具会直接把搜索结果推送给用户，无需你复述结果；"
+                "用户手上没有链接时，你的职责是搜给他，"
+                "绝不要反问用户要链接、磁力链或种子文件。",
         "params": {
             "type": "object",
             "properties": {
@@ -1245,8 +1252,12 @@ class AgentTools:
         from app.utils.types import SearchType
 
         in_from = context.get("in_from") or SearchType.OT
+        # intent="SEARCH" 不能省：AI 的这条消息在路由里被判成「聊天(ASK)」，
+        # 沿用该标记会让搜索链路的「只有一条匹配」分支跑去添加订阅，
+        # 用户回复序号时也会被当成订阅 —— 现象就是「搜了片却收到订阅成功」。
         search_media_by_message(input_str=keyword,
                                 in_from=in_from,
                                 user_id=context.get("user_id"),
-                                user_name=context.get("user_name"))
+                                user_name=context.get("user_name"),
+                                intent="SEARCH")
         return "已发起「%s」的资源搜索，搜索结果稍后推送给用户，无需你再复述。" % keyword

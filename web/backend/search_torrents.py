@@ -169,13 +169,18 @@ def search_medias_for_web(content, ident_flag=True, filters=None, tmdbid=None, m
         return 0, ""
 
 
-def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=None):
+def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=None,
+                            ai_disabled=False, intent=None):
     """
     输入字符串，解析要求并进行资源搜索
     :param input_str: 输入字符串，可以包括标题、年份、季、集的信息，使用空格隔开
     :param in_from: 搜索下载的请求来源
     :param user_id: 需要发送消息的，传入该参数，则只给对应用户发送交互消息
     :param user_name: 用户名称
+    :param ai_disabled: 本次是「AI 失败后的本地回退」，不再交给 AI，避免形成死循环
+    :param intent: 强制指定意图（SEARCH=搜索资源 / SUBSCRIBE=添加订阅）。
+        缺省时沿用路由里记下的标记 —— AI 工具发起的搜索必须显式传 SEARCH，
+        否则会沿用 ASK，让「只有一条匹配」与「回复序号」都跑去添加订阅
     :return: 请求的资源是否全部下载完整、请求的文本对应识别出来的媒体信息、请求的资源如果是剧集，则返回下载后仍然缺失的季集信息
     """
     global SEARCH_MEDIA_TYPE
@@ -186,6 +191,7 @@ def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=N
         return
     else:
         input_str = str(input_str).strip()
+
     # 如果是数字，表示选择项
     if input_str.isdigit() and int(input_str) < 10:
         # 获取之前保存的可选项
@@ -240,7 +246,15 @@ def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=N
         #      极短文本，若交给下面的关键词分支，追问流程会直接断掉；
         #   2. 开启了 openai.agent_first —— 希望所有文本都先交给 AI 理解，
         #      AI 能通过工具完成原来关键词路径的同等操作。
-        _agent_owns = OpenAiHelper().get_state() and (
+        #
+        # 前提是 AI 真的可用：既要填了 API Key，也要打开「AI 助手」开关。
+        # 只认 API Key 会让开关形同虚设 —— 消息照旧送进 AI 聊天，既不搜索也不订阅。
+        # ai_disabled 表示本轮是 AI 失败后的本地回退，不能再交给 AI。
+        # 调用方（AI 的 search_media 工具）已指定意图时不再交给 AI：
+        # 它已经知道这次要干什么，再送回去只会自己套自己
+        _ai_available = (not ai_disabled) and not intent \
+            and OpenAiHelper().is_agent_available()
+        _agent_owns = _ai_available and (
                 OpenAiHelper().has_pending(user_id)
                 or bool((Config().get_config("openai") or {}).get("agent_first")))
 
@@ -253,15 +267,23 @@ def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=N
         elif input_str.startswith("http"):
             # 下载链接
             SEARCH_MEDIA_TYPE[user_id] = "DOWNLOAD"
-        elif OpenAiHelper().get_state() \
+        elif _ai_available \
                 and not input_str.startswith("搜索") \
                 and not input_str.startswith("下载"):
-            # 开启ChatGPT时，不以订阅、搜索、下载开头的均为聊天模式
+            # AI 可用时，不以订阅、搜索、下载开头的文本都算聊天；
+            # AI 不可用（未配置 / 关掉开关 / 回退中）则落到下面的搜索分支，
+            # 与「没有 AI 时」的行为一致
             SEARCH_MEDIA_TYPE[user_id] = "ASK"
         else:
             # 搜索
             input_str = re.sub(r"(搜索|下载)[:：\s]*", "", input_str)
             SEARCH_MEDIA_TYPE[user_id] = "SEARCH"
+
+        # 调用方显式指定的意图优先于路由推断（工具已经知道这次要干什么），
+        # 但必须放在路由之后 —— 放前面会被路由分支覆盖掉，
+        # 结果就是「AI 让搜片，却又被送回去聊天」，一次搜索变成两轮对话
+        if intent:
+            SEARCH_MEDIA_TYPE[user_id] = intent
 
         # 下载链接
         if SEARCH_MEDIA_TYPE[user_id] == "DOWNLOAD":
@@ -302,8 +324,24 @@ def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=N
                                                userid=user_id,
                                                context={"in_from": in_from,
                                                         "user_name": user_name})
-            if not answer:
-                answer = "ChatGTP出错了，请检查OpenAI API Key是否正确，如需搜索电影/电视剧，请发送 搜索或下载 + 名称"
+            if OpenAiHelper().is_error_answer(answer):
+                # AI 没答上：网络不通、接口报错、Key 失效都算。此时不能把用户晾在这里，
+                # 也不能拿一句「连接失败」当全部回复 —— 没有 AI 的时代，
+                # 「搜索 片名」「订阅 片名」「磁力链」都是能用的，这条底线要保住。
+                log.warn("【Web】AI 不可用（%s），消息「%s」回退为本地模式处理"
+                         % (answer or "无返回", input_str))
+                Message().send_channel_msg(
+                    channel=in_from,
+                    title="AI 助手暂时不可用：%s" % (answer or "没有返回内容"),
+                    text="已切换为本地模式处理，可直接发送「搜索 片名」或片名，"
+                         "也支持「订阅 片名」与磁力链/种子链接。",
+                    user_id=user_id)
+                search_media_by_message(input_str=input_str,
+                                        in_from=in_from,
+                                        user_id=user_id,
+                                        user_name=user_name,
+                                        ai_disabled=True)
+                return
             # 发送消息
             Message().send_channel_msg(channel=in_from,
                                        title="",

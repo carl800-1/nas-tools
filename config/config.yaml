@@ -204,7 +204,9 @@ openai:
   api_url:
   # 【模型名称】：留空使用 gpt-3.5-turbo；接入本地模型或第三方中转时填写对应模型名
   model:
-  # 【AI助手】：开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管，可查询与操作系统
+  # 【AI助手】：开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管，可查询与操作系统；
+  # 关闭后消息按本地关键词规则处理（搜索/订阅/下载链接），与没有配置AI时一致。
+  # AI 调用失败（网络不通/接口报错）时会自动回退到本地规则，不会挡住你的搜索与订阅
   agent_enable: true
   # 【工具调用协议】：auto=优先原生function calling，不支持时自动降级；functions=仅原生；prompt=仅文本协议
   agent_protocol: auto

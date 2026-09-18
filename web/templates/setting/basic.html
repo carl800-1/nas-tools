@@ -783,7 +783,7 @@
                     <input class="form-check-input" type="checkbox" id="openai.agent_enable" {% if
                       openai_conf.agent_enable | default(true) %}checked{% endif %}>
                     <span class="form-check-label">AI助手 <span class="form-help"
-                                                              title="开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管：可以查询下载、站点、订阅、媒体库等状态，也能执行订阅、搜索、重启等操作；关闭则退回纯聊天"
+                                                              title="开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管：可以查询下载、站点、订阅、媒体库等状态，也能执行订阅、搜索、重启等操作；关闭后消息按本地关键词规则处理（搜索/订阅/下载链接），与没有配置AI时一致。AI 连不上时会自动回退到本地规则，不会耽误你搜片"
                                                               data-bs-toggle="tooltip">?</span>
                     </span>
                   </label>

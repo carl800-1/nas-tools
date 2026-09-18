@@ -132,6 +132,17 @@ def _describe_error(err, base, model, timeout):
     return "连接失败：%s：%s" % (type(err).__name__, detail or "未知错误")
 
 
+# get_answer 在调用失败时返回的文案前缀。消息路由据此判断
+# 「这次不是 AI 不会答，而是 AI 根本没答上」，从而回退到本地关键词路径。
+# 改这里的文案时不需要动路由代码，反向也成立。
+_ANSWER_ERROR_PREFIX = (
+    "ChatGPT网络连接失败",
+    "没有接收到ChatGPT的返回消息",
+    "请求ChatGPT出现错误",
+    "请求被ChatGPT拒绝了",
+)
+
+
 @singleton
 class OpenAiHelper:
     _api_key = None
@@ -237,6 +248,34 @@ class OpenAiHelper:
     def get_state(self):
         self.__ensure_fresh()
         return True if self._api_key else False
+
+    def is_agent_available(self):
+        """
+        AI 助手是否可以接管消息：既填了 API Key，也打开了「AI 助手」开关。
+
+        与 get_state() 的分工：
+        - get_state() 表示「AI 能力是否已配置」，只认 API Key。文件识别
+          （laboratory.chatgpt_enable）走的是这条线，关掉「AI 助手」不该连带停掉它；
+        - 本方法用于消息路由。返回 False 时消息回到本地关键词路径
+          （搜索 / 订阅 / 下载链接），也就是「没有 AI 时」的行为。
+          只认 API Key 会让开关形同虚设：关了「AI 助手」消息仍被送进 AI 聊天，
+          既不搜索也不订阅，用户遇到的就是「关了反而不听使唤」。
+        """
+        self.__ensure_fresh()
+        return bool(self._api_key) and bool(self._agent_enable)
+
+    @staticmethod
+    def is_error_answer(answer):
+        """
+        判断 get_answer 的返回值是「调用失败」还是真实回答。
+
+        消息路由据此决定回退到本地模式。把判定集中在这里，
+        以后调整错误文案也不会与调用方失配。
+        空答复同样算失败（没答上就是没答上）。
+        """
+        if not answer:
+            return True
+        return str(answer).strip().startswith(_ANSWER_ERROR_PREFIX)
 
     @staticmethod
     def test_connection(api_url=None, api_key=None, model=None, timeout=12):
@@ -474,7 +513,10 @@ class OpenAiHelper:
 
         Agent 模式（默认）：大模型可自主调用工具查询、操作系统（下载器/站点/订阅/媒体库等），
         信息不全时会主动向用户追问，用户回答后自动补全并执行。
-        关闭 openai.agent_enable 后退回纯文本聊天，行为与旧版一致。
+
+        本方法只应由消息路由在「AI 助手可用」（is_agent_available）时调用；
+        关闭 openai.agent_enable 后路由会直接走本地关键词路径，不再送到这里。
+        返回值为错误文案时（is_error_answer 为 True），调用方应回退到本地模式。
 
         :param text: 输入文本
         :param userid: 用户ID
@@ -796,6 +838,11 @@ class OpenAiHelper:
             "10. 用户补充信息后，把信息合并进参数直接执行，不要重复追问同一项。\n"
             "11. 与系统无关的普通问题（闲聊、常识、技术问答）直接回答，不要调用工具。\n"
             "12. 面向用户的回复都要提炼成简洁的中文，不要输出原始 JSON。\n"
+            "13. 用户给出片名、说「想找/想看/下载某部片」，或只发来一个片名时，"
+            "直接调用 search_media 发起资源搜索，结果由系统推送给用户挑选。\n"
+            "   不要只查了资料（query_media_info）就结束，更不要向用户索要链接、磁力链或种子文件 ——"
+            "搜到资源、把可下载的结果给用户，才是你要做的事；"
+            "只有用户自己发来磁力链/种子链接时才用 download_by_link。\n"
         ) % tools.get_tools_prompt()
         if text_protocol:
             prompt += (
