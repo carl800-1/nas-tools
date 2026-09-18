@@ -71,6 +71,25 @@ def _extract_json_object(text):
     return data if isinstance(data, dict) else None
 
 
+def _looks_like_tool_call(text):
+    """
+    判断模型输出是否「本意是工具调用」，而不是给用户看的话
+
+    用于守住最后的出口：解析失败时若仍长得像工具调用，绝不能把它当成用户答复
+    发出去 —— 用户会收到一串内部 JSON，而且工具一次都没执行过。
+    容错分两层：能解析出 JSON 就看键名；JSON 被截断解析不动时，退回键名特征匹配。
+    """
+    if not text:
+        return False
+    data = _extract_json_object(text)
+    if isinstance(data, dict) and ("tool" in data or "args" in data):
+        return True
+    s = _strip_code_fence(text)
+    if s[:1] in ("{", "[") or "```" in str(text):
+        return bool(re.search(r'["\']?(tool|args)["\']?\s*:', s, re.I))
+    return False
+
+
 def _describe_error(err, base, model, timeout):
     """
     把 SDK 异常翻译成用户能直接照做的结论
@@ -145,6 +164,14 @@ class OpenAiHelper:
 
     # 追问的有效期（秒）。比确认长一些，因为用户可能要想一下片名/站点名
     _ASK_TTL = 600
+
+    # 疑似工具调用被拦下时的兜底回复（绝不把模型输出的 JSON 发给用户）
+    _GUARD_REPLY = ("抱歉，我这次没能正确理解你的指令。请换一种说法再说一遍，"
+                    "例如「在下载什么」「磁盘还剩多少」。")
+
+    # 拦下后重试一次用的纠正指令
+    _RETRY_HINT = ("你刚才的输出看起来是工具调用 JSON，但系统没能识别它。"
+                   "请直接用简洁的中文回答用户，不要输出任何 JSON。")
 
     # 用户表示确认的常见措辞
     _CONFIRM_WORDS = ("确认", "确定", "执行", "可以", "好的", "好", "是的", "是", "嗯",
@@ -488,7 +515,12 @@ class OpenAiHelper:
         """
         messages = self.__get_session(userid, text)
         completion = self.__get_model(message=messages, user=userid)
-        result = completion.choices[0].message.content
+        result = (completion.choices[0].message.content or "").strip()
+        if _looks_like_tool_call(result):
+            # 纯聊天模式没有工具，但模型仍可能吐工具调用 JSON；
+            # 这种内容一旦发出去，用户看到的就是一串内部 JSON
+            log.warn("【OpenAI】纯聊天模式输出疑似工具调用，已拦下不外发")
+            result = self._GUARD_REPLY
         if result:
             # 注意：此处保存的是模型的回复。历史实现曾误传用户输入，
             # 导致会话里助手的话全是用户自己的问题，已修正。
@@ -564,8 +596,17 @@ class OpenAiHelper:
 
             msg = completion.choices[0].message
             call = self.__extract_function_call(msg)
+            answer = (msg.get("content") or "").strip()
             if not call:
-                answer = (msg.get("content") or "").strip()
+                # 协议互认：后端声称支持 functions，模型却把调用写进了正文
+                # （本地小模型与部分中转很常见）。这里按文本协议认下来，
+                # 否则这次调用会被当成"答复"直接发给用户。
+                call = self.__parse_text_call(answer)
+            if not call:
+                # 仍认不出来：先确认它真的不是工具调用，再当答复返回
+                guard = self.__guard_answer(userid, text, messages, answer)
+                if guard:
+                    return self.__decorate(guard, tool_calls)
                 self.__save_turn(userid, text, answer)
                 return self.__decorate(answer, tool_calls)
 
@@ -611,6 +652,9 @@ class OpenAiHelper:
             content = (completion.choices[0].message.content or "").strip()
             call = self.__parse_text_call(content)
             if not call:
+                guard = self.__guard_answer(userid, text, messages, content)
+                if guard:
+                    return self.__decorate(guard, tool_calls)
                 self.__save_turn(userid, text, content)
                 return self.__decorate(content, tool_calls)
 
@@ -636,6 +680,42 @@ class OpenAiHelper:
             })
 
         return self.__too_many_rounds(tool_calls)
+
+    def __retry_plain_answer(self, userid, messages, bad_content):
+        """
+        疑似工具调用时重试一次，请模型改用自然语言作答
+
+        只重试一次：重试要额外花一次模型调用，而模型若执意输出 JSON，
+        再试多少次都一样，直接退到兜底回复更划算。
+        """
+        retry_messages = list(messages)
+        retry_messages.append({"role": "assistant", "content": bad_content})
+        retry_messages.append({"role": "user", "content": self._RETRY_HINT})
+        try:
+            completion = self.__get_model(message=retry_messages, user=userid, timeout=60)
+            retry = (completion.choices[0].message.content or "").strip()
+        except Exception as err:
+            log.error("【Agent】疑似工具调用重试失败：%s" % str(err))
+            return None
+        if retry and not _looks_like_tool_call(retry):
+            return retry
+        return None
+
+    def __guard_answer(self, userid, text, messages, content):
+        """
+        非工具调用出口的统一守卫
+
+        正常答复返回 None（调用方照常发出）；内容疑似工具调用时返回替代文案：
+        先请模型用自然语言重答一次，仍不行就发兜底回复。
+        无论走哪条路，写进会话历史的都不是那串 JSON —— 否则模型下一轮会照抄自己。
+        """
+        if not _looks_like_tool_call(content):
+            return None
+        log.warn("【Agent】模型输出疑似工具调用但未能识别，已拦下不外发：%s"
+                 % content[:200].replace("\n", " "))
+        answer = self.__retry_plain_answer(userid, messages, content) or self._GUARD_REPLY
+        self.__save_turn(userid, text, answer)
+        return answer
 
     def __handle_ask(self, userid, text, tool_result):
         """
@@ -676,8 +756,10 @@ class OpenAiHelper:
         try:
             completion = self.__get_model(message=messages, user=userid, timeout=60)
             answer = (completion.choices[0].message.content or "").strip()
-            if answer:
+            if answer and not _looks_like_tool_call(answer):
                 return answer
+            if answer:
+                log.warn("【Agent】结果转述输出疑似 JSON，已改用兜底文案")
         except Exception as err:
             log.error("【Agent】结果转述失败：%s" % str(err))
         return "操作已执行。"
@@ -786,17 +868,18 @@ class OpenAiHelper:
         """
         if not content:
             return None
-        text = _strip_code_fence(content)
-        if not (text.startswith("{") and text.endswith("}")):
-            return None
-        try:
-            data = json.loads(text)
-        except Exception:
-            return None
+        # 用 _extract_json_object 而非裸 json.loads：模型常把 JSON 包在
+        # ``` 围栏里，或前后带一句说明文字、结尾多个句号。先前要求整体
+        # 以 {} 开头结尾，这些情况一律被判为"不是工具调用"，
+        # 结果模型的本意（干活）被当成答复发给了用户。
+        data = _extract_json_object(content)
         if not isinstance(data, dict) or "tool" not in data:
             return None
+        name = data.get("tool")
+        if not isinstance(name, str) or not name.strip():
+            return None
         args = data.get("args")
-        return str(data.get("tool")), args if isinstance(args, dict) else {}
+        return name.strip(), args if isinstance(args, dict) else {}
 
     def __is_confirm(self, text):
         """
