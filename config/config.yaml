@@ -202,6 +202,18 @@ openai:
   api_key:
   # 【openai api url】：自定义openai请求地址
   api_url:
+  # 【模型名称】：留空使用 gpt-3.5-turbo；接入本地模型或第三方中转时填写对应模型名
+  model:
+  # 【AI助手】：开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管，可查询与操作系统
+  agent_enable: true
+  # 【工具调用协议】：auto=优先原生function calling，不支持时自动降级；functions=仅原生；prompt=仅文本协议
+  agent_protocol: auto
+  # 【最大工具调用轮数】：限制模型连续调用工具的次数，防止死循环
+  agent_max_rounds: 5
+  # 【危险操作二次确认】：删除/重启/升级/清空历史等操作需回复“确认”才执行
+  agent_confirm_dangerous: true
+  # 【显示工具调用】：在回复中标注本次调用了哪些工具，便于排查问题
+  agent_show_tools: false
 
 # 【OCR】
 ocr:

@@ -284,11 +284,13 @@ def search_media_by_message(input_str, in_from: SearchType, user_id, user_name=N
                                   torrent_file=filepath,
                                   in_from=in_from,
                                   user_name=user_name)
-        # 聊天
+        # 聊天 / AI 助手
         elif SEARCH_MEDIA_TYPE[user_id] == "ASK":
-            # 调用ChatGPT Api
+            # 调用 OpenAI，Agent 模式下可自主调用工具查询与操作系统
             answer = OpenAiHelper().get_answer(text=input_str,
-                                               userid=user_id)
+                                               userid=user_id,
+                                               context={"in_from": in_from,
+                                                        "user_name": user_name})
             if not answer:
                 answer = "ChatGTP出错了，请检查OpenAI API Key是否正确，如需搜索电影/电视剧，请发送 搜索或下载 + 名称"
             # 发送消息

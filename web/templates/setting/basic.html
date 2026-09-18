@@ -279,6 +279,54 @@
                 </div>
               </div>
             </div>
+            {% set openai_conf = Config.openai | default({}) %}
+            <div class="row">
+              <div class="col-lg">
+                <div class="mb-3">
+                  <label class="form-label">OpenAI 模型 <span class="form-help"
+                                                                        title="使用的模型名称，留空默认 gpt-3.5-turbo。接入本地模型或第三方中转时填写对应模型名"
+                                                                        data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" value="{{ openai_conf.model or '' }}" class="form-control"
+                         id="openai.model" placeholder="gpt-3.5-turbo" autocomplete="off">
+                </div>
+              </div>
+              <div class="col-lg">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_enable" {% if
+                      openai_conf.agent_enable | default(true) %}checked{% endif %}>
+                    <span class="form-check-label">AI助手 <span class="form-help"
+                                                                  title="开启后，消息渠道（飞书/微信/Telegram等）中的聊天消息由AI助手接管：可以查询下载、站点、订阅、媒体库等状态，也能执行订阅、搜索、重启等操作；关闭则退回纯聊天"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-lg">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_confirm_dangerous" {% if
+                      openai_conf.agent_confirm_dangerous | default(true) %}checked{% endif %}>
+                    <span class="form-check-label">危险操作需确认 <span class="form-help"
+                                                                  title="删除、重启、升级、清空历史等操作，AI会先征求确认，回复「确认」后才执行；关闭后AI可直接执行这些操作"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div class="col-lg">
+                <div class="mb-3">
+                  <label class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="openai.agent_show_tools" {% if
+                      openai_conf.agent_show_tools | default(false) %}checked{% endif %}>
+                    <span class="form-check-label">显示工具调用 <span class="form-help"
+                                                                  title="在AI回复中标注本次调用了哪些工具，便于排查问题"
+                                                                  data-bs-toggle="tooltip">?</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
             <div class="row">
               <div class="col-lg">
                 <div class="mb-3">

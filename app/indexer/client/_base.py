@@ -29,7 +29,7 @@ class _IIndexClient(metaclass=ABCMeta):
         self.progress = ProgressHelper()
         laboratory = Config().get_config("laboratory")
         if laboratory:
-            self.recognize_enhance_enable = laboratory.get("simplify_library_notification", False) or False
+            self.recognize_enhance_enable = laboratory.get("recognize_enhance_enable", False) or False
 
     @abstractmethod
     def match(self, ctype):
