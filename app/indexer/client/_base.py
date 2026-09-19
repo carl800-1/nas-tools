@@ -895,15 +895,31 @@ class _IIndexClient(metaclass=ABCMeta):
             f"耗时 {(end_time - start_time).seconds} 秒"
             f"匹配耗时 {(end_time - starttime).seconds} 秒"
         )
-        self.progress.update(ptype=ProgressKey.Search,
-                             text=f"{indexer.name} {len(result_array)} 条数据中，"
-                                  f"过滤 {index_rule_fail}，"
-                                  f"不匹配 {index_match_fail}，"
-                                  f"错误 {index_error}，"
-                                  f"有效 {index_sucess}，"
-                                  f"耗时 {(end_time - start_time).seconds} 秒"
-                                  f"匹配耗时 {(end_time - starttime).seconds} 秒"
-                             )
+        # 有源数据但一条都没通过时，给出可归因的失败原因：
+        #   过滤占多数 -> 订阅/站点过滤规则或促销条件拦下的
+        #   不匹配占多数 -> 名称/年份/季集与 TMDB 信息对不上
+        #   错误占多数 -> 种子名无法识别
+        # 这几种情况在老代码里都只体现为「有效 0」，现场无法区分
+        if result_array and index_sucess == 0:
+            if index_rule_fail >= index_match_fail and index_rule_fail >= index_error:
+                _fail_hint = "结果被过滤规则拦下（检查分辨率/质量/促销等过滤条件）"
+            elif index_match_fail >= index_error:
+                _fail_hint = "结果与媒体信息不匹配（名称/年份/季集对不上，可能是译名差异）"
+            else:
+                _fail_hint = "种子名称无法识别"
+            log.warn(f"【{self.client_name}】{indexer.name} {len(result_array)} 条数据全部未通过：{_fail_hint}")
+            self.progress.update(ptype=ProgressKey.Search,
+                                 text=f"{indexer.name} {len(result_array)} 条均未通过：{_fail_hint}")
+        else:
+            self.progress.update(ptype=ProgressKey.Search,
+                                 text=f"{indexer.name} {len(result_array)} 条数据中，"
+                                      f"过滤 {index_rule_fail}，"
+                                      f"不匹配 {index_match_fail}，"
+                                      f"错误 {index_error}，"
+                                      f"有效 {index_sucess}，"
+                                      f"耗时 {(end_time - start_time).seconds} 秒"
+                                      f"匹配耗时 {(end_time - starttime).seconds} 秒"
+                                 )
         if self.is_indebug():
             log.debug(f"ret_array online")
             self.print_ret_array(matched_torrent)

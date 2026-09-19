@@ -20,6 +20,42 @@ from app.utils.types import SearchType, IndexerType, ProgressKey, SystemConfigKe
 from config import Config
 from web.backend.pro_user import ProUser
 
+
+def _describe_search_error(err):
+    """
+    把搜索异常归类成便于定位的简短描述
+
+    用于日志与进度提示：现场最常见的问题是「站点不可达」，但老代码只在
+    控制台 print 原始异常，容器日志里看不到，用户只能看到一句
+    「未搜索到数据」，无从判断是网络问题还是真的没有资源。
+
+    :param err: 捕获到的异常对象
+    :return: 归类后的中文描述
+    """
+    text = "%s %s" % (type(err).__name__, err)
+    low = text.lower()
+    if "timeout" in low or "timed out" in low:
+        return "连接超时（站点不可达或需要代理）"
+    if "connectionreset" in low or "reset by peer" in low or "sslerror" in low or "ssl" in low:
+        return "连接被重置（可能被网络拦截，需检查代理）"
+    if "connectionrefused" in low or "refused" in low:
+        return "连接被拒绝（域名或端口不可用）"
+    if "nameresolution" in low or "gaierror" in low or "getaddrinfo" in low \
+            or "name or service not known" in low or "nodename nor servname" in low:
+        return "域名解析失败（DNS 不可用）"
+    if "403" in text or "forbidden" in low:
+        return "被站点拒绝（403，Cookie 失效或反爬）"
+    if "401" in text or "unauthorized" in low:
+        return "鉴权失败（401，Cookie 可能已过期）"
+    if "429" in text or "too many" in low:
+        return "触发站点限流（429）"
+    if "404" in text or "not found" in low:
+        return "页面不存在（404，站点规则可能已变更）"
+    if "500" in text or "502" in text or "503" in text:
+        return "站点服务异常（5xx）"
+    return "未知错误"
+
+
 class BuiltinIndexer(_IIndexClient):
     # 索引器ID
     client_id = "builtin"
@@ -212,7 +248,12 @@ class BuiltinIndexer(_IIndexClient):
                         mtype=match_media.type if match_media and match_media.tmdb_info else None)
         except Exception as err:
             error_flag = True
-            print(str(err))
+            # 异常原因必须写进日志：老代码只 print 到控制台，容器日志里根本看不到，
+            # 导致「站点连不上」「域名失效」「反爬拦截」与「真的没搜到」在现场无法区分
+            error_desc = _describe_search_error(err)
+            log.error(f"【{self.client_name}】{indexer.name} 搜索出错[{error_desc}]：{err}")
+            self.progress.update(ptype=ProgressKey.Search,
+                                 text=f"{indexer.name} 搜索失败：{error_desc}")
 
         # 索引花费的时间
         seconds = round((datetime.datetime.now() - start_time).seconds, 1)
@@ -223,9 +264,17 @@ class BuiltinIndexer(_IIndexClient):
                                                 result='N' if error_flag else 'Y')
         # 返回结果
         if len(result_array) == 0:
-            log.warn(f"【{self.client_name}】{indexer.name} 未搜索到数据")
-            # 更新进度
-            self.progress.update(ptype=ProgressKey.Search, text=f"{indexer.name} 未搜索到数据")
+            # 区分「搜索失败」与「确实没有匹配资源」：
+            #   error_flag=True  -> 抓取阶段就出错了，站点可能不可达，不是没有资源
+            #   error_flag=False -> 站点正常响应，但返回 0 条，属于真的没搜到
+            if error_flag:
+                log.warn(f"【{self.client_name}】{indexer.name} 搜索失败，无法确认是否有资源")
+                self.progress.update(ptype=ProgressKey.Search,
+                                     text=f"{indexer.name} 搜索失败（站点不可达或被拦截）")
+            else:
+                log.warn(f"【{self.client_name}】{indexer.name} 未搜索到数据")
+                # 更新进度
+                self.progress.update(ptype=ProgressKey.Search, text=f"{indexer.name} 未搜索到数据")
             return []
         else:
             log.warn(f"【{self.client_name}】{indexer.name} 返回数据：{len(result_array)}")
