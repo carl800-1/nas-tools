@@ -221,7 +221,7 @@ class BrushTask(object):
             log.error(f"【Brush】{task_name} RSS链接已过期，请重新获取！")
             return
         if len(rss_result) == 0:
-            log.warn("【Brush】%s RSS未下载到数据" % site_name)
+            log.warn("【Brush】%s RSS未获取到数据，本轮已跳过，具体原因见上方针对该站点的错误日志" % site_name)
             return
         else:
             log.info("【Brush】%s RSS获取数据：%s" % (site_name, len(rss_result)))

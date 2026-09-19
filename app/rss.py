@@ -130,7 +130,7 @@ class Rss:
                     site_order = 100 - int(site_info.get("pri"))
                 else:
                     site_order = 0
-                rss_acticles = self.rsshelper.parse_rssxml(url=rss_url)
+                rss_acticles = self.rsshelper.parse_rssxml(url=rss_url, proxy=site_proxy)
                 if rss_acticles is None:
                     # RSS链接过期
                     log.error(f"【Rss】站点 {site_name} RSS链接已过期，请重新获取！")
@@ -140,7 +140,8 @@ class Rss:
                                                         f"链接：{rss_url}")
                     continue
                 if not rss_acticles:
-                    log.warn(f"【Rss】{site_name} 未下载到数据")
+                    log.warn(f"【Rss】站点 {site_name} 未获取到数据，本轮已跳过，"
+                             f"具体原因见上方针对该站点的错误日志")
                     continue
                 else:
                     log.info(f"【Rss】{site_name} 获取数据：{len(rss_acticles)}")
