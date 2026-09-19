@@ -1,3 +1,70 @@
+# v4.5.5 (2026-09-19)
+
+## 修复：RSS 订阅未按站点设置走代理，解析失败也不再报天书
+
+**现象一**：订阅拉取某个站点的 RSS 时，日志里只打出一行 XML 解析异常的
+完整堆栈（`Exception: syntax error ... rss_helper.py, line 46`），既看不出
+是哪个站点，也看不出站点到底返回了什么，无从下手。
+
+**现象二**：在站点维护里开启了「使用代理服务器」，订阅路径拉 RSS 列表依然
+直连。对需要代理才能打开的站点，表现就是「未获取到数据」；可同一轮里对
+种子详情的 Free/HR 检测却能正常走通 —— 前后矛盾，极易误判成站点挂了。
+
+**根因**分两处：
+
+1. `RssHelper.parse_rssxml` 自身有三处问题：
+   - 过期判定写的是 `if ret_xml in _rss_expired_msg`，**全等比较**，
+     实际响应体是「RSS 链接已过期, 您需要获得一个新的!」这类句子，几乎永不成立；
+   - **HTML 页面是合法 XML**，`parseString` 会成功，`getElementsByTagName("item")`
+     返回空后直接静默返回空列表，从不进入 `except` —— 站点返回登录页时日志里
+     一个字都没有；
+   - 请求失败分支静默 `return []`，没有任何日志。
+
+2. `app/rss.py:133` 调用 `parse_rssxml` 时**未传 `proxy`**。函数内 `proxy`
+   默认 `False`，`proxies` 被置为 `None`，于是恒不走代理。而 `site_proxy`
+   在第 124 行就已经读出来了，并在第 199 行传给 `check_torrent_rss`、
+   最终第 458 行用于解析种子详情；`brushtask.py:218` 也传了。全项目六处
+   站点访问里，**只有这一处漏了**。
+
+> 补充说明代理机制：`app.proxies` 只是「代理服务器地址」，不是统一开关。
+> `RequestUtils._proxies` 默认为 `None`，必须由调用方显式传 `proxies=` 才生效。
+> 是否使用代理由站点的 `proxy` 字段决定，基础设置页也明确写着
+> 「站点默认不使用代理，如需使用需在站点维护中开启」。
+
+**改动**：
+
+- `app/helper/rss_helper.py`：
+  - 新增 `__describe()`，把「拿到的响应不是有效 RSS」翻译成站点维度的原因，
+    按响应体形态分五类输出（空内容 / 返回网页 / 接口错误 / 非 RSS 文本 /
+    内容残缺），均带站点域名与响应片段；
+  - 过期特征改为**包含匹配**，并覆盖「RSS链接已过期」等无空格变体；
+  - 新增 HTML 根元素判定，补上原本完全静默的盲区；
+  - 请求失败分支补 `warn` 日志；原始异常降为 `debug`，排查能力不减。
+- `app/rss.py`：`parse_rssxml` 传入 `proxy=site_proxy`，与刷流路径对齐；
+  「未获取到数据」的提示改为指向站点维度的错误日志。
+- `app/brushtask.py`：同步该提示措辞。
+
+### 验证
+
+- 桩件无依赖复现（`.workbuddy/tests/rss_err_diag.py`），8 个场景对比改动前后。
+  原报错现场从 `not well-formed (invalid token): line 1, column 8` 变为：
+
+  ```
+  【Rss】站点 pt.example.com 返回的不是RSS格式，响应片段：您的账号权限不足，请重新登录后再试
+  【Rss】站点 pt.example.com 的返回内容可以确认不是RSS，请到站点维护中核对 rssurl 以及 Cookie 是否有效
+  ```
+
+  同时覆盖并验证链接过期、JSON 鉴权失败、HTML 登录页、空响应、XML 残缺；
+  正常 RSS 回归仍返回 1 条种子。
+- 代理传导验证（`.workbuddy/tests/proxy_passthrough.py`）：站点 `proxy=True`
+  时 `requests` 收到 `app.proxies`，`proxy=False` 时直连；订阅与刷流两条
+  RSS 路径行为一致。
+- `py_compile` 三个文件语法通过。
+
+## 版本号
+
+- 从 `v4.5.4` 升级至 `v4.5.5`
+
 # v4.5.4 (2026-09-18)
 
 ## 修复：飞书消息卡片的标题和内容一模一样
