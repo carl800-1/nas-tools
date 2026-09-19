@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v4.5.9** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v4.5.10** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -636,7 +636,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:4.5.9   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:4.5.10   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -739,4 +739,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-19 ｜ 当前版本 v4.5.9_
+_Last updated: 2026-09-20 ｜ 当前版本 v4.5.10_
