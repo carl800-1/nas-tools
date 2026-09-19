@@ -497,7 +497,11 @@ class Media:
     @lru_cache(maxsize=512)
     def __search_tmdb_web(self, file_media_name, mtype: MediaType):
         """
-        搜索TMDB网站，直接抓取结果，结果只有一条时才返回
+        搜索TMDB网站，直接抓取结果
+
+        单条结果直接返回；多条结果时按名称+年份收敛，仍唯一才返回，
+        避免「续作/衍生剧并存」时因结果不唯一而整体放弃（如
+        凡人修仙传(2020) 与 凡人修仙传：虚天战纪(2025)）。
         :param file_media_name: 名称
         """
         if not file_media_name:
@@ -512,21 +516,45 @@ class Media:
             if not html_text:
                 return None
             try:
-                tmdb_links = []
+                # 链接 -> (标题, 年份)，标题与年份都从搜索结果卡片中直接取，不再额外请求
+                tmdb_links = {}
                 html = etree.HTML(html_text)
                 if mtype == MediaType.TV:
-                    links = html.xpath("//a[@data-id and @data-media-type='tv']/@href")
+                    links = html.xpath("//a[@data-id and @data-media-type='tv']")
                 else:
-                    links = html.xpath("//a[@data-id]/@href")
+                    links = html.xpath("//a[@data-id]")
                 for link in links:
-                    if not link or (not link.startswith("/tv") and not link.startswith("/movie")):
+                    href = link.get("href")
+                    if not href or (not href.startswith("/tv") and not href.startswith("/movie")):
                         continue
-                    if link not in tmdb_links:
-                        tmdb_links.append(link)
+                    # 搜索结果卡片的父节点文本形如「凡人修仙传2020 年 07 月 25 日...」
+                    title, year = self.__parse_tmdb_web_card(link)
+                    # 同一作品会有多个<a>（封面图无文本、标题有文本），
+                    # 只在解析出信息、或该链接尚未收录时才写入，避免被空结果占位
+                    if href in tmdb_links:
+                        if title and not tmdb_links[href][0]:
+                            tmdb_links[href] = (title, year)
+                        continue
+                    tmdb_links[href] = (title, year)
+                tmdb_id = None
                 if len(tmdb_links) == 1:
+                    tmdb_id = list(tmdb_links.keys())[0]
+                elif len(tmdb_links) > 1:
+                    # 多条结果：先按文件名中的年份收敛
+                    tmdb_id = self.__pick_tmdb_web_link(file_media_name, tmdb_links)
+                    if not tmdb_id:
+                        log.info("【Meta】%s TMDB网站返回数据过多且无法确定：%s 条"
+                                 % (file_media_name, len(tmdb_links)))
+                else:
+                    log.info("【Meta】%s TMDB网站未查询到媒体信息！" % file_media_name)
+                if tmdb_id:
+                    # href 形如 /tv/1396-breaking-bad，ID 是路径里的第一段数字
+                    tmdb_id_num = re.match(r"^/(?:tv|movie)/(\d+)", tmdb_id)
+                    if not tmdb_id_num:
+                        return None
                     tmdbinfo = self.get_tmdb_info(
-                        mtype=MediaType.TV if tmdb_links[0].startswith("/tv") else MediaType.MOVIE,
-                        tmdbid=tmdb_links[0].split("/")[-1])
+                        mtype=MediaType.TV if tmdb_id.startswith("/tv") else MediaType.MOVIE,
+                        tmdbid=tmdb_id_num.group(1))
                     if tmdbinfo:
                         if mtype == MediaType.TV and tmdbinfo.get('media_type') != MediaType.TV:
                             return {}
@@ -543,14 +571,123 @@ class Media:
                                 tmdbinfo.get('name'),
                                 tmdbinfo.get('first_air_date')))
                     return tmdbinfo
-                elif len(tmdb_links) > 1:
-                    log.info("【Meta】%s TMDB网站返回数据过多：%s" % (file_media_name, len(tmdb_links)))
-                else:
-                    log.info("【Meta】%s TMDB网站未查询到媒体信息！" % file_media_name)
             except Exception as err:
                 print(str(err))
                 return None
         return None
+
+    @staticmethod
+    def __parse_tmdb_web_card(link):
+        """
+        从TMDB搜索结果卡片中取出标题与年份
+
+        卡片文本形如「凡人修仙传2020 年 07 月 25 日平凡少年韩立...」或
+        「凡人修仙传2020 年 07 月 25 日」，标题与年份在日期之前。
+        :param link: 搜索结果<a>元素
+        :return: (标题, 年份)，解析失败返回 (None, None)
+        """
+        node = link.getparent()
+        for _ in range(4):
+            if node is None:
+                break
+            text = " ".join("".join(node.itertext()).split())
+            match = re.match(r"^(.*?)(\d{4})\s*年", text)
+            if match:
+                title = match.group(1).strip()
+                # 卡片里标题可能在多个子节点中重复出现，折叠成一份，
+                # 否则后续按标题比对时会被重复文本干扰
+                for _ in range(3):
+                    _folded = re.sub(r"^(.{2,}?)\s*\1\s*$", r"\1", title)
+                    if _folded == title:
+                        break
+                    title = _folded
+                return title, match.group(2)
+            node = node.getparent()
+        return None, None
+
+    def __pick_tmdb_web_link(self, file_media_name, tmdb_links):
+        """
+        多条搜索结果时，按标题与年份收敛到唯一一条
+
+        依次尝试三种收敛方式，任一方式能收敛到唯一一条即返回：
+        ① 标题匹配且年份一致；
+        ② 标题匹配的候选其实指向同一部剧（不同译名/别名指向相同ID）；
+        ③ 仅按年份收敛，且只剩一条。
+        都收敛不到唯一结果时返回 None，交由上层继续走其它兜底。
+        :param file_media_name: 文件名或种子名
+        :param tmdb_links: {链接: (标题, 年份)}
+        :return: 命中的链接，无法确定返回 None
+        """
+        name = StringUtils.handler_special_chars(file_media_name).upper()
+        # 文件名中的年份（取4位数字，排除 1080/2160 这类分辨率）
+        file_year = None
+        for year in re.findall(r"(?<!\d)(\d{4})(?!\d)", file_media_name):
+            if 1900 <= int(year) <= 2100:
+                file_year = year
+                break
+
+        def __title_match(link):
+            """
+            卡片标题与文件名匹配
+
+            标题常为「中文译名 (English Name)」形式，直接整体比对会被中文部分
+            干扰（如「绝命毒师 (Breaking Bad)」对不上 Breaking.Bad.S01），
+            因此额外取标题中的英文片段再比一次。
+            """
+            title = tmdb_links.get(link, (None, None))[0]
+            if not title:
+                return False
+            if title == file_media_name:
+                return True
+            card_title = StringUtils.handler_special_chars(title).upper()
+            if card_title and (card_title in name or name in card_title):
+                return True
+            # 取标题中的英文片段（媒体名的主体通常是英文原名）
+            eng_in_title = StringUtils.handler_special_chars(
+                " ".join(re.findall(r"[A-Za-z][A-Za-z0-9\s._:'&!-]*", title))).upper()
+            if not eng_in_title:
+                return False
+            # 英文片段与文件名前缀一致（文件名带季集/分辨率等后缀）
+            return name.startswith(eng_in_title) or eng_in_title.startswith(name)
+
+        # ① 标题匹配 + 年份一致
+        candidates = [link for link in tmdb_links if __title_match(link)]
+        if file_year:
+            year_matched = [link for link in candidates if tmdb_links[link][1] == file_year]
+            if len(year_matched) == 1:
+                return year_matched[0]
+            if year_matched:
+                candidates = year_matched
+            else:
+                candidates = []
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # ② 标题匹配的候选指向同一部剧：多条记录其实是同一 TMDB ID
+        if candidates:
+            ids = {self.__tmdb_id_of(link) for link in candidates}
+            ids.discard(None)
+            if len(ids) == 1:
+                return candidates[0]
+
+        # ③ 退而求其次：仅按年份收敛
+        if file_year:
+            by_year = [link for link in tmdb_links if tmdb_links[link][1] == file_year]
+            if len(by_year) == 1:
+                return by_year[0]
+        return None
+
+    @staticmethod
+    def __tmdb_id_of(link):
+        """
+        从搜索结果链接中取出TMDB ID
+
+        href 形如 /tv/1396-breaking-bad 或 /movie/27205，ID 是路径中的第一段数字。
+        :param link: 搜索结果链接
+        :return: 数字ID字符串，取不到返回 None
+        """
+        match = re.match(r"^/(?:tv|movie)/(\d+)", link or "")
+        return match.group(1) if match else None
 
     def search_tmdb_person(self, name):
         """
