@@ -6,6 +6,7 @@ from app.filter import Filter
 from app.helper import ProgressHelper
 from app.media import Media
 from app.media.meta import MetaInfo
+from app.utils.string_utils import StringUtils
 from app.utils.types import MediaType, SearchType, ProgressKey
 from config import Config
 import jellyfish
@@ -730,10 +731,17 @@ class _IIndexClient(metaclass=ABCMeta):
                     description = description if description else ""
                     torrent_name = torrent_name if torrent_name else ""
                     imdbid_match = imdbid and match_media.imdb_id and str(imdbid) == str(match_media.imdb_id)
-                    name_match = match_media.org_string in torrent_name or \
-                                match_media.original_title in torrent_name or \
-                                match_media.org_string in description or \
-                                match_media.original_title in description
+                    # 繁简归一化后再做子串匹配：站点常用繁体命名（如「異次元駭客」），
+                    # 而关键词是简体（如「异次元骇客」），不归一化则永远匹配不上。
+                    # 只统一字形，不引入新的匹配维度，误匹配率不变。
+                    torrent_name_norm = StringUtils.to_simplified(torrent_name)
+                    description_norm = StringUtils.to_simplified(description)
+                    org_string_norm = StringUtils.to_simplified(match_media.org_string)
+                    original_title_norm = StringUtils.to_simplified(match_media.original_title)
+                    name_match = org_string_norm in torrent_name_norm or \
+                                original_title_norm in torrent_name_norm or \
+                                org_string_norm in description_norm or \
+                                original_title_norm in description_norm
                     year_match = (not match_media.year) or match_media.year in torrent_name or \
                                  match_media.year in description
                 if (imdbid_match or name_match) and year_match and self.recognize_enhance_enable:

@@ -646,3 +646,28 @@ class StringUtils:
         if re.search(pattern="^[0-9]+$", string=string):
             return True
         return False
+
+    @staticmethod
+    def to_simplified(string: str):
+        """
+        繁简归一化：将字符串中的繁体字统一转换为简体，用于跨字形比较
+
+        典型场景：PT 站点用繁体命名种子（如「異次元駭客」），
+        而搜索关键词是简体（如「异次元骇客」），子串匹配会失效。
+        归一化后两侧字形一致，比较即可命中。
+
+        注意：只做字形转换，不处理译名差异（「异次元骇客」与「十三度凶间」
+        是不同译名，归一化无法互通）。
+
+        :param string 待转换字符串，可为 None 或非字符串
+        :return 归一化后的字符串；入参为空或转换失败时原样返回
+        """
+        if not string:
+            return ""
+        if not isinstance(string, str):
+            return string
+        try:
+            return zhconv.convert(string, "zh-hans")
+        except Exception:
+            # 转换失败不影响主流程，退化为原始行为
+            return string
