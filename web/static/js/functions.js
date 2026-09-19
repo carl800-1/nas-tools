@@ -1778,7 +1778,12 @@ function manual_media_transfer() {
     hide_refresh_process();
     if (ret.retcode === 0) {
       show_success_modal(inpath + "处理成功！", function () {
-        navmenu(source);
+        // 文件管理页在整理完成后原地刷新，保持所在目录与滚动位置
+        if (typeof refresh_mediafile === "function" && source.startsWith("mediafile")) {
+          refresh_mediafile();
+        } else {
+          navmenu(source);
+        }
       });
     } else {
       //处理失败

@@ -26,15 +26,19 @@
                   上级目录
                 </a>
                 <div style="display: inline-flex; gap: 5px;">
-                  <a href="javascript:jump_sync_folders()">
+                  <a href="javascript:refresh_mediafile()" title="刷新当前目录">
+                    {{ SVG.refresh() }}
+                    刷新
+                  </a>
+                  <a href="javascript:jump_sync_folders()" title="查看硬链接同步的源目录与目标目录">
                     {{ SVG.refresh() }}
                     同步
                   </a>
-                  <a href="javascript:jump_media_folders()">
+                  <a href="javascript:jump_media_folders()" title="查看媒体库目录">
                     {{ SVG.player_play() }}
                     媒体
                   </a>
-                  <a href="javascript:jump_download_folders()">
+                  <a href="javascript:jump_download_folders()" title="查看下载器目录">
                     {{ SVG.download() }}
                     下载
                   </a>
@@ -162,7 +166,8 @@
   }
 
   //刷新文件列表
-  function refresh_files(folder) {
+  // done: 文件列表渲染完成后的回调
+  function refresh_files(folder, done) {
     // 刷新硬链接标记
     refresh_hardlink_mark(folder);
     
@@ -206,6 +211,9 @@
           // 有文件时移除无效标记
           $("#mediafile_hardlink_mark").removeClass("invalid-mark");
         }
+      }
+      if (done) {
+        done();
       }
     });
   }
@@ -300,8 +308,19 @@
     fresh_tooltip();
   }
 
+  // 刷新当前目录
+  // 保持当前所在目录与滚动位置，不重新加载整页
+  function refresh_mediafile() {
+    // 记住文件区滚动位置，刷新完成后还原
+    let scroll_top = $("#mediafile_file_container").scrollTop();
+    init_mediafile_tree(function (){
+      $("#mediafile_file_container").scrollTop(scroll_top);
+    });
+  }
+
   // 初始化文件树
-  function init_mediafile_tree() {
+  // restored: 文件区数据加载完成后的回调
+  function init_mediafile_tree(restored) {
     let ft = $('#mediafile_tree'); 
     // 销毁之前的实例 
     ft.removeData("fileTree");
@@ -317,10 +336,13 @@
       }
     ).on("filetreeinitiated filetreeexpanded filetreecollapsed", function(e, data){
       // 初始化结束、展开折叠结束时刷新文件区
+      // 还原回调只在本次初始化触发的首个刷新中生效，避免展开子目录时重复还原
+      let done = restored;
+      restored = null;
       if (data.rel){
-        refresh_files(data.rel);
+        refresh_files(data.rel, done);
       }else{
-        refresh_files($("#mediafile_path").val());
+        refresh_files($("#mediafile_path").val(), done);
       }
     }).on("filetreeinitiated filetreeexpanded", function(e, data) {
       // 初始化结束和展开结束时获得目录(jQueryFileTree原代码处理filetreeinitiated事件处理有误，须删除showTree中的根目录判断才能正确触发)
