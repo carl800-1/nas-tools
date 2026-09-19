@@ -1925,9 +1925,9 @@ def message_handler(ws):
             ws.send((json.dumps({})))
         else:
             # 拉取消息
-            system_msg = WebAction().get_system_message(lst_time=msgbody.get("lst_time"))
+            system_msg = WebAction().get_system_message(lst_seq=msgbody.get("lst_seq"))
             messages = system_msg.get("message")
-            lst_time = system_msg.get("lst_time")
+            lst_seq = system_msg.get("lst_seq")
             ret_messages = []
             for message in list(reversed(messages)):
                 content = re.sub(r"#+", "<br>",
@@ -1937,10 +1937,11 @@ def message_handler(ws):
                     "level": "bg-red" if message.get("level") == "ERROR" else "",
                     "title": message.get("title"),
                     "content": content,
-                    "time": message.get("time")
+                    "time": message.get("time"),
+                    "seq": message.get("seq", 0)
                 })
             ws.send((json.dumps({
-                "lst_time": lst_time,
+                "lst_seq": lst_seq,
                 "message": ret_messages
             })))
 

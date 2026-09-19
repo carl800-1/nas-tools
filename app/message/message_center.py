@@ -1,4 +1,3 @@
-import datetime
 import time
 from collections import deque
 
@@ -8,7 +7,11 @@ from app.utils.commons import singleton
 @singleton
 class MessageCenter:
     _message_queue = deque(maxlen=50)
-    _message_index = 0
+    # 单调递增序号，唯一标识一条消息。
+    # 不能改用时间戳做游标：同秒插入的多条消息共享同一时间戳，
+    # 前端回传「最新一条的时间」后，同时间的其余消息会被判定为已读而永久丢失
+    # （典型场景：一次转移 N 部剧，循环体内每条插一条消息）。
+    _seq = 0
 
     def __init__(self):
         pass
@@ -27,24 +30,33 @@ class MessageCenter:
         """
         将消息增加到队列
         """
-        self._message_queue.appendleft({"title": title,
-                                        "content": content,
-                                        "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))})
+        MessageCenter._seq += 1
+        self._message_queue.appendleft({
+            "title": title,
+            "content": content,
+            "seq": MessageCenter._seq,
+            "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+        })
 
-    def get_system_messages(self, num=20, lst_time=None):
+    def get_system_messages(self, num=20, lst_seq=None):
         """
         查询系统消息
-        :param num:条数
-        :param lst_time: 最后时间
+        :param num: 条数，仅 lst_seq 为空（首屏全量拉取）时生效
+        :param lst_seq: 客户端已收到的最大序号，只返回比它更新的消息
         """
-        if not lst_time:
+        # 游标可能来自前端 JSON（数字、字符串）或空值，统一归一化。
+        # 不能只靠 or 0 兜底：字符串 "0" 是 truthy，"0" > 0 会抛 TypeError
+        try:
+            lst_seq = int(lst_seq or 0)
+        except (TypeError, ValueError):
+            lst_seq = 0
+        if not lst_seq:
             return list(self._message_queue)[-num:]
-        else:
-            ret_messages = []
-            for message in list(self._message_queue):
-                if (datetime.datetime.strptime(message.get("time"), '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(
-                        lst_time, '%Y-%m-%d %H:%M:%S')).seconds > 0:
-                    ret_messages.append(message)
-                else:
-                    break
-            return ret_messages
+        ret_messages = []
+        # 队列按 seq 递减排列（最新在最前），遇到不比自己新的即可停止
+        for message in list(self._message_queue):
+            if message.get("seq", 0) > lst_seq:
+                ret_messages.append(message)
+            else:
+                break
+        return ret_messages

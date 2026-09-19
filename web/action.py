@@ -1784,14 +1784,22 @@ class WebAction:
         return {"code": 0, "page": page}
 
     @staticmethod
-    def get_system_message(lst_time):
-        messages = MessageCenter().get_system_messages(lst_time=lst_time)
-        if messages:
-            lst_time = messages[0].get("time")
+    def get_system_message(lst_seq):
+        """
+        拉取系统消息（增量）
+        :param lst_seq: 客户端已收到的最大序号，首次拉取传 0 或空
+        """
+        try:
+            lst_seq = int(lst_seq or 0)
+        except (TypeError, ValueError):
+            lst_seq = 0
+        messages = MessageCenter().get_system_messages(lst_seq=lst_seq)
+        # 游标推进到本批最新一条的序号；本条没有更新时保持原值
+        new_seq = messages[0].get("seq") if messages else lst_seq
         return {
             "code": 0,
             "message": messages,
-            "lst_time": lst_time
+            "lst_seq": new_seq
         }
 
     @staticmethod

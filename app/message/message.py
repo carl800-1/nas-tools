@@ -112,7 +112,7 @@ class Message(object):
         :return: 发送状态、错误信息
         """
         if not client or not client.get('client'):
-            return None
+            return False, "消息渠道未配置"
         cname = client.get('name')
         log.info(f"【Message】发送消息 {cname}：title={title}, text={text}")
         if self._domain:
@@ -134,7 +134,12 @@ class Message(object):
         else:
             texts = [text]
         # 循环发送
-        for txt in texts:
+        # 分段独立处理：某一段失败不再中断后续分段。
+        # 原先失败即 return，用户会收到残缺消息且毫不知情 ——
+        # 超长消息（微信 2048 / slack 3000 才分段）恰恰是最需要完整送达的。
+        fail_count = 0
+        last_error = ""
+        for idx, txt in enumerate(texts):
             if not title:
                 title = txt
                 txt = ""
@@ -145,9 +150,14 @@ class Message(object):
                                                            user_id=user_id)
             title = None
             if not state:
-                log.error(f"【Message】{cname} 消息发送失败：%s" % ret_msg)
-                return state
-        return True
+                fail_count += 1
+                last_error = ret_msg
+                log.error(f"【Message】{cname} 消息发送失败（第 {idx + 1}/{len(texts)} 段）：%s" % ret_msg)
+        if fail_count:
+            # 有失败段时如实返回失败，调用方可据此告警
+            log.error(f"【Message】{cname} 共 {len(texts)} 段，{fail_count} 段发送失败")
+            return False, last_error
+        return True, ""
 
     def send_channel_msg(self, channel, title, text="", image="", url="", user_id=""):
         """
@@ -167,12 +177,13 @@ class Message(object):
         # 发送消息
         client = self._active_interactive_clients.get(channel)
         if client:
-            state = self.__sendmsg(client=client,
-                                   title=title,
-                                   text=text,
-                                   image=image,
-                                   url=url,
-                                   user_id=user_id)
+            # __sendmsg 返回 (状态, 错误信息) 二元组
+            state, _ = self.__sendmsg(client=client,
+                                      title=title,
+                                      text=text,
+                                      image=image,
+                                      url=url,
+                                      user_id=user_id)
             return state
         return False
 
@@ -181,7 +192,7 @@ class Message(object):
         发送选择类消息
         """
         if not client or not client.get('client'):
-            return None
+            return False
         cname = client.get('name')
         log.info(f"【Message】发送消息 {cname}：title={title}")
         state, ret_msg = client.get('client').send_list_msg(medias=medias,

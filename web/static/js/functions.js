@@ -256,7 +256,7 @@ function connect_message() {
     render_message(JSON.parse(event.data))
   };
   MessageWS.onopen = function (event) {
-    get_message('');
+    get_message(0);
   };
   MessageWS.onerror = function (event) {
     MessageWS.close();
@@ -267,7 +267,9 @@ function connect_message() {
 
 // 刷新消息中心
 function render_message(ret) {
-  let lst_time = ret.lst_time;
+  // 增量游标用自增序号，不用时间：同秒的多条消息时间戳相同，
+  // 用时间做游标会导致同秒的其余消息永远拉不到
+  let lst_seq = ret.lst_seq;
   const msgs = ret.message;
   if (msgs) {
     for (let msg of msgs) {
@@ -298,19 +300,19 @@ function render_message(ret) {
     }
   }
   // 下一次处理
-  if (lst_time) {
-    setTimeout(`get_message('${lst_time}')`, 3000);
+  if (lst_seq) {
+    setTimeout(`get_message(${lst_seq})`, 3000);
   } else if (msgs) {
-    setTimeout(`get_message('')`, 3000);
+    setTimeout(`get_message(0)`, 3000);
   }
 }
 
 //发送拉取消息的请求
-function get_message(lst_time) {
+function get_message(lst_seq) {
   if (!MessageWS) {
     return;
   }
-  MessageWS.send(JSON.stringify({"lst_time": lst_time}));
+  MessageWS.send(JSON.stringify({"lst_seq": lst_seq || 0}));
 }
 
 //注销
