@@ -203,5 +203,5 @@ MovieTypes = ['MOV', '电影', MediaType.MOVIE]
 # 电视剧类型关键字
 TvTypes = ['TV', '电视剧', MediaType.TV]
 
-# 内置索引器文件md5值
-BuiltinIndexerFileMd5 = "e87e1a1579c9211af7f6a183e72486ed"
+# 内置索引器文件md5值（计算前换行符统一为 LF，详见 StringUtils.md5_hash_file_lf）
+BuiltinIndexerFileMd5 = "f69c98fa943764540181756230de7b4b"

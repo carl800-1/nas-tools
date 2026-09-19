@@ -505,11 +505,37 @@ class StringUtils:
         return md5_hash.hexdigest()
 
     @staticmethod
+    def md5_hash_file_lf(file_path):
+        """
+        MD5 HASH 指定文件，计算前把 CRLF 统一成 LF
+
+        同一份代码在不同平台上换行符可能不同（Windows 工作区常为 CRLF，
+        仓库与 Linux 镜像内为 LF），直接按字节做 MD5 会得到不同结果。
+        用于「校验内置文件是否被人为改动」这类场景时，应忽略换行符差异，
+        否则同一个文件在 Windows 上永远校验不过。
+
+        :param file_path: 文件路径
+        :return: 归一化换行后的 MD5，文件不存在时返回空串
+        """
+        if not os.path.exists(file_path):
+            return ""
+        try:
+            with open(file_path, "rb") as file:
+                content = file.read()
+        except Exception:
+            return ""
+        content = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        return hashlib.md5(content).hexdigest()
+
+    @staticmethod
     def verify_integrity(file_path, original_md5):
         """
         校验文件是否匹配指定的md5
+
+        计算时忽略换行符差异（CRLF/LF），避免同一份源码在 Windows 上
+        因换行符不同而被误判为「已被改动」。
         """
-        md5 = StringUtils.md5_hash_file(file_path)
+        md5 = StringUtils.md5_hash_file_lf(file_path)
         if not StringUtils.is_string_and_not_empty(md5) or \
         not StringUtils.is_string_and_not_empty(original_md5):
             return True
