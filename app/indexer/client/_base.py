@@ -207,6 +207,27 @@ class _IIndexClient(metaclass=ABCMeta):
             elif ratio > 0:
                 return -1
 
+    def __tmdb_info_year_match(self, tmdb_info, target_year):
+        """
+        判断一条 TMDB 候选条目的年份是否与目标年份一致
+
+        在线复核拿到的候选是按「名称」搜出来的，可能混入同名不同年的条目
+        （重启版、同一译名下的另一部片）。这类条目名字相似度照样能过阈值，
+        最终会撞在 tmdb_id 比对上被记成「ID 不符」，用户看到的是一大堆无从下手的失败。
+
+        这里只做一件事：把年份不一致的候选提前剔除掉。
+        电影看 release_date、剧集看 first_air_date，取不到年份的候选**放行**
+        （宁可交给后面的 id 比对，也不要因为 TMDB 缺字段而误杀）。
+
+        :param tmdb_info: TMDB 搜索结果中的一条
+        :param target_year: 目标媒体的年份
+        :return: 是否通过年份预筛
+        """
+        info_year = tmdb_info.get("release_date") or tmdb_info.get("first_air_date")
+        if not info_year:
+            return True
+        return _norm_year(info_year) == _norm_year(target_year)
+
     def season_match(self, meta_info, media_info):
         # 如果没有解析到，默认返回 True, season 0 表示特别篇
         log.debug(f"【{self.client_name}】解析到：begin: {meta_info.begin_season}, end: {meta_info.end_season}")
@@ -328,7 +349,11 @@ class _IIndexClient(metaclass=ABCMeta):
                                 if not cached_tmdb_infos:
                                     log.info(f"search tmdb for filter")
                                     en_title = self.media.get_tmdb_us_title(match_media.tmdb_info)
+                                    # 带上年份一起查：这里本来就是因为种子名解析不出年份才来做在线复核，
+                                    # 不带年份会让 TMDB 返回一堆同名无关条目（重启版、同译名另一部片），
+                                    # 它们名字相似度照样能过 0.95，最后全部撞在 tmdb_id 比对上被判「不符」。
                                     cached_tmdb_infos = self.media.get_tmdb_infos(title=en_title,
+                                                                                  year=match_media.year,
                                                                                   mtype=match_media.type,
                                                                                   page=1)
                                     if not cached_tmdb_infos:
@@ -343,6 +368,14 @@ class _IIndexClient(metaclass=ABCMeta):
                                         title = info.get('original_name')
                                     if not title:
                                         title = info.get('name')
+                                    # 候选年份预筛：目标媒体有年份时，只认同年候选。
+                                    # TMDB 的 year 查询并非严格过滤（无该年条目时会放宽返回），
+                                    # 所以这里再卡一道，避免把同名不同年的条目放进 id 比对环节。
+                                    if match_media.year and not self.__tmdb_info_year_match(info, match_media.year):
+                                        log.debug(
+                                            f"【{self.client_name}】{torrent_name} 候选 {title} "
+                                            f"年份与 {match_media.year} 不符，跳过")
+                                        continue
                                     # release_date 2016-01-01
                                     # release_year = info.get('release_date').split('-')[0]
                                     # tmdb_id = info.get('id')
@@ -617,7 +650,9 @@ class _IIndexClient(metaclass=ABCMeta):
                         if not cached_tmdb_infos:
                             log.info(f"search tmdb for filter")
                             en_title = self.media.get_tmdb_us_title(match_media.tmdb_info)
+                            # 同年份一起查，理由见 filter_search_results_local_for_tv 中同名注释
                             cached_tmdb_infos = self.media.get_tmdb_infos(title=en_title,
+                                                                          year=match_media.year,
                                                                           mtype=match_media.type,
                                                                           page=1)
                             if not cached_tmdb_infos:
@@ -628,6 +663,12 @@ class _IIndexClient(metaclass=ABCMeta):
                         max_ratio = 0.0
                         for info in cached_tmdb_infos:
                             title = info.get('title')
+                            # 候选年份预筛，理由见 filter_search_results_local_for_tv 中同名注释
+                            if match_media.year and not self.__tmdb_info_year_match(info, match_media.year):
+                                log.debug(
+                                    f"【{self.client_name}】{torrent_name} 候选 {title} "
+                                    f"年份与 {match_media.year} 不符，跳过")
+                                continue
                             # release_date 2016-01-01
                             # release_year = info.get('release_date').split('-')[0]
                             # tmdb_id = info.get('id')
