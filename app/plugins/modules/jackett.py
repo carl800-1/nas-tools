@@ -1,6 +1,7 @@
 import requests
 from datetime import datetime, timedelta
 from threading import Event
+from urllib.parse import quote
 import xml.dom.minidom
 from jinja2 import Template
 
@@ -298,7 +299,10 @@ class Jackett(_IPluginModule):
             return None
         self.info(f"【{self.module_name}】开始检索Indexer：{indexer.name} ...")
         # 特殊符号处理
-        api_url = f"{indexer.domain}?apikey={self._api_key}&t=search&q={keyword}"
+        # 关键字做一次显式编码：老代码直接拼进 URL，
+        # 关键字里若含 & / # / = 会把查询串截断，导致搜出无关结果或直接失败。
+        api_url = f"{indexer.domain}?apikey={self._api_key}&t=search&q={quote(str(keyword))}" \
+                  f"&offset={int(page or 0) * 100}"
 
         result_array = self.__parse_torznabxml(api_url)
 
@@ -308,6 +312,38 @@ class Jackett(_IPluginModule):
         else:
             self.warn(f"【{self.module_name}】{indexer.name} 返回数据：{len(result_array)}")
             return result_array
+
+    def search_by_imdb(self, indexer,
+                       imdb_id,
+                       page=0):
+        """
+        按 IMDb ID 检索（Torznab 的 t=movie&imdbid=）
+
+        为什么需要它：中文片名在 PT 站的命中率往往很低（译名差异、站点只留原名），
+        而 IMDb 编号是全球唯一的、不受中英文与译名影响，这一轮能把这类情况兜回来。
+
+        注意：只有部分站点支持按 ID 检索，不支持的站点 Torznab 会返回空结果，
+        这属于预期情况 —— 本方法返回空列表，由调用方静默跳过，不影响关键词检索。
+
+        :param indexer: 站点配置
+        :param imdb_id: 形如 tt0111161
+        :param page: 页码
+        :return: 种子信息列表，不支持或失败时为空列表
+        """
+        if not indexer or not imdb_id:
+            return []
+        self.info(f"【{self.module_name}】开始按 IMDb ID 检索：{indexer.name} / {imdb_id} ...")
+        api_url = f"{indexer.domain}?apikey={self._api_key}&t=movie" \
+                  f"&imdbid={quote(str(imdb_id))}&offset={int(page or 0) * 100}"
+
+        result_array = self.__parse_torznabxml(api_url)
+
+        if len(result_array) == 0:
+            self.info(f"【{self.module_name}】{indexer.name} 按 IMDb ID 未检索到数据"
+                      f"（该站可能不支持按 ID 检索）")
+            return []
+        self.warn(f"【{self.module_name}】{indexer.name} 按 IMDb ID 返回数据：{len(result_array)}")
+        return result_array
 
     @staticmethod
     def __parse_torznabxml(url):

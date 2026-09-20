@@ -8,7 +8,8 @@ from app.helper.openai_helper import OpenAiHelper
 from app.indexer import Indexer
 from app.media import Media, DouBan
 from app.message import Message
-from app.searcher import Searcher
+from app.searcher import (Searcher, build_search_candidates, is_cn_name_first,
+                          search_medias_by_candidates)
 from app.sites import Sites
 from app.subscribe import Subscribe
 from app.utils import StringUtils, Torrent
@@ -89,18 +90,11 @@ def search_medias_for_web(content, ident_flag=True, filters=None, tmdbid=None, m
                     en_title = _media.get_tmdb_en_title(media_info)
                     if en_title:
                         search_en_name = en_title
-            # 两次搜索名称
-            second_search_name = None
-            if Config().get_config("laboratory").get("search_en_title"):
-                if search_en_name:
-                    first_search_name = search_en_name
-                    second_search_name = search_cn_name
-                else:
-                    first_search_name = search_cn_name
-            else:
-                first_search_name = search_cn_name
-                if search_en_name:
-                    second_search_name = search_en_name
+            # 搜索名称候选名单（中文/英文/原名/TMDB别名，按配置的数量上限截断）
+            search_candidates = build_search_candidates(media_info,
+                                                        cn_first=is_cn_name_first(),
+                                                        cn_name=search_cn_name,
+                                                        en_name=search_en_name)
 
             filter_args = {"season": search_season,
                            "episode": search_episode,
@@ -111,8 +105,7 @@ def search_medias_for_web(content, ident_flag=True, filters=None, tmdbid=None, m
             log.info(f"【Web】{content} 未从TMDB匹配到媒体信息，将使用快速搜索...")
             ident_flag = False
             media_info = None
-            first_search_name = key_word
-            second_search_name = None
+            search_candidates = [key_word]
             filter_args = {
                 "season": season_num,
                 "episode": episode_num,
@@ -120,8 +113,7 @@ def search_medias_for_web(content, ident_flag=True, filters=None, tmdbid=None, m
             }
     # 快速搜索
     else:
-        first_search_name = key_word
-        second_search_name = None
+        search_candidates = [key_word]
         filter_args = {
             "season": season_num,
             "episode": episode_num,
@@ -130,26 +122,46 @@ def search_medias_for_web(content, ident_flag=True, filters=None, tmdbid=None, m
     # 整合高级查询条件
     if filters:
         filter_args.update(filters)
-    # 开始搜索
-    log.info("【Web】开始搜索 %s ..." % content)
-    media_list = _searcher.search_medias(key_word=first_search_name,
-                                         filter_args=filter_args,
-                                         match_media=media_info,
-                                         in_from=SearchType.WEB)
-    # 使用第二名称重新搜索
-    if ident_flag \
-            and len(media_list) == 0 \
-            and second_search_name \
-            and second_search_name != first_search_name:
+
+    def _on_search_round(index, name, current_count, total_count):
+        """
+        每一轮真正发起前的钩子：重置进度计数并提示「正在换名补搜」
+
+        第一轮不用提示（进度条由外层的 _process.start 负责），
+        目的是让用户看到「为什么又搜了一次」，而不是以为卡住了。
+        """
+        if index == 0:
+            return
         _process.start(ProgressKey.Search)
-        _process.update(ptype=ProgressKey.Search,
-                        text="%s 未搜索到资源,尝试通过 %s 重新搜索 ..." % (
-                            first_search_name, second_search_name))
-        log.info("【Searcher】%s 未搜索到资源,尝试通过 %s 重新搜索 ..." % (first_search_name, second_search_name))
-        media_list = _searcher.search_medias(key_word=second_search_name,
+        if current_count:
+            _round_hint = "%s 累计搜索到 %s 个有效资源,尝试通过 %s 补充搜索 ..." % (
+                search_candidates[0], current_count, name)
+        else:
+            _round_hint = "%s 未搜索到资源,尝试通过 %s 重新搜索 ..." % (
+                search_candidates[0], name)
+        _process.update(ptype=ProgressKey.Search, text=_round_hint)
+        log.info("【Searcher】%s" % _round_hint)
+
+    # 开始搜索
+    #
+    # 老逻辑的触发条件是「第一轮一条有效结果都没有」（len(media_list) == 0），
+    # 意味着第一轮只要认出 1 条，第二个名称就永远不会被尝试。
+    # 而第二个名称通常是英文名/原名，它在外文站与中英混排站点的命中率
+    # 明显高于中文名 —— 结果就是「站点上明明有一堆资源，却只拿到零星几条」。
+    # 现在改为「候选名单轮询 + 阈值停」，每轮结果合并去重（只放宽、不收窄）：
+    #   search_en_min_result = 1 -> 与老代码完全一致（等价回退开关）
+    #   默认 5                    -> 累计不足 5 条时继续换名补搜
+    #   设成很大的数              -> 一直把所有候选名用完
+    #   search_candidate_max      -> 候选名数量上限（默认 2，请求量不放大）
+    log.info("【Web】开始搜索 %s ..." % content)
+    media_list = search_medias_by_candidates(searcher=_searcher,
+                                             media_info=media_info,
                                              filter_args=filter_args,
-                                             match_media=media_info,
-                                             in_from=SearchType.WEB)
+                                             in_from=SearchType.WEB,
+                                             candidates=search_candidates,
+                                             fallback_name=key_word,
+                                             log_prefix="【Searcher】",
+                                             on_round=_on_search_round)
     # 清空缓存结果
     _searcher.delete_all_search_torrents()
     # 结束进度

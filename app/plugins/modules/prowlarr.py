@@ -255,15 +255,120 @@ class Prowlarr(_IPluginModule):
             if not ret or ret_indexers == [] or ret is None:
                 return []
 
+            # /api/v1/indexerstats 不返回站点的公开/私有属性。
+            # 老代码在这里硬编码 public=True，后果是私有站被当成公开站，
+            # 而 _base.py 里「做种数为0则过滤」这条规则只对非公开站生效，
+            # 于是 Prowlarr 接入的私有站会漏过 0 做种的死种。
+            # 这里额外取一次站点定义拿 privacy，取不到时保守按「非公开」处理。
+            privacy_map = self.__get_privacy_map()
+
             indexers = [IndexerConf({"id": f'{v["indexerName"]}-prowlarr',
                                  "name": f'{v["indexerName"]}(Prowlarr)',
                                  "domain": f'{self._host}/api/v1/indexer/{v["indexerId"]}',
-                                 "public": True,
+                                 "public": privacy_map.get(v["indexerName"], False),
                                  "builtin": False,
                                  "proxy": True,
                                  "parser": self.module_name})
                     for v in ret_indexers]
             return indexers
+        except Exception as e2:
+            ExceptionUtils.exception_traceback(e2)
+            return []
+
+    def __get_privacy_map(self):
+        """
+        取「索引器名 -> 是否公开」的映射
+
+        indexerstats 接口不含公开属性，需另查 /api/v1/indexer 定义接口。
+        查询失败或字段缺失时返回空字典，调用方会保守地按「非公开」处理
+        （即启用做种数为0过滤，与内置私有站点行为一致）。
+
+        :return: {索引器名: bool}
+        """
+        try:
+            ret = RequestUtils(headers={
+                "User-Agent": Config().get_ua(),
+                "X-Api-Key": self._api_key,
+                "Accept": "application/json, text/javascript, */*; q=0.01"
+            }).get_res(f"{self._host}/api/v1/indexer")
+            if not ret or not RequestUtils.check_response_is_valid_json(ret):
+                return {}
+            return {v.get("name"): v.get("privacy") == "public"
+                    for v in ret.json() if v.get("name")}
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return {}
+
+    def __indexer_headers(self):
+        """
+        构造 Prowlarr API 请求头
+        """
+        return {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "User-Agent": Config().get_ua(),
+            "X-Api-Key": self._api_key,
+            "Accept": "application/json, text/javascript, */*; q=0.01"
+        }
+
+    def __extract_indexer_id(self, indexer):
+        """
+        从站点 domain（形如 http://host:9696/api/v1/indexer/12）里取出 indexerId
+
+        :return: id 字符串，取不到返回空串
+        """
+        match = re.search(r"/indexer/([^/]+)", indexer.domain or "")
+        return match.group(1) if match else ""
+
+    def __parse_releases(self, entries):
+        """
+        把 Prowlarr 搜索响应条目转成统一的种子字典
+
+        Prowlarr 的搜索响应本来就带促销系数与 IMDb ID，
+        老代码把这几项一律写成 None，导致 Prowlarr 站点上
+        「免费/促销」过滤失效（downloadvolumefactor 为 None 时按 1.0 处理），
+        以及 IMDb 维度匹配完全用不上。这里按实际字段回填。
+
+        :param entries: /api/v1/search 返回的 JSON 数组
+        :return: 种子字典列表
+        """
+        torrents = []
+        for entry in (entries or []):
+            download_volume_factor = entry.get("downloadVolumeFactor")
+            upload_volume_factor = entry.get("uploadVolumeFactor")
+            torrents.append({
+                'indexer_id': entry.get("indexerId"),
+                'indexer': entry.get("indexer"),
+                'title': entry.get("title"),
+                'enclosure': entry.get("downloadUrl"),
+                'description': entry.get("sortTitle"),
+                'size': entry.get("size"),
+                'seeders': entry.get("seeders"),
+                # Prowlarr 没有 torznab 的 peers 字段，用 leechers 近似
+                'peers': entry.get("leechers"),
+                'freeleech': (download_volume_factor == 0)
+                             if download_volume_factor is not None else None,
+                'downloadvolumefactor': download_volume_factor,
+                'uploadvolumefactor': upload_volume_factor,
+                'page_url': entry.get("guid"),
+                'imdbid': self.__normalize_imdb_id(entry.get("imdbId"))
+            })
+        return torrents
+
+    def __search_api(self, api_url):
+        """
+        调 Prowlarr 搜索接口并解析
+
+        :param api_url: 完整的搜索 URL
+        :return: 种子字典列表；请求失败或返回非 JSON 时为空列表
+        """
+        try:
+            ret = RequestUtils(headers=self.__indexer_headers()).get_res(api_url)
+            if not ret:
+                return []
+            if not RequestUtils.check_response_is_valid_json(ret):
+                self.info(f"【{self.module_name}】参数设置不正确，请检查所有的参数是否填写正确")
+                return []
+            return self.__parse_releases(ret.json())
         except Exception as e2:
             ExceptionUtils.exception_traceback(e2)
             return []
@@ -278,55 +383,65 @@ class Prowlarr(_IPluginModule):
             return None
         self.info(f"【{self.module_name}】开始检索Indexer：{indexer.name} ...")
 
-        # 获取indexerId
-        indexerId_pattern = r"/indexer/([^/]+)"
-        indexerId_match = re.search(indexerId_pattern, indexer.domain)
-        indexerId = ""
-        if indexerId_match:
-            indexerId = indexerId_match.group(1)
-
+        indexerId = self.__extract_indexer_id(indexer)
         if not StringUtils.is_string_and_not_empty(indexerId):
             self.info(f"【{self.module_name}】{indexer.name} 索引id为空")
             return []
 
-        try:
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "User-Agent": Config().get_ua(),
-                "X-Api-Key": self._api_key,
-                "Accept": "application/json, text/javascript, */*; q=0.01"
-            }
-            api_url = f"{self._host}/api/v1/search?query={keyword}&indexerIds={indexerId}&type=search&limit=100&offset=0"
-            ret = RequestUtils(headers=headers).get_res(api_url)
-            if not ret:
-                return []
-            if not RequestUtils.check_response_is_valid_json(ret):
-                self.info(f"【{self.module_name}】参数设置不正确，请检查所有的参数是否填写正确")
-                return []
-            if not ret.json():
-                return []
+        api_url = f"{self._host}/api/v1/search?query={keyword}&indexerIds={indexerId}" \
+                  f"&type=search&limit=100&offset={int(page or 0) * 100}"
+        return self.__search_api(api_url)
 
-            ret_indexers = ret.json()
-            if not ret or ret_indexers == [] or ret is None:
-                return []
+    def search_by_imdb(self, indexer,
+                       imdb_id,
+                       page=0):
+        """
+        按 IMDb ID 检索（Prowlarr 的 type=movie）
 
-            torrents = []
-            for entry in ret_indexers:
-                tmp_dict = {'indexer_id': entry["indexerId"],
-                            'indexer': entry["indexer"],
-                            'title': entry["title"],
-                            'enclosure': entry["downloadUrl"],
-                            'description': entry["sortTitle"],
-                            'size': entry["size"],
-                            'seeders': entry["seeders"],
-                            'peers': None,
-                            'freeleech': None,
-                            'downloadvolumefactor': None,
-                            'uploadvolumefactor': None,
-                            'page_url': entry["guid"],
-                            'imdbid': None}
-                torrents.append(tmp_dict)
-            return torrents
-        except Exception as e2:
-            ExceptionUtils.exception_traceback(e2)
+        为什么需要它：中文片名在 PT 站的命中率往往很低（译名差异、站点只留原名），
+        而 IMDb 编号是全球唯一的、不受中英文与译名影响，这一轮能把这类情况兜回来。
+
+        注意：并非所有 indexer 都支持按 ID 检索，不支持时 Prowlarr 返回空，
+        这属于预期情况 —— 本方法返回空列表，由调用方静默跳过，不影响关键词检索。
+
+        :param indexer: 站点配置
+        :param imdb_id: 形如 tt0111161
+        :param page: 页码
+        :return: 种子字典列表，不支持或失败时为空列表
+        """
+        if not indexer or not imdb_id:
             return []
+        indexerId = self.__extract_indexer_id(indexer)
+        if not StringUtils.is_string_and_not_empty(indexerId):
+            return []
+        self.info(f"【{self.module_name}】开始按 IMDb ID 检索：{indexer.name} / {imdb_id} ...")
+        api_url = f"{self._host}/api/v1/search?query={imdb_id}&indexerIds={indexerId}" \
+                  f"&type=movie&limit=100&offset={int(page or 0) * 100}"
+        torrents = self.__search_api(api_url)
+        if not torrents:
+            self.info(f"【{self.module_name}】{indexer.name} 按 IMDb ID 未检索到数据"
+                      f"（该 indexer 可能不支持按 ID 检索）")
+        else:
+            self.warn(f"【{self.module_name}】{indexer.name} 按 IMDb ID 返回数据：{len(torrents)}")
+        return torrents
+
+    @staticmethod
+    def __normalize_imdb_id(imdb_id):
+        """
+        把 Prowlarr 返回的 IMDb ID 归一成 tt 前缀格式
+
+        Prowlarr 不同版本有的返回 "tt0111161"，有的返回纯数字 111161，
+        而 _base.py 的 IMDb 匹配是字符串相等比较（str(imdbid) == str(match_media.imdb_id)，
+        后者形如 tt0111161），不归一化则永远匹配不上。
+
+        :param imdb_id: 原始值，可能为 None / 数字 / 字符串
+        :return: 形如 tt0111161 的字符串；无法识别时原样返回字符串形式；空值返回 None
+        """
+        if imdb_id is None or imdb_id == "":
+            return None
+        text = str(imdb_id).strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return "tt" + text.zfill(7)
+        return text

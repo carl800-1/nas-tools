@@ -377,6 +377,7 @@
               <th>连通性</th>
               <th>耗时</th>
               <th>错误信息</th>
+              <th>体检</th>
             </tr>
           </thead>
           <tbody>
@@ -388,6 +389,12 @@
               <td id="sitetest_item{{ Site.id }}"></td>
               <td id="sitetest_item{{ Site.id }}_time"></td>
               <td id="sitetest_item{{ Site.id }}_msg"></td>
+              <td class="w-1">
+                {# 站点名可能含引号，不能拼进内联 JS 字符串里，用 data 属性传参 #}
+                <a href="javascript:void(0)" class="btn btn-sm btn-outline-primary"
+                   data-siteid="{{ Site.id }}" data-sitename="{{ Site.name | e }}"
+                   onclick="show_site_health(this)">体检</a>
+              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -396,6 +403,40 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
         <button id="sitetest_btn" class="btn btn-primary">测试</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal modal-blur fade" id="modal-sitehealth" tabindex="-1" role="dialog" aria-hidden="true"
+  data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">站点体检 — <span id="sitehealth_sitename"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row align-items-end mb-3">
+          <div class="col-md-8">
+            <label class="form-label">探针搜索关键词
+              <span class="form-help"
+                    title="体检会用这个关键词真实搜一次该站点。请填一个该站几乎必然有结果的词（默认 1080p）。若仍搜不到某个片名，可直接填那个片名，看它到底死在哪一层。"
+                    data-bs-toggle="tooltip">?</span>
+            </label>
+            <input type="text" class="form-control" id="sitehealth_keyword" value="1080p" autocomplete="off">
+          </div>
+          <div class="col-md-4">
+            <button id="sitehealth_run_btn" class="btn btn-primary w-100"
+                    onclick="run_site_health()">开始体检</button>
+          </div>
+        </div>
+        <div id="sitehealth_result">
+          <div class="text-muted">选择站点后点击「开始体检」，将依次检查配置完整性、网络可达、
+            HTTP 语义、反爬、登录态、搜索页可达与选择器命中率。</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">关闭</button>
       </div>
     </div>
   </div>
@@ -748,6 +789,119 @@
         $(`#sitetest_item${siteid}_msg`).html(`<span class="text-muted">${ret.msg}</span>`);
       }
       callBack(true);
+    });
+  }
+
+  // ===================== 站点体检（L0-L6） =====================
+
+  let SITEHEALTH_SITEID = null;
+
+  // 打开体检弹窗（参数从 data 属性取，避免站点名里的引号破坏内联 JS）
+  function show_site_health(el) {
+    let siteid = el ? parseInt(el.dataset.siteid, 10) : NaN;
+    let sitename = el ? el.dataset.sitename : "";
+    if (!siteid) {
+      return;
+    }
+    SITEHEALTH_SITEID = siteid;
+    $("#sitehealth_sitename").text(sitename || ("站点" + siteid));
+    $("#sitehealth_result").html('<div class="text-muted">点击「开始体检」，将依次检查配置完整性、网络可达、' +
+      'HTTP 语义、反爬、登录态、搜索页可达与选择器命中率。</div>');
+    $("#modal-sitetest").modal("hide");
+    $("#modal-sitehealth").modal("show");
+  }
+
+  // 分层状态 -> badge 样式
+  function sitehealth_badge(status, text) {
+    let cls = "bg-secondary";
+    if (status === "pass") {
+      cls = "bg-green";
+    } else if (status === "warn") {
+      cls = "bg-yellow";
+    } else if (status === "fail") {
+      cls = "bg-red";
+    }
+    return '<span class="badge ' + cls + '">' + (text || status) + '</span>';
+  }
+
+  function sitehealth_escape(text) {
+    return String(text === null || text === undefined ? "" : text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // 渲染体检报告
+  function render_site_health(report) {
+    if (!report || !report.levels) {
+      $("#sitehealth_result").html('<div class="text-danger">体检没有返回有效结果。</div>');
+      return;
+    }
+    let html = "";
+    // 结论
+    let head_cls = report.worst === "pass" ? "alert-success"
+      : (report.worst === "warn" ? "alert-warning" : "alert-danger");
+    html += '<div class="alert ' + head_cls + '">';
+    html += '<div><strong>' + sitehealth_escape(report.conclusion) + '</strong></div>';
+    if (report.suggestion) {
+      html += '<div class="mt-1">下一步：' + sitehealth_escape(report.suggestion) + '</div>';
+    }
+    html += '<div class="text-muted mt-1" style="font-size:0.85rem;">' +
+      '探针关键词：' + sitehealth_escape(report.probe_keyword) +
+      ' ｜ 总耗时：' + report.elapsed + ' 毫秒</div>';
+    html += '</div>';
+
+    // 分层明细
+    html += '<div class="table-responsive"><table class="table table-vcenter card-table table-striped">';
+    html += '<thead><tr><th style="width:150px;">层级</th><th style="width:80px;">结果</th>' +
+      '<th>说明</th></tr></thead><tbody>';
+    (report.levels || []).forEach(function (lv) {
+      html += '<tr>';
+      html += '<td><strong>' + sitehealth_escape(lv.code) + '</strong> ' + sitehealth_escape(lv.name) + '</td>';
+      html += '<td>' + sitehealth_badge(lv.status, lv.status_text) + '</td>';
+      html += '<td>' + sitehealth_escape(lv.summary);
+      if (lv.detail) {
+        html += '<div class="text-muted mt-1">' + sitehealth_escape(lv.detail) + '</div>';
+      }
+      if (lv.items && lv.items.length) {
+        html += '<div class="mt-1" style="font-size:0.85rem;">';
+        lv.items.forEach(function (it) {
+          let icon = "";
+          if (it.ok === true) {
+            icon = '<span class="text-green">✓</span> ';
+          } else if (it.ok === false) {
+            icon = '<span class="text-red">✗</span> ';
+          }
+          html += '<span class="me-3">' + icon + sitehealth_escape(it.key) + '：' +
+            sitehealth_escape(it.value) + '</span>';
+        });
+        html += '</div>';
+      }
+      if (lv.suggestion && lv.status !== "pass" && lv.status !== "skip") {
+        html += '<div class="text-muted mt-1"><strong>建议：</strong>' + sitehealth_escape(lv.suggestion) + '</div>';
+      }
+      html += '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    $("#sitehealth_result").html(html);
+  }
+
+  // 执行体检
+  function run_site_health() {
+    if (!SITEHEALTH_SITEID) {
+      return;
+    }
+    let keyword = $.trim($("#sitehealth_keyword").val()) || "1080p";
+    let btn = $("#sitehealth_run_btn");
+    btn.text("体检中...").attr("disabled", true);
+    $("#sitehealth_result").html('<div class="text-muted">正在体检，探针搜索会真实访问该站点，' +
+      '可能需要十几秒，请稍候...</div>');
+    ajax_post("site_health", { id: SITEHEALTH_SITEID, keyword: keyword }, function (ret) {
+      btn.text("重新体检").attr("disabled", false);
+      if (ret && ret.code === 0 && ret.detail) {
+        render_site_health(ret.detail);
+      } else {
+        $("#sitehealth_result").html('<div class="text-danger">体检失败：' +
+          sitehealth_escape((ret && (ret.msg || ret.message)) || "未知错误") + '</div>');
+      }
     });
   }
 

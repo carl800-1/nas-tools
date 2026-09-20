@@ -204,4 +204,4 @@ MovieTypes = ['MOV', '电影', MediaType.MOVIE]
 TvTypes = ['TV', '电视剧', MediaType.TV]
 
 # 内置索引器文件md5值（计算前换行符统一为 LF，详见 StringUtils.md5_hash_file_lf）
-BuiltinIndexerFileMd5 = "f69c98fa943764540181756230de7b4b"
+BuiltinIndexerFileMd5 = "3dc2f31259442247aca11e8c24fc6654"

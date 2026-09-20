@@ -338,6 +338,20 @@ class SiteTest(ClientResource):
         return WebAction().api_action(cmd='test_site', data=self.parser.parse_args())
 
 
+@site.route('/health')
+class SiteHealthCheck(ClientResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('id', type=int, help='站点ID', location='form', required=True)
+    parser.add_argument('keyword', type=str, help='探针搜索关键词', location='form')
+
+    @site.doc(parser=parser)
+    def post(self):
+        """
+        站点体检（L0–L6 分层诊断）
+        """
+        return WebAction().api_action(cmd='site_health', data=self.parser.parse_args())
+
+
 @site.route('/delete')
 class SiteDelete(ClientResource):
     parser = reqparse.RequestParser()

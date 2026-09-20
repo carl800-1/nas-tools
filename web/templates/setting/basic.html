@@ -935,10 +935,28 @@
                     <input class="form-check-input" type="checkbox" id="laboratory.search_en_title" {% if
                       Config.laboratory and Config.laboratory.search_en_title %}checked{% endif %}>
                     <span class="form-check-label">搜索优先使用英文名 <span class="form-help"
-                                                                            title="开启后对于精确搜索场景将会优先使用英文名搜索，否则优先使用中文名搜索"
+                                                                            title="只决定先搜中文名还是先搜英文名，不再决定「搜不搜第二个名称」——那是右边「补搜阈值」的事"
                                                                             data-bs-toggle="tooltip">?</span>
                     </span>
                   </label>
+                </div>
+              </div>
+              <div class="col-12 col-xl-3">
+                <div class="mb-3">
+                  <label class="form-label">第二名称补搜阈值 <span class="form-help"
+                                                                title="累计有效结果少于该条数时，自动换下一个名称补搜并合并去重。1 = 只有一条都搜不到才补搜（老版本行为）；5 = 不足 5 条就补搜（推荐）；填一个很大的数 = 把所有候选名都搜一遍。只增加结果、不会减少"
+                                                                data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" class="form-control" id="laboratory.search_en_min_result"
+                         value="{{ Config.laboratory.search_en_min_result if Config.laboratory and Config.laboratory.search_en_min_result is not none else 5 }}">
+                </div>
+              </div>
+              <div class="col-12 col-xl-3">
+                <div class="mb-3">
+                  <label class="form-label">最多搜索几个名称 <span class="form-help"
+                                                              title="候选名顺序：首选名 → 次选名 → 原名 → TMDB别名。1 = 只搜首选名；2 = 首选名 + 次选名（默认，与老版本请求量相同）；3 = 再补一个 TMDB 别名。填得越大，对站点的请求量越多，越容易触发站点流控"
+                                                              data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" class="form-control" id="laboratory.search_candidate_max"
+                         value="{{ Config.laboratory.search_candidate_max if Config.laboratory and Config.laboratory.search_candidate_max is not none else 2 }}">
                 </div>
               </div>
               <div class="col-12 col-xl-3">

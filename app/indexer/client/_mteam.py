@@ -58,10 +58,13 @@ class MTeamSpider(object):
             "pageSize":100,
             "visible":1
         }
-        # if imdb_id:
-        #     params['search_imdb'] = imdb_id
-        # else:
-        #     params['search_string'] = keyword
+        # 关于「按 IMDb ID 检索」：上游在这里留了一段被注释掉的代码
+        # （params['search_imdb'] = imdb_id），但它引用的 params / search_imdb
+        # 与上面 param 的实际结构（keyword + mode）对不上，说明当时的接口契约与现在不同。
+        # 在拿到 MTeam 当前接口契约或实测结果之前不要贸然启用 ——
+        # 猜错请求格式会直接把一个本来能用的索引器搞坏。
+        # 按 ID 兜底的能力已在插件通道实现（Jackett / Prowlarr 的 search_by_imdb()），
+        # 需要时优先走插件通道。
         res = self._req.post_res(url=self._api_url, json=param)
         torrents = []
         if res and res.status_code == 200:

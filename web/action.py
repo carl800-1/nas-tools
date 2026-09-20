@@ -204,6 +204,7 @@ class WebAction:
             "get_filterrules": self.get_filterrules,
             "get_downloading": self.get_downloading,
             "test_site": self.__test_site,
+            "site_health": self.__site_health,
             "get_sub_path": self.__get_sub_path,
             "get_filehardlinks": self.__get_filehardlinks,
             "get_dirhardlink": self.__get_dirhardlink,
@@ -4149,6 +4150,29 @@ class WebAction:
         flag, msg, times = Sites().test_connection(data.get("id"))
         code = 0 if flag else -1
         return {"code": code, "msg": msg, "time": times}
+
+    @staticmethod
+    def __site_health(data):
+        """
+        站点体检（L0–L6 分层诊断）
+
+        与「站点连通性测试」的区别：连通性只回答「首页能不能打开、Cookie 在不在」，
+        体检会把「网络 / HTTP 语义 / 反爬 / 登录态 / 搜索页可达 / 选择器命中率」
+        逐层测一遍并给出可归因的结论 —— 用于回答「为什么按片名搜不到资源」。
+
+        :param data: {"id": 站点ID, "keyword": 可选探针关键词}
+        :return: {"code":0, "detail": 报告} 或 {"code":-1, "msg": 错误}
+        """
+        site_id = data.get("id")
+        if not site_id:
+            return {"code": -1, "msg": "缺少站点ID"}
+        try:
+            from app.sites.site_health import SiteHealth
+            report = SiteHealth().check(site_id=site_id, keyword=data.get("keyword"))
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+            return {"code": -1, "msg": "体检执行失败：%s" % err}
+        return {"code": 0, "detail": report}
 
     @staticmethod
     def __get_sub_path(data):

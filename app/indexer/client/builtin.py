@@ -56,6 +56,92 @@ def _describe_search_error(err):
     return "未知错误"
 
 
+# 抓取状态 -> 现场可读的提示
+#
+# 老代码把「抓取被拒」与「真的没有资源」都报成「未搜索到数据」，现场无法区分：
+#   HTTP 层被拒（403、Cloudflare 挑战页、200 但返回登录页）不会让 requests 抛异常，
+#   feapder 的 validate 默认也不校验状态码，parse() 照常执行但选不到任何种子；
+#   网络层失败（超时/连接被拒）时 parse() 根本不执行，is_error 一直是 False。
+# 现在按实际状态给出可归因的结论。注意 noResults 刻意沿用原文案，保持向后兼容。
+_SEARCH_STATE_TEXT = {
+    "noResults": "未搜索到数据",
+    "needLogin": "搜索失败（Cookie 失效，站点返回了登录页）",
+    "CFBlocked": "搜索失败（被 Cloudflare / 反爬拦截）",
+    "httpError": "搜索失败（站点返回异常状态码）",
+    "parseError": "搜索失败（页面解析失败，站点可能已改版）",
+    "timeout": "搜索失败（请求超时，站点不可达或代理未生效）",
+    "searchError": "搜索失败（请求或解析出错）",
+}
+
+
+def _fallback_search_state(error_flag, result_array):
+    """
+    给不产出细分状态的通道兜底
+
+    TNodeSpider / RenderSpider / TorrentLeech / MTeamSpider / 插件索引器（Jackett、Prowlarr）
+    这些通道只返回一个 error_flag 布尔，没有细分状态，这里统一折算口径，
+    保证上层取 _SEARCH_STATE_TEXT 时不会拿到 None。
+
+    :param error_flag: 该通道返回的错误标志
+    :param result_array: 该通道返回的种子列表
+    :return: (state, 状态说明)
+    """
+    if error_flag:
+        return "searchError", "该通道只返回错误标志，未能提供细分状态"
+    if not result_array:
+        return "noResults", "站点响应正常，但没有返回任何种子"
+    return None, ""
+
+
+def spider_search(spider, indexer, keyword=None, page=None, mtype=None, timeout=30):
+    """
+    用 feapder 爬虫抓取单个站点，并等待结果回来
+
+    抽成模块级函数是为了让站点体检（app/sites/site_health.py）能跑完全相同的
+    链路做探针搜索 —— 体检的意义就在于「看到的东西和真实搜索一致」。
+
+    :param spider: feapder 爬虫实例（TorrentSpider / HaiDanSpider 等）
+    :param indexer: 站点索引器配置
+    :param keyword: 关键字
+    :param page: 页码
+    :param mtype: 媒体类型
+    :param timeout: 等待超时的循环次数（每次 sleep 0.5 秒）
+    :return: 是否发生错误, 种子列表, 抓取状态, 状态说明
+    """
+    log.debug(f"spider search start {indexer.name}")
+
+    spider.setparam(indexer=indexer,
+                    keyword=keyword,
+                    page=page,
+                    mtype=mtype)
+    spider.start()
+
+    # 循环判断是否获取到数据
+    sleep_count = 0
+    while not spider.is_complete:
+        sleep_count += 1
+        time.sleep(0.5)
+        if sleep_count > timeout:
+            break
+    # 等超时仍未完成，说明请求根本没回来（超时 / 连接被拒 / 代理失败）。
+    # feapder 在这种情况下会走 exception_request → failed_request，不会调用 parse()，
+    # 于是 is_error 一直停在 False，老代码只能把它报成「未搜索到数据」。
+    # 这里补一个明确的 timeout 状态，让上层能把它与「真的没有资源」区分开。
+    if not spider.is_complete:
+        spider.mark_timeout()
+        log.warn(f"【Spider】{indexer.name} 等待超时（约 {int(timeout * 0.5)} 秒），"
+                 f"请求可能未返回：{spider.search_state_desc}")
+    # 是否发生错误
+    result_flag = spider.is_error
+    # 种子列表
+    result_array = spider.torrents_info_array.copy()
+    # 重置状态
+    spider.torrents_info_array.clear()
+
+    log.debug(f"spider search end  {indexer.name}")
+    return result_flag, result_array, spider.search_state, spider.search_state_desc
+
+
 class BuiltinIndexer(_IIndexClient):
     # 索引器ID
     client_id = "builtin"
@@ -166,8 +252,13 @@ class BuiltinIndexer(_IIndexClient):
                         _indexer_domains.append(indexer.domain)
                         ret_indexers.append(indexer)
         # 获取插件站点
-        if PluginsSpider().sites():
-            for indexer in PluginsSpider().sites():
+        # 注意：sites() 内部会遍历所有已安装插件并逐个调用其 get_indexers()，
+        # 每调用一次就会向 Jackett / Prowlarr 各发一轮 API 请求。
+        # 老代码在这里连续调用了两次 PluginsSpider().sites()（一次判空、一次遍历），
+        # 等于每次刷新索引器列表都要多发一倍请求，这里改为只取一次。
+        plugin_sites = PluginsSpider().sites()
+        if plugin_sites:
+            for indexer in plugin_sites:
                 if indexer:
                     if check and (not indexer_sites or indexer.id not in indexer_sites):
                         continue
@@ -220,6 +311,9 @@ class BuiltinIndexer(_IIndexClient):
             return []
         # 开始索引
         result_array = []
+        # 本次抓取的实际状态与说明（仅用于把失败原因说清楚，不参与任何匹配判定）
+        search_state = None
+        search_state_desc = ""
         try:
             if indexer.parser == "TNodeSpider":
                 error_flag, result_array = TNodeSpider(indexer).search(keyword=search_word)
@@ -232,25 +326,37 @@ class BuiltinIndexer(_IIndexClient):
             elif indexer.parser == "MTeamSpider":
                 error_flag, result_array = MTeamSpider(indexer=indexer).search(keyword=search_word)
             elif indexer.parser == "HaiDanSpider":
-                error_flag, result_array = self.__spider_search(
+                error_flag, result_array, search_state, search_state_desc = self.__spider_search(
                     spider=HaiDanSpider(),
                     keyword=search_word,
                     indexer=indexer,
                     mtype=match_media.type if match_media and match_media.tmdb_info else None)
             else:
                 if PluginsSpider().status(indexer=indexer):
-                    error_flag, result_array = PluginsSpider().search(keyword=search_word, indexer=indexer)
+                    # 顺带把 IMDb 编号传下去：插件会据此再补一轮「按 ID 检索」，
+                    # 用于兜住「中文片名在该站搜不到」的情况（IMDb 编号全球唯一，
+                    # 不受中英文与译名差异影响）。站点不支持时插件返回空，静默跳过。
+                    error_flag, result_array = PluginsSpider().search(
+                        keyword=search_word,
+                        indexer=indexer,
+                        imdb_id=match_media.imdb_id if match_media else None)
                 else:
-                    error_flag, result_array = self.__spider_search(
+                    error_flag, result_array, search_state, search_state_desc = self.__spider_search(
                         spider=TorrentSpider(),
                         keyword=search_word,
                         indexer=indexer,
                         mtype=match_media.type if match_media and match_media.tmdb_info else None)
+            # 非 feapder 通道（TNode / Render / TorrentLeech / MTeam / 插件索引器）
+            # 不产出细分状态，这里折算兜底，保证后面取状态文案时不会落空
+            if not search_state:
+                search_state, search_state_desc = _fallback_search_state(error_flag, result_array)
         except Exception as err:
             error_flag = True
+            search_state = "searchError"
             # 异常原因必须写进日志：老代码只 print 到控制台，容器日志里根本看不到，
             # 导致「站点连不上」「域名失效」「反爬拦截」与「真的没搜到」在现场无法区分
             error_desc = _describe_search_error(err)
+            search_state_desc = error_desc
             log.error(f"【{self.client_name}】{indexer.name} 搜索出错[{error_desc}]：{err}")
             self.progress.update(ptype=ProgressKey.Search,
                                  text=f"{indexer.name} 搜索失败：{error_desc}")
@@ -264,17 +370,19 @@ class BuiltinIndexer(_IIndexClient):
                                                 result='N' if error_flag else 'Y')
         # 返回结果
         if len(result_array) == 0:
-            # 区分「搜索失败」与「确实没有匹配资源」：
-            #   error_flag=True  -> 抓取阶段就出错了，站点可能不可达，不是没有资源
-            #   error_flag=False -> 站点正常响应，但返回 0 条，属于真的没搜到
+            # 区分「抓取被拒」与「确实没有资源」：
+            #   error_flag=True  -> 抓取阶段就出问题了，不能断言「没有资源」
+            #   error_flag=False -> 站点正常响应但 0 条，通常是真的没搜到
+            # 但只有 error_flag 这一个布尔时，403/CF 挑战页/登录页/超时 四种情况
+            # 全都塌成同一句「未搜索到数据」。这里按 search_state 给出可归因的结论。
+            _state_text = _SEARCH_STATE_TEXT.get(search_state) or "未搜索到数据"
             if error_flag:
-                log.warn(f"【{self.client_name}】{indexer.name} 搜索失败，无法确认是否有资源")
-                self.progress.update(ptype=ProgressKey.Search,
-                                     text=f"{indexer.name} 搜索失败（站点不可达或被拦截）")
+                log.warn(f"【{self.client_name}】{indexer.name} 抓取未成功[{search_state}]："
+                         f"{search_state_desc or _state_text}")
             else:
-                log.warn(f"【{self.client_name}】{indexer.name} 未搜索到数据")
-                # 更新进度
-                self.progress.update(ptype=ProgressKey.Search, text=f"{indexer.name} 未搜索到数据")
+                log.warn(f"【{self.client_name}】{indexer.name} 未搜索到数据[{search_state}]："
+                         f"{search_state_desc or _state_text}")
+            self.progress.update(ptype=ProgressKey.Search, text=f"{indexer.name} {_state_text}")
             return []
         else:
             log.warn(f"【{self.client_name}】{indexer.name} 返回数据：{len(result_array)}")
@@ -332,6 +440,10 @@ class BuiltinIndexer(_IIndexClient):
 
         # 计算耗时
         start_time = datetime.datetime.now()
+        # 抓取状态（仅用于把失败原因说清楚，不参与判定）；
+        # 只有 feapder 通道会产出，其余分支保持 None
+        _state = None
+        _state_desc = ""
 
         if indexer.parser == "RenderSpider":
             error_flag, result_array = RenderSpider(indexer).search(keyword=keyword,
@@ -345,7 +457,7 @@ class BuiltinIndexer(_IIndexClient):
         elif indexer.parser == "MTeamSpider":
             error_flag, result_array = MTeamSpider(indexer=indexer).inner_search(keyword=keyword, page=page)
         elif indexer.parser == "HaiDanSpider":
-            error_flag, result_array = self.__spider_search(spider=HaiDanSpider(),
+            error_flag, result_array, _state, _state_desc = self.__spider_search(spider=HaiDanSpider(),
                                                             indexer=indexer,
                                                             page=page,
                                                             keyword=keyword)
@@ -361,10 +473,13 @@ class BuiltinIndexer(_IIndexClient):
                                                                   page=page)
 
             else:
-                error_flag, result_array = self.__spider_search(spider=TorrentSpider(),
+                error_flag, result_array, _state, _state_desc = self.__spider_search(spider=TorrentSpider(),
                                                                 indexer=indexer,
                                                                 page=page,
                                                                 keyword=keyword)
+        if error_flag:
+            log.warn(f"【{self.client_name}】{indexer.name} 首页资源抓取未成功[{_state}]："
+                     f"{_state_desc or '未提供细分状态'}")
         # 索引花费的时间
         seconds = round((datetime.datetime.now() - start_time).seconds, 1)
 
@@ -379,41 +494,15 @@ class BuiltinIndexer(_IIndexClient):
     def __spider_search(spider, indexer, keyword=None, page=None, mtype=None, timeout=30):
         """
         根据关键字搜索单个站点
-        :param: indexer: 站点配置
-        :param: keyword: 关键字
-        :param: page: 页码
-        :param: mtype: 媒体类型
-        :param: timeout: 超时时间
-        :return: 是否发生错误, 种子列表
+
+        实现已提炼为模块级 spider_search()，这里只是保持方法调用点不变。
+        提炼原因：站点体检（app/sites/site_health.py）要跑同样的链路做探针搜索，
+        不能把等待/超时判定逻辑复制一份 —— 复制品一旦与这里走偏，
+        体检结论就会和真实搜索结论互相打脸。
         """
-        log.debug(f"spider search start {indexer.name}")
-
-        spider.setparam(indexer=indexer,
-                        keyword=keyword,
-                        page=page,
-                        mtype=mtype)
-        spider.start()
-
-        # spider = DefaultSpider()
-        # spider.setparam(indexer=indexer,
-        #                 keyword=keyword,
-        #                 page=page,
-        #                 mtype=mtype)
-        # spider.start_requests()
-
-        # 循环判断是否获取到数据
-        sleep_count = 0
-        while not spider.is_complete:
-            sleep_count += 1
-            time.sleep(0.5)
-            if sleep_count > timeout:
-                break
-        # 是否发生错误
-        result_flag = spider.is_error
-        # 种子列表
-        result_array = spider.torrents_info_array.copy()
-        # 重置状态
-        spider.torrents_info_array.clear()
-
-        log.debug(f"spider search end  {indexer.name}")
-        return result_flag, result_array
+        return spider_search(spider=spider,
+                             indexer=indexer,
+                             keyword=keyword,
+                             page=page,
+                             mtype=mtype,
+                             timeout=timeout)

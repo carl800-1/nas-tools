@@ -11,6 +11,75 @@ from app.utils.types import MediaType, SearchType, ProgressKey
 from config import Config
 import jellyfish
 
+
+# 「不匹配」的细分口径
+#   老代码里「不匹配」是 4~7 个出口共用的大口袋，现场只能看到一个总数，
+#   无法判断到底是名字太脏、TMDB 没条目、tmdbid 不一致，还是年份口径太严。
+#   这里把每个出口分别计数并拼成一行短描述，供进度文案与日志展示。
+#   ⚠ 只做统计与展示，不参与任何判定，不改动匹配结果。
+_MATCH_FAIL_LABELS = [
+    ("name", "名称脏"),
+    ("ratio", "相似度低"),
+    ("tmdb", "TMDB无条目"),
+    ("id", "ID不符"),
+    ("year", "年份不符"),
+    ("season", "季不符"),
+    ("sey", "季集年不符"),
+]
+
+# 子项 -> 可读的排查建议（用于「全部未通过」时的归因提示）
+_MATCH_FAIL_HINTS = {
+    "name": "种子名解析不出片名（发布组前缀/纯数字等），属正常损耗",
+    "ratio": "种子名与媒体名相似度过低，多为译名或命名习惯差异",
+    "tmdb": "种子名能解析但 TMDB 搜不到条目（检查 TMDB Key/网络，或该片无此译名）",
+    "id": "识别到了条目但 tmdb_id 与所选卡片不一致（可能选错卡片，或站点上是另一部同名片）",
+    "year": "年份不相等（卡片年份与资源年份不一致，年份为严格相等判断）",
+    "season": "季号不匹配",
+    "sey": "季/集/年份不匹配（is_torrent_match_sey 未通过，年份为严格相等判断）",
+}
+
+
+def _bump_match_fail(detail: dict, key: str):
+    """
+    给「不匹配」的某个子项计数
+
+    与 index_match_fail += 1 成对出现，保证 index_match_fail == 各子项之和。
+
+    :param detail: 子项计数字典
+    :param key: 子项键名，见 _MATCH_FAIL_LABELS
+    """
+    detail[key] = detail.get(key, 0) + 1
+
+
+def _format_match_fail_detail(detail: dict) -> str:
+    """
+    把「不匹配」子项计数拼成一行短描述，如「（名称脏2/ID不符3/年份不符1）」
+
+    全为 0 时返回空串，保证老格式（只有总数）不变。
+
+    :param detail: 子项计数字典
+    :return: 形如「（a1/b2）」的字符串，或空串
+    """
+    if not detail:
+        return ""
+    parts = ["%s%d" % (label, detail.get(key, 0))
+             for key, label in _MATCH_FAIL_LABELS if detail.get(key)]
+    return "（" + "/".join(parts) + "）" if parts else ""
+
+
+def _dominant_match_fail_hint(detail: dict) -> str:
+    """
+    取占多数的那个「不匹配」子项，给出对应排查建议
+
+    :param detail: 子项计数字典
+    :return: 归因提示字符串，无数据时返回通用提示
+    """
+    if detail:
+        key = max(detail, key=lambda k: detail.get(k, 0))
+        if detail.get(key):
+            return _MATCH_FAIL_HINTS.get(key, "结果与媒体信息不匹配")
+    return "结果与媒体信息不匹配（名称/年份/季集对不上，可能是译名差异）"
+
 class _IIndexClient(metaclass=ABCMeta):
     # 索引器ID
     client_id = ""
@@ -157,6 +226,8 @@ class _IIndexClient(metaclass=ABCMeta):
         index_match_fail = 0
         index_error = 0
         matched_torrent = []
+        # 「不匹配」的子项计数（只用于展示，sum 恒等于 index_match_fail）
+        match_fail_detail = {}
         cached_tmdb_infos = None
         cached_en_info = None
         cached_cn_info = None
@@ -197,6 +268,7 @@ class _IIndexClient(metaclass=ABCMeta):
                 if not meta_info.get_name():
                     log.info(f"【{self.client_name}】{torrent_name} 无法识别到名称")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "name")
                     continue
 
                 if self.season_match(meta_info, match_media):
@@ -211,6 +283,7 @@ class _IIndexClient(metaclass=ABCMeta):
                                 log.info(
                                     f"【{self.client_name}】{torrent_name} 与 {match_media.original_title} 相似度太低，忽略")
                                 index_match_fail += 1
+                                _bump_match_fail(match_fail_detail, "ratio")
                                 continue
                         # 未识别到年份，高通过，中低走在线
                         else:
@@ -276,9 +349,11 @@ class _IIndexClient(metaclass=ABCMeta):
                                         log.info(
                                             f"【{self.client_name}】{torrent_name} 与 {title} 名称匹配，但 tmdbid 为: ${tmdb_id}， 匹配失败")
                                         index_match_fail += 1
+                                        _bump_match_fail(match_fail_detail, "id")
 
                                 if not found_matched:
                                     index_match_fail += 1
+                                    _bump_match_fail(match_fail_detail, "tmdb")
                                     continue
                                 else:
                                     continue
@@ -286,11 +361,13 @@ class _IIndexClient(metaclass=ABCMeta):
                         log.info(
                             f"【{self.client_name}】{torrent_name} 与 {match_media.original_title} 年份不匹配，忽略")
                         index_match_fail += 1
+                        _bump_match_fail(match_fail_detail, "year")
                         continue
                 else:
                     log.info(
                         f"【{self.client_name}】{torrent_name} 与 {match_media.original_title} 季不匹配，忽略")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "season")
                     continue
 
                 # 大小及促销等
@@ -362,6 +439,7 @@ class _IIndexClient(metaclass=ABCMeta):
                         f"【{self.client_name}】{torrent_name} 识别为 {media_info.type.value}/"
                         f"{media_info.get_title_string()}/{media_info.get_season_episode_string()} 不匹配季/集/年份")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "sey")
                     continue
 
                 # 匹配到了
@@ -394,7 +472,7 @@ class _IIndexClient(metaclass=ABCMeta):
         log.info(
             f"Local:【{self.client_name}】{indexer.name} {len(result_array)} 条数据中，"
             f"过滤 {index_rule_fail}，"
-            f"不匹配 {index_match_fail}，"
+            f"不匹配 {index_match_fail}{_format_match_fail_detail(match_fail_detail)}，"
             f"错误 {index_error}，"
             f"有效 {index_sucess}，"
             f"耗时 {(end_time - start_time).seconds} 秒"
@@ -403,7 +481,7 @@ class _IIndexClient(metaclass=ABCMeta):
         self.progress.update(ptype=ProgressKey.Search,
                              text=f"{indexer.name} {len(result_array)} 条数据中，"
                                   f"过滤 {index_rule_fail}，"
-                                  f"不匹配 {index_match_fail}，"
+                                  f"不匹配 {index_match_fail}{_format_match_fail_detail(match_fail_detail)}，"
                                   f"错误 {index_error}，"
                                   f"有效 {index_sucess}，"
                                   f"耗时 {(end_time - start_time).seconds} 秒"
@@ -430,6 +508,8 @@ class _IIndexClient(metaclass=ABCMeta):
         index_match_fail = 0
         index_error = 0
         matched_torrent = []
+        # 「不匹配」的子项计数（只用于展示，sum 恒等于 index_match_fail）
+        match_fail_detail = {}
         cached_tmdb_infos = None
         cached_en_info = None
         cached_cn_info = None
@@ -470,6 +550,7 @@ class _IIndexClient(metaclass=ABCMeta):
                 if not meta_info.get_name():
                     log.info(f"【{self.client_name}】{torrent_name} 无法识别到名称")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "name")
                     continue
 
                 if meta_info.year:
@@ -481,10 +562,12 @@ class _IIndexClient(metaclass=ABCMeta):
                         else:
                             log.info(f"【{self.client_name}】{torrent_name} 与 {match_media.original_title} 相似度太低，忽略")
                             index_match_fail += 1
+                            _bump_match_fail(match_fail_detail, "ratio")
                             continue
                     else:
                         log.info(f"【{self.client_name}】{torrent_name} 与 {match_media.year} 年份不匹配")
                         index_match_fail += 1
+                        _bump_match_fail(match_fail_detail, "year")
                         continue
                 else:
                     ratio = self.get_similarity(meta_info.get_name(), match_media, torrent_name, description)
@@ -544,9 +627,11 @@ class _IIndexClient(metaclass=ABCMeta):
                                 log.info(
                                     f"【{self.client_name}】{torrent_name} 与 {title} 名称匹配，但 tmdbid 为: ${tmdb_id}， 匹配失败")
                                 index_match_fail += 1
+                                _bump_match_fail(match_fail_detail, "id")
 
                         if not found_matched:
                             index_match_fail += 1
+                            _bump_match_fail(match_fail_detail, "tmdb")
                             continue
                         else:
                             continue
@@ -620,6 +705,7 @@ class _IIndexClient(metaclass=ABCMeta):
                         f"【{self.client_name}】{torrent_name} 识别为 {media_info.type.value}/"
                         f"{media_info.get_title_string()}/{media_info.get_season_episode_string()} 不匹配季/集/年份")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "sey")
                     continue
 
                 # 匹配到了
@@ -652,7 +738,7 @@ class _IIndexClient(metaclass=ABCMeta):
         log.info(
             f"Local:【{self.client_name}】{indexer.name} {len(result_array)} 条数据中，"
             f"过滤 {index_rule_fail}，"
-            f"不匹配 {index_match_fail}，"
+            f"不匹配 {index_match_fail}{_format_match_fail_detail(match_fail_detail)}，"
             f"错误 {index_error}，"
             f"有效 {index_sucess}，"
             f"耗时 {(end_time - start_time).seconds} 秒"
@@ -661,7 +747,7 @@ class _IIndexClient(metaclass=ABCMeta):
         self.progress.update(ptype=ProgressKey.Search,
                              text=f"{indexer.name} {len(result_array)} 条数据中，"
                                   f"过滤 {index_rule_fail}，"
-                                  f"不匹配 {index_match_fail}，"
+                                  f"不匹配 {index_match_fail}{_format_match_fail_detail(match_fail_detail)}，"
                                   f"错误 {index_error}，"
                                   f"有效 {index_sucess}，"
                                   f"耗时 {(end_time - start_time).seconds} 秒"
@@ -697,6 +783,8 @@ class _IIndexClient(metaclass=ABCMeta):
         index_match_fail = 0
         index_error = 0
         matched_torrent = []
+        # 「不匹配」的子项计数（只用于展示，sum 恒等于 index_match_fail）
+        match_fail_detail = {}
 
         for item in result_array:
             try:
@@ -761,6 +849,7 @@ class _IIndexClient(metaclass=ABCMeta):
                 if not meta_info.get_name():
                     log.info(f"【{self.client_name}】{torrent_name} 无法识别到名称")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "name")
                     continue
                 # 大小及促销等
                 meta_info.set_torrent_info(size=size,
@@ -815,6 +904,7 @@ class _IIndexClient(metaclass=ABCMeta):
                                 log.info(
                                     f"【{self.client_name}】{torrent_name} 识别为 {media_info.get_name()} 未匹配到媒体信息")
                                 index_match_fail += 1
+                                _bump_match_fail(match_fail_detail, "tmdb")
                                 continue
                             # TMDBID是否匹配
                             if str(media_info.tmdb_id) != str(match_media.tmdb_id):
@@ -823,6 +913,7 @@ class _IIndexClient(metaclass=ABCMeta):
                                     f"{media_info.type.value}/{media_info.get_title_string()}/{media_info.tmdb_id} "
                                     f"与 {match_media.type.value}/{match_media.get_title_string()}/{match_media.tmdb_id} 不匹配")
                                 index_match_fail += 1
+                                _bump_match_fail(match_fail_detail, "id")
                                 continue
                             # 合并媒体数据
                             media_info = self.media.merge_media_info(media_info, match_media)
@@ -864,6 +955,7 @@ class _IIndexClient(metaclass=ABCMeta):
                         f"【{self.client_name}】{torrent_name} 识别为 {media_info.type.value}/"
                         f"{media_info.get_title_string()}/{media_info.get_season_episode_string()} 不匹配季/集/年份")
                     index_match_fail += 1
+                    _bump_match_fail(match_fail_detail, "sey")
                     continue
 
                 # 匹配到了
@@ -897,7 +989,7 @@ class _IIndexClient(metaclass=ABCMeta):
         log.info(
             f"Online:【{self.client_name}】{indexer.name} {len(result_array)} 条数据中，"
             f"过滤 {index_rule_fail}，"
-            f"不匹配 {index_match_fail}，"
+            f"不匹配 {index_match_fail}{_format_match_fail_detail(match_fail_detail)}，"
             f"错误 {index_error}，"
             f"有效 {index_sucess}，"
             f"耗时 {(end_time - start_time).seconds} 秒"
@@ -905,24 +997,27 @@ class _IIndexClient(metaclass=ABCMeta):
         )
         # 有源数据但一条都没通过时，给出可归因的失败原因：
         #   过滤占多数 -> 订阅/站点过滤规则或促销条件拦下的
-        #   不匹配占多数 -> 名称/年份/季集与 TMDB 信息对不上
+        #   不匹配占多数 -> 进一步细分到具体出口（名称脏/相似度/无条目/ID不符/年份季集）
         #   错误占多数 -> 种子名无法识别
         # 这几种情况在老代码里都只体现为「有效 0」，现场无法区分
         if result_array and index_sucess == 0:
             if index_rule_fail >= index_match_fail and index_rule_fail >= index_error:
                 _fail_hint = "结果被过滤规则拦下（检查分辨率/质量/促销等过滤条件）"
             elif index_match_fail >= index_error:
-                _fail_hint = "结果与媒体信息不匹配（名称/年份/季集对不上，可能是译名差异）"
+                # 细分到占多数的那个出口，直接给出对应的排查方向
+                _fail_hint = _dominant_match_fail_hint(match_fail_detail)
             else:
                 _fail_hint = "种子名称无法识别"
-            log.warn(f"【{self.client_name}】{indexer.name} {len(result_array)} 条数据全部未通过：{_fail_hint}")
+            _fail_detail = _format_match_fail_detail(match_fail_detail)
+            log.warn(f"【{self.client_name}】{indexer.name} {len(result_array)} 条数据全部未通过"
+                     f"{_fail_detail}：{_fail_hint}")
             self.progress.update(ptype=ProgressKey.Search,
-                                 text=f"{indexer.name} {len(result_array)} 条均未通过：{_fail_hint}")
+                                 text=f"{indexer.name} {len(result_array)} 条均未通过{_fail_detail}：{_fail_hint}")
         else:
             self.progress.update(ptype=ProgressKey.Search,
                                  text=f"{indexer.name} {len(result_array)} 条数据中，"
                                       f"过滤 {index_rule_fail}，"
-                                      f"不匹配 {index_match_fail}，"
+                                      f"不匹配 {index_match_fail}{_format_match_fail_detail(match_fail_detail)}，"
                                       f"错误 {index_error}，"
                                       f"有效 {index_sucess}，"
                                       f"耗时 {(end_time - start_time).seconds} 秒"

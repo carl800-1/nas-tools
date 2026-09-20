@@ -16,6 +16,121 @@ from config import Config
 from feapder.utils.tools import urlencode
 
 
+# ---------------------------------------------------------------------------
+# 反爬 / 登录页识别特征
+#
+# 背景：HTTP 层被拒（403、Cloudflare 挑战页、200 但返回登录页）不会让 requests 抛异常，
+# feapder 的 validate 默认也不校验状态码，于是 parse() 照常执行、选择器选不到东西、
+# 最终表现为「未搜索到数据」——与「站点真的没有该资源」完全无法区分。
+# 这里用「可靠的信号优先」的顺序做判定：状态码 > 响应头 > 最终 URL > 页面文本特征。
+# 页面文本特征只放高度特异的串，避免把正常页面误判成登录页。
+# ---------------------------------------------------------------------------
+
+# Cloudflare / 反爬挑战页的页面文本特征（全部为小写比较）
+_CF_TEXT_MARKERS = (
+    "enable javascript and cookies to continue",
+    "just a moment...",
+    "checking your browser before accessing",
+    "cf-browser-verification",
+    "cf-challenge",
+    "attention required! | cloudflare",
+    "cloudflare ray id",
+)
+
+# Cloudflare 挑战页的 URL 特征
+_CF_URL_MARKERS = (
+    "/cdn-cgi/challenge-platform",
+    "/cdn-cgi/l/",
+)
+
+# 登录页的 URL 特征（各站常见命名，均为小写比较）
+_LOGIN_URL_MARKERS = (
+    "login.php",
+    "/login",
+    "/signin",
+    "/sign-in",
+    "/takelogin",
+    "take_login",
+    "loginstep",
+    "/auth/",
+)
+
+# 登录页的页面特征（只保留表单元素级的高特异串，不用「登录」这类会出现在导航栏的普通词）
+_LOGIN_FORM_MARKERS = (
+    "name=\"username\"",
+    "name='username'",
+    "id=\"username\"",
+    "name=\"password\"",
+    "name='password'",
+    "id=\"password\"",
+    "type=\"password\"",
+)
+
+
+def classify_page_state(html_text, status_code=None, final_url=None, headers=None):
+    """
+    把一次 HTTP 响应归类成「可归因的抓取状态」
+
+    这是 A1 与站点体检（app/sites/site_health.py）共用的唯一判定实现：
+    索引器在「一条种子都没解析出来」时调用它，站点体检在 L3/L4 层调用它，
+    保证「搜索时看到的结论」与「体检时看到的结论」不会互相矛盾。
+
+    判定顺序按信号可靠性排列：响应头 > 状态码 > 最终 URL > 页面文本特征。
+    文本特征只放高度特异的串，避免把正常页面误判成登录页或挑战页。
+
+    :param html_text: 页面文本（可为空）
+    :param status_code: HTTP 状态码，取不到传 None
+    :param final_url: 重定向后的最终 URL，取不到传空串
+    :param headers: 小写键的响应头 dict
+    :return: (state, 中文描述)
+             state 取值：CFBlocked / needLogin / httpError / noResults
+    """
+    headers = headers or {}
+    text_low = (html_text or "").lower()
+    url_low = str(final_url or "").lower()
+
+    # 1) Cloudflare 专用响应头，最可靠的信号
+    if "cf-mitigated" in headers:
+        return "CFBlocked", f"被 Cloudflare 拦截（cf-mitigated: {headers.get('cf-mitigated')}）"
+
+    # 2) Cloudflare 边缘错误码
+    if status_code in (521, 522, 523, 524):
+        return "CFBlocked", f"Cloudflare 源站异常（HTTP {status_code}）"
+
+    # 3) 挑战页文本 / 地址特征
+    for marker in _CF_TEXT_MARKERS:
+        if marker in text_low:
+            return "CFBlocked", f"命中 Cloudflare 挑战页特征「{marker}」"
+    for marker in _CF_URL_MARKERS:
+        if marker in url_low:
+            return "CFBlocked", f"跳转到 Cloudflare 挑战地址「{marker}」"
+
+    # 4) 最终地址落在登录路径 -> Cookie 失效
+    for marker in _LOGIN_URL_MARKERS:
+        if marker in url_low:
+            return "needLogin", f"被重定向到登录页（{marker}），Cookie 可能已失效"
+
+    # 5) 页面里出现登录表单元素 -> Cookie 失效
+    for marker in _LOGIN_FORM_MARKERS:
+        if marker in text_low:
+            return "needLogin", f"页面包含登录表单（{marker}），Cookie 可能已失效"
+
+    # 6) 其余按状态码归类
+    if status_code == 401:
+        return "needLogin", "站点要求鉴权（HTTP 401），Cookie 可能已失效"
+    if status_code == 403:
+        return "httpError", "站点拒绝访问（HTTP 403，可能是 Cookie 失效或反爬）"
+    if status_code == 429:
+        return "httpError", "触发站点限流（HTTP 429）"
+    if status_code and status_code >= 500:
+        return "httpError", f"站点服务异常（HTTP {status_code}）"
+    if status_code and status_code >= 400:
+        return "httpError", f"HTTP 状态码异常（HTTP {status_code}）"
+
+    # 7) 状态正常、也没命中任何拦截特征 -> 真的没搜到
+    return "noResults", "站点响应正常，但未解析到任何种子（该关键词在此站可能确实无结果）"
+
+
 class TorrentSpider(feapder.AirSpider):
     _webdriver_path = SystemUtils.get_webdriver_path()
     _redis_valid = RedisHelper.is_valid()
@@ -48,6 +163,17 @@ class TorrentSpider(feapder.AirSpider):
     is_complete = False
     # 是否出现错误
     is_error = False
+    # 本次抓取的实际状态（供上层区分「真没资源」与「被拒/被拦/没取回」）
+    #   None        未判定（通常是解析出了种子，属于正常）
+    #   noResults   站点正常响应，但一条种子都没解析出来
+    #   needLogin   取回的是登录页（Cookie 失效）
+    #   CFBlocked   被 Cloudflare / 反爬挑战页拦住
+    #   httpError   HTTP 状态码异常（4xx/5xx）
+    #   parseError  页面取回了但解析抛异常
+    #   timeout     请求没回来（超时/连接被拒/代理失败），parse 根本没被调用
+    search_state = None
+    # 状态的可读说明（用于日志与进度提示）
+    search_state_desc = ""
     # 索引器ID
     indexerid = None
     # 索引器名称
@@ -66,6 +192,8 @@ class TorrentSpider(feapder.AirSpider):
     referer = None
     # 搜索关键字
     keyword = None
+    # IMDb 编号（形如 tt0111161），仅用于站点配置里声明了 {imdbid} 占位符的场景
+    imdbid = None
     # 媒体类型
     mtype = None
     # 搜索路径、方式配置
@@ -93,7 +221,8 @@ class TorrentSpider(feapder.AirSpider):
                  keyword: [str, list] = None,
                  page=None,
                  referer=None,
-                 mtype: MediaType = None):
+                 mtype: MediaType = None,
+                 imdb_id=None):
         """
         设置查询参数
         :param indexer: 索引器
@@ -101,10 +230,12 @@ class TorrentSpider(feapder.AirSpider):
         :param page: 页码
         :param referer: Referer
         :param mtype: 媒体类型
+        :param imdb_id: IMDb 编号（形如 tt0111161），供站点配置里的 {imdbid} 占位符使用
         """
         if not indexer:
             return
         self.keyword = keyword
+        self.imdbid = imdb_id
         self.mtype = mtype
         self.indexerid = indexer.id
         self.indexername = indexer.name
@@ -183,8 +314,12 @@ class TorrentSpider(feapder.AirSpider):
             # 搜索URL
             if self.search_config.get("params"):
                 # 变量字典
+                #   imdbid：站点配置可在 params 里写 {imdbid}，从而按 IMDb 编号检索。
+                #   编号是全球唯一的，不受中英文与译名差异影响，可兜住中文片名搜不到的情况。
+                #   现有内置站点都没写这个占位符，所以默认是空串、行为与改动前一致。
                 inputs_dict = {
-                    "keyword": search_word
+                    "keyword": search_word,
+                    "imdbid": self.imdbid or ""
                 }
                 # 查询参数
                 params = {
@@ -221,7 +356,8 @@ class TorrentSpider(feapder.AirSpider):
                 # 变量字典
                 inputs_dict = {
                     "keyword": quote(search_word),
-                    "page": self.page or 0
+                    "page": self.page or 0,
+                    "imdbid": self.imdbid or ""
                 }
                 # 无额外参数
                 searchurl = self.domain + str(torrentspath).format(**inputs_dict)
@@ -231,7 +367,8 @@ class TorrentSpider(feapder.AirSpider):
             # 变量字典
             inputs_dict = {
                 "page": self.page or 0,
-                "keyword": ""
+                "keyword": "",
+                "imdbid": self.imdbid or ""
             }
             # 有单独浏览路径
             if self.browse:
@@ -659,6 +796,73 @@ class TorrentSpider(feapder.AirSpider):
 
         return cleaned_html
 
+    def __set_search_state(self, state, desc=""):
+        """
+        记录本次抓取的状态
+
+        :param state: 状态标识，取值见类属性 search_state 的说明
+        :param desc: 可读说明
+        """
+        self.search_state = state
+        self.search_state_desc = desc
+
+    def mark_timeout(self):
+        """
+        标记「请求没回来」这一状态
+
+        由调用方在「等够了超时时间，但 is_complete 仍为 False」时调用。
+        这种情况说明请求根本没回来（超时 / 连接被拒 / 代理失败），
+        feapder 会走 exception_request → failed_request，parse() 根本不会被调用，
+        于是 is_complete 永远停在 False —— 老代码此时只能报「未搜索到数据」。
+        """
+        if self.search_state is None:
+            self.__set_search_state(
+                "timeout", "请求超时或被拒绝，页面未取回（检查站点域名与代理设置）")
+
+    @staticmethod
+    def __extract_response_meta(response):
+        """
+        从 feapder Response 里取出状态码、响应头、最终 URL
+
+        feapder 的 Response 外面包了一层，属性位置在不同版本里不一致，
+        这里都试一遍，取不到就给默认值，保证判定流程不因取属性而中断。
+
+        :param response: feapder Response 对象
+        :return: (状态码或 None, 小写响应头 dict, 最终 URL 字符串)
+        """
+        inner = getattr(response, "response", None) or response
+        status = getattr(inner, "status_code", None)
+        if status is None:
+            status = getattr(response, "status_code", None)
+        try:
+            headers = {str(k).lower(): str(v)
+                       for k, v in dict(getattr(inner, "headers", {}) or {}).items()}
+        except Exception:
+            headers = {}
+        try:
+            url = str(getattr(inner, "url", "") or "")
+        except Exception:
+            url = ""
+        return status, headers, url
+
+    def __classify_block(self, response, html_text):
+        """
+        在「一条种子都没解析出来」时，判断是正常无结果还是被拒 / 被拦
+
+        判定顺序按信号可靠性排列：响应头 > 状态码 > 最终 URL > 页面文本特征。
+        文本特征只放高度特异的串，避免把正常页面误判成登录页或挑战页。
+
+        具体判定规则在模块级的 classify_page_state() 里，与站点体检
+        （app/sites/site_health.py）共用同一份实现，避免两处规则各写一遍后走偏。
+
+        :param response: feapder Response 对象
+        :param html_text: 已取回的页面文本
+        :return: (state, 中文描述)
+        """
+        status, headers, url = self.__extract_response_meta(response)
+        return classify_page_state(html_text, status_code=status,
+                                   final_url=url, headers=headers)
+
     def parse(self, request, response):
         """
         解析整个页面
@@ -669,6 +873,7 @@ class TorrentSpider(feapder.AirSpider):
             html_text = self.clean_all_sites_free(html_text)
             if not html_text:
                 self.is_error = True
+                self.__set_search_state("parseError", "站点返回了空内容")
                 self.is_complete = True
                 return
             # 解析站点文本对象
@@ -681,8 +886,19 @@ class TorrentSpider(feapder.AirSpider):
                 if len(self.torrents_info_array) >= int(self.result_num):
                     break
 
+            # 一条种子都没解析出来时，区分「站点真的没这个资源」与「被反爬/登录页顶掉了」。
+            # 后者在老代码里同样只表现为「未搜索到数据」，是现场最容易误判的一类。
+            if not self.torrents_info_array:
+                state, desc = self.__classify_block(response, html_text)
+                self.__set_search_state(state, desc)
+                if state in ("CFBlocked", "needLogin", "httpError"):
+                    self.is_error = True
+                    log.warn(f"【Spider】{self.indexername} 未解析到种子：{desc}")
+                else:
+                    log.info(f"【Spider】{self.indexername} 未解析到种子：{desc}")
         except Exception as err:
             self.is_error = True
+            self.__set_search_state("parseError", f"解析异常：{err}")
             ExceptionUtils.exception_traceback(err)
             log.warn(f"【Spider】错误：{self.indexername} {str(err)}")
         finally:
