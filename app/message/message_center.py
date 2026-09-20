@@ -1,17 +1,38 @@
+import threading
 import time
 from collections import deque
 
 from app.utils.commons import singleton
 
+# 消息序号计数器，单调递增，唯一标识一条消息。
+# 不能改用时间戳做游标：同秒插入的多条消息共享同一时间戳，
+# 前端回传「最新一条的时间」后，同时间的其余消息会被判定为已读而永久丢失
+# （典型场景：一次转移 N 部剧，循环体内每条插一条消息）。
+#
+# 为什么是模块级变量，而不是原来的类属性 MessageCenter._seq：
+#   `@singleton` 会把类名 MessageCenter 整个替换成包装函数 _singleton，
+#   类体方法里再引用 MessageCenter，拿到的是那个函数，于是
+#   `MessageCenter._seq += 1` 必然抛
+#   AttributeError: 'function' object has no attribute '_seq'。
+#   后果是所有 insert_system_message 全部失败 —— 下载失败、订阅成功等通知
+#   既进不了消息中心，也推不到消息客户端；Web 端点「下载」还会直接 500。
+_seq_lock = threading.Lock()
+_seq_counter = 0
+
+
+def _next_seq():
+    """
+    取下一个消息序号
+    """
+    global _seq_counter
+    with _seq_lock:
+        _seq_counter += 1
+        return _seq_counter
+
 
 @singleton
 class MessageCenter:
     _message_queue = deque(maxlen=50)
-    # 单调递增序号，唯一标识一条消息。
-    # 不能改用时间戳做游标：同秒插入的多条消息共享同一时间戳，
-    # 前端回传「最新一条的时间」后，同时间的其余消息会被判定为已读而永久丢失
-    # （典型场景：一次转移 N 部剧，循环体内每条插一条消息）。
-    _seq = 0
 
     def __init__(self):
         pass
@@ -30,11 +51,11 @@ class MessageCenter:
         """
         将消息增加到队列
         """
-        MessageCenter._seq += 1
+        seq = _next_seq()
         self._message_queue.appendleft({
             "title": title,
             "content": content,
-            "seq": MessageCenter._seq,
+            "seq": seq,
             "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
         })
 

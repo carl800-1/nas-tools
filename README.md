@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -174,6 +174,26 @@ v5.0.4 起会明确打印：
 
 同时记住一个容易误判的点：`download.add` 事件代表「**开始尝试**下载」，
 **不代表下载器已经收下任务** —— 取种子失败时它也会先发出来。
+
+#### 2.7 消息中心与下载目录的两处崩溃（v5.0.5）
+
+v5.0.5 修掉两个会让「点下载没反应」的崩溃：
+
+- **消息中心**：`@singleton` 装饰器会把类名替换成包装函数，`MessageCenter._seq`
+  因此必然抛 `'function' object has no attribute '_seq'`。**所有系统消息写入全部失败**，
+  下载失败通知既不进消息中心、也不推消息客户端。现已改用模块级计数器。
+- **下载目录为空**：下载器配置里没配「下载目录」时该字段是 `None`，遍历时抛
+  `'NoneType' object is not iterable`，表现为「下载目录」下拉框 500。现已统一归一化为 `[]`。
+
+另外，下载器失配时的原因不再笼统：
+
+```
+【Downloader】馒头 异次元骇客 添加下载任务失败：下载设置「预设」未指定下载器，请到「设置 → 下载器」…
+【Downloader】馒头 异次元骇客 添加下载任务失败：下载器 ID=99 不存在、未启用或初始化失败…
+```
+
+> 排查口诀：`@singleton` 装饰过的类，**类体里不要再写 `类名.属性`** ——
+> 那时类名已经是个函数了。
 
 ### 3. 跳转与入口优化
 
@@ -758,7 +778,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.4   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.5   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -861,4 +881,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.4_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.5_

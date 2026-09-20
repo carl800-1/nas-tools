@@ -1,3 +1,113 @@
+# v5.0.5 (2026-09-20)
+
+## 修复：点「下载」没反应 —— 消息中心序号崩溃 + 下载目录为空崩溃
+
+### 现象
+
+Web 端点「下载」后界面毫无反应，日志里只剩一行异常（其余什么提示都没有）：
+
+```
+Exception: 'function' object has no attribute '_seq'
+Callstack: Traceback (most recent call last):
+  File "/nas-tools/web/action.py", line 611, in __download
+    _, ret, dir, ret_msg = Downloader().download(media_info=media, ...
+  File "/nas-tools/app/downloader/downloader.py", line 375, in download
+    __download_fail("请检查下载设置所选下载器是否有效且启用")
+  File "/nas-tools/app/downloader/downloader.py", line 297, in ...
+```
+
+同一份日志里还有**另一个独立**的异常（打开下载对话框时取下载目录）：
+
+```
+Exception: 'NoneType' object is not iterable
+  File "/nas-tools/app/downloader/downloader.py", line 1177, in get_download_dirs
+    save_path_list = [attr.get("save_path") for attr in downloaddir if attr.get("save_path")]
+```
+
+### 根因一：`@singleton` 把类名换成了函数，`MessageCenter._seq` 必然崩
+
+`app/utils/commons.py` 的 `singleton` 是装饰器工厂，它把被装饰的类整个替换成一个
+包装函数：
+
+```python
+def singleton(cls):
+    def _singleton(*args, **kwargs):
+        if cls not in INSTANCES:
+            INSTANCES[cls] = cls(*args, **kwargs)
+        return INSTANCES[cls]
+    return _singleton
+```
+
+于是模块级名字 `MessageCenter` 从「类」变成了「函数 `_singleton`」。而
+`message_center.py` 的 `__append_message_queue()` 里写的是：
+
+```python
+MessageCenter._seq += 1
+```
+
+类体方法里引用 `MessageCenter` 走的是全局查找，拿到的是那个包装函数，于是
+`'function' object has no attribute '_seq'`。
+
+后果不是「消息中心偶尔出错」，而是**所有 `insert_system_message()` 全部失败**：
+`message.py` 里 20 多处调用（下载失败、订阅成功、转移完成、AI 助手消息……）无一幸免。
+又因为 `__download_fail()` 里「插消息中心」排在「推送消息客户端」**之前**，异常直接
+冒泡出 `download()`，所以表现为：**下载失败既不提示、也不推送，接口还 500。**
+
+### 根因二：下载器的「下载目录」可能是 `None`
+
+装载下载器配置时：
+
+```python
+"download_dir": json.loads(downloader_conf.DOWNLOAD_DIR)
+```
+
+该字段在 DB 里是 JSON 文本，未配置时可能是空串 / `None` / `"null"`，`json.loads`
+得到 `None`。而下游直接遍历它（`for attr in downloaddir`、
+`download_dirs += downloaddir`），`None` 抛
+`TypeError: 'NoneType' object is not iterable` —— Web 端「下载目录」下拉框 500。
+
+### 修复
+
+**`app/message/message_center.py`**
+
+- 序号计数器改为模块级 `_seq_counter` + 加锁的 `_next_seq()`，不再引用被替换掉的类名
+- 语义保持不变：单调递增、只增不减；`get_system_messages()` 的游标行为一字未改
+
+**`app/downloader/downloader.py`**
+
+- 新增 `_load_download_dir()`：`None` / 空串 / `"null"` / 非列表 一律归一化成 `[]`
+- `get_download_dirs()` / `get_download_visit_dirs()` 的遍历处补 `or []` 兜底
+- 下载器失配时报出**可定位**的原因，而不是笼统的「无效或未启用」：
+  - 没选下载器 → `下载设置「预设」未指定下载器，请到「设置 → 下载器」…`
+  - 选了但查不到 / 建不起来 → `下载器 ID=99 不存在、未启用或初始化失败…`
+- 同时修正了判断顺序：`get_downloader_conf()` 在 `did` 为空时会返回**全部下载器配置**
+  这个真值 dict，原来先取配置会把「根本没选下载器」伪装成「下载器不存在」
+
+### 验证
+
+新增 `_verify_v505_download.py` **42 项断言**，全部用真实代码执行，并用
+`git show <旧提交>:<文件>` 取旧版做反向对照：
+
+- 旧版 `insert_system_message` 精确复现 `'function' object has no attribute '_seq'`，新版正常
+- 序号并发唯一性：8 线程 × 500 次取号，无重号、无丢失
+- 游标语义回归：`lst_seq=0` / 字符串 `"0"` / 非法值 / 等于最新序号，行为与原实现一致
+- 旧版 `get_download_dirs` 精确复现 `'NoneType' object is not iterable`，新版返回 `[]`
+- `_load_download_dir` 九种输入（`None` / 空串 / `"null"` / `{}` / 垃圾串 / 正常配置 …）
+- `download()` 诊断分支：新旧实现日志逐条对照
+
+既有回归 469 项（agent 231 + guard 27 + guide 144 + 解析 24 + MTeam 11 + 失败日志 32）
+**0 失败**，合计 **511 项**。
+
+### 兼容性
+
+- 无配置变更、无数据库迁移
+- `get_system_messages()` 的返回结构与游标语义完全不变，前端无需改动
+
+### 排查口诀
+
+`@singleton` 装饰过的类，**类体里不要再写 `类名.属性`** ——
+那时类名已经是个函数了。仓库里另外 35 个 `@singleton` 类已扫描确认无同类问题。
+
 # v5.0.4 (2026-09-20)
 
 ## 修复：下载失败时日志里没有任何原因，只能靠猜

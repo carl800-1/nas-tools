@@ -25,6 +25,27 @@ lock = Lock()
 client_lock = Lock()
 
 
+def _load_download_dir(raw):
+    """
+    解析下载器配置里的「下载目录」字段，恒返回列表
+
+    该字段在 DB 里存的是 JSON 文本，可能是空串 / None / "null"，
+    旧写法 json.loads(...) 会得到 None。而下游多处直接遍历它
+    （`for attr in downloaddir`、`download_dirs += downloaddir`），
+    None 会抛 TypeError: 'NoneType' object is not iterable
+    —— 表现为 Web 端「下载目录」下拉框 500、相关接口无任何返回。
+    """
+    if isinstance(raw, list):
+        return raw
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
 @singleton
 class Downloader:
     # 客户端实例
@@ -110,7 +131,7 @@ class Downloader:
                 "rmt_mode": rmt_mode,
                 "rmt_mode_name": rmt_mode_name,
                 "config": config,
-                "download_dir": json.loads(downloader_conf.DOWNLOAD_DIR)
+                "download_dir": _load_download_dir(downloader_conf.DOWNLOAD_DIR)
             }
         # 下载器ID-名称枚举类生成
         self._DownloaderEnum = Enum('DownloaderIdName',
@@ -372,11 +393,22 @@ class Downloader:
         # 下载器实例
         if not downloader_id:
             downloader_id = download_attr.get("downloader")
+        # 顺序很重要：get_downloader_conf() 在 did 为空时会返回「全部下载器配置」
+        # 这个真值 dict，先取配置会把「根本没选下载器」伪装成「下载器不存在」，
+        # 报出来的原因就永远对不上，所以必须先判空
+        if not downloader_id:
+            __download_fail(
+                f"下载设置「{download_setting_name or '预设'}」未指定下载器，"
+                f"请到「设置 → 下载器」确认下载器已配置并启用，"
+                f"再到「设置 → 基础设置」把它设为默认下载器")
+            return None, None, None, f"下载设置 {download_setting_name} 未指定下载器"
         downloader_conf = self.get_downloader_conf(downloader_id)
         downloader = self.__get_client(downloader_id)
 
-        if not downloader or not downloader_conf:
-            __download_fail("请检查下载设置所选下载器是否有效且启用")
+        if not downloader_conf or not downloader:
+            __download_fail(
+                f"下载器 ID={downloader_id} 不存在、未启用或初始化失败"
+                f"（连不上下载器时也会走到这里），请检查「设置 → 下载器」")
             return None, None, None, f"下载设置 {download_setting_name} 所选下载器失效"
         downloader_name = downloader_conf.get("name")
 
@@ -1176,7 +1208,8 @@ class Downloader:
         downloader_conf = self.get_downloader_conf(download_setting.get("downloader"))
         if not downloader_conf:
             return []
-        downloaddir = downloader_conf.get("download_dir")
+        # download_dir 兜底成 []：老配置里该字段可能是 None（见 _load_download_dir）
+        downloaddir = downloader_conf.get("download_dir") or []
         # 查询目录
         save_path_list = [attr.get("save_path") for attr in downloaddir if attr.get("save_path")]
         save_path_list.sort()
@@ -1188,7 +1221,7 @@ class Downloader:
         """
         download_dirs = []
         for downloader_conf in self.get_downloader_conf().values():
-            download_dirs += downloader_conf.get("download_dir")
+            download_dirs += downloader_conf.get("download_dir") or []
         visit_path_list = [attr.get("container_path") or attr.get("save_path") for attr in download_dirs if
                            attr.get("save_path")]
         visit_path_list.sort()
