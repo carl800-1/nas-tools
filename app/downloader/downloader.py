@@ -46,6 +46,41 @@ def _load_download_dir(raw):
     return data if isinstance(data, list) else []
 
 
+# 日志里禁止原样出现的配置键（按小写子串匹配）
+#   qBittorrent / Transmission 的登录密码存的就是明文 password 字段
+_SECRET_KEY_HINTS = (
+    "password", "passwd", "pwd", "secret", "token",
+    "passkey", "api_key", "apikey", "auth", "cookie", "private_key",
+)
+
+
+def _mask_secrets(conf):
+    """
+    把配置里的敏感字段替换成 *** 后再用于日志输出
+
+    为什么必须有这一步：`download()` 会把读到的下载器配置整条打进日志，
+    而这份配置里带着 qBittorrent 的登录用户名与密码（明文）。日志文件、
+    容器 stdout、以及复制出来的日志片段都会一直带着它 ——
+    等于把下载器账号写进了长期留存的文件里（现场已复现：`'password': 'xxx'`）。
+
+    只脱敏「值」，键名照留，方便对照是哪个字段没填。
+
+    :param conf: 任意配置值（dict / list / 标量）
+    :return: 脱敏后的副本，原对象不被修改
+    """
+    if isinstance(conf, dict):
+        masked = {}
+        for key, value in conf.items():
+            if isinstance(key, str) and any(h in key.lower() for h in _SECRET_KEY_HINTS):
+                masked[key] = "***"
+            else:
+                masked[key] = _mask_secrets(value)
+        return masked
+    if isinstance(conf, list):
+        return [_mask_secrets(item) for item in conf]
+    return conf
+
+
 @singleton
 class Downloader:
     # 客户端实例
@@ -455,12 +490,20 @@ class Downloader:
             seeding_time_limit = download_attr.get("seeding_time_limit")
             # 下载目录设置
             if not download_dir:
-                log.info(f"【Downloader】下载器 before, down_dir: {download_dir}, media: {media_info}, down_conf: {downloader_conf}")
+                log.info(f"【Downloader】下载器 before, down_dir: {download_dir}, media: {media_info}, "
+                         f"down_conf: {_mask_secrets(downloader_conf)}")
                 download_info = self.__get_download_dir_info(media_info, downloader_conf.get("download_dir"), skip_size_check)
                 download_dir = download_info.get('path')
                 container_path = download_info.get('container_path')
                 # 从下载目录中获取分类标签
                 log.info(f"【Downloader】下载器 after, down_dir: {download_dir}")
+                if not download_dir:
+                    # 目录为空不算错误：下载器会落到它自己的默认保存路径。
+                    # 但必须提示出来 —— 否则「种子下到哪去了」「转移为什么找不到文件」
+                    # 「手动选择下载目录的下拉框为什么是空的」全部只能靠猜。
+                    log.warn(f"【Downloader】下载器 {downloader_conf.get('name')} 没有可用的下载目录"
+                             f"（未配置，或没有匹配当前类型的目录），本次交给下载器默认保存路径："
+                             f"{media_info.get_title_string()}")
                 if not category:
                     category = download_info.get('category')
             # 添加下载

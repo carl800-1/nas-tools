@@ -260,6 +260,43 @@ class Torrent:
             target[title][index]["episodes"] = target_episodes
         return target
 
+    # 排序键的展示名，顺序必须与 _sort_key_parts 返回的片段一一对应
+    _SORT_KEY_NAMES = {
+        "site": ["片名", "规则优先级", "站点优先级", "做种数", "季集完整度"],
+        "seeder": ["片名", "规则优先级", "做种数", "站点优先级", "季集完整度"],
+    }
+
+    @staticmethod
+    def _sort_key_parts(x, download_order):
+        """
+        把排序键拆成片段
+
+        拆开只为了日志能逐项打印（见 __log_download_order），不改变任何语义：
+        片段拼起来必须与历史实现逐字节相同 —— 历史上就是
+        「标题、资源类型/规则优先级、站点优先级、做种、季集」五段定长拼接后整体逆序，
+        拼法一变，选中的种子就会变。
+
+        :return: (定长片段列表, 可读值列表)，两个列表长度一致、顺序一致
+        """
+        season_len = str(len(x.get_season_list())).rjust(2, '0')
+        episode_len = str(len(x.get_episode_list())).rjust(4, '0')
+        title_part = str(x.title).ljust(100, ' ')
+        res_part = str(x.res_order).rjust(3, '0')
+        site_part = str(x.site_order).rjust(3, '0')
+        seeder_part = str(x.seeders).rjust(10, '0')
+        season_episode_part = "%s%s" % (season_len, episode_len)
+        readable_season_episode = "%s季%s集" % (len(x.get_season_list()),
+                                            len(x.get_episode_list()))
+        if download_order == "seeder":
+            # 排序：标题、资源类型、做种、站点、季集
+            return ([title_part, res_part, seeder_part, site_part, season_episode_part],
+                    [str(x.title), str(x.res_order), str(x.seeders), str(x.site_order),
+                     readable_season_episode])
+        # 排序：标题、资源类型、站点、做种、季集
+        return ([title_part, res_part, site_part, seeder_part, season_episode_part],
+                [str(x.title), str(x.res_order), str(x.site_order), str(x.seeders),
+                 readable_season_episode])
+
     @staticmethod
     def get_download_list(media_list, download_order):
         """
@@ -268,32 +305,20 @@ class Torrent:
         if not media_list:
             return []
 
-        # 排序函数，标题、站点、资源类型、做种数量
         def get_sort_str(x):
-            season_len = str(len(x.get_season_list())).rjust(2, '0')
-            episode_len = str(len(x.get_episode_list())).rjust(4, '0')
-            # 排序：标题、资源类型、站点、做种、季集
-            if download_order == "seeder":
-                return "%s%s%s%s%s" % (str(x.title).ljust(100, ' '),
-                                       str(x.res_order).rjust(3, '0'),
-                                       str(x.seeders).rjust(10, '0'),
-                                       str(x.site_order).rjust(3, '0'),
-                                       "%s%s" % (season_len, episode_len))
-            else:
-                return "%s%s%s%s%s" % (str(x.title).ljust(100, ' '),
-                                       str(x.res_order).rjust(3, '0'),
-                                       str(x.site_order).rjust(3, '0'),
-                                       str(x.seeders).rjust(10, '0'),
-                                       "%s%s" % (season_len, episode_len))
+            # 五段定长拼接后整体逆序；片段定义见 _sort_key_parts
+            return "".join(Torrent._sort_key_parts(x, download_order)[0])
 
         # 匹配的资源中排序分组选最好的一个下载
         # 按站点顺序、资源匹配顺序、做种人数下载数逆序排序
-        media_list = sorted(media_list, key=lambda x: get_sort_str(x), reverse=True)
+        media_list = sorted(media_list, key=get_sort_str, reverse=True)
         # 控重
         can_download_list_item = []
         can_download_list = []
+        # 被选中的项在「排序后列表」里的下标，仅用于日志标注，不参与选择
+        picked_index = []
         # 排序后重新加入数组，按真实名称控重，即只取每个名称的第一个
-        for t_item in media_list:
+        for index, t_item in enumerate(media_list):
             # 控重的主链是名称、年份、季、集
             if t_item.type != MediaType.MOVIE:
                 media_name = "%s%s" % (t_item.get_title_string(),
@@ -303,7 +328,57 @@ class Torrent:
             if media_name not in can_download_list:
                 can_download_list.append(media_name)
                 can_download_list_item.append(t_item)
+                picked_index.append(index)
+
+        # 把「为什么选了这一个」写进日志
+        # 现场问题：日志里只有一句「实际下载了 1 个资源」，既看不到候选清单，
+        # 也看不到规则优先级 / 站点优先级 / 做种数这些真正决定选择的数值 ——
+        # 而它们全在配置里，日志里一个都没有，于是只能靠翻配置反推。
+        Torrent.__log_download_order(media_list, download_order, picked_index)
         return can_download_list_item
+
+    @staticmethod
+    def __log_download_order(media_list, download_order, picked_index):
+        """
+        打印择优下载的候选清单、排序键与最终选择
+
+        纯日志，不读也不写任何状态，绝不影响选择结果。
+        """
+        if not media_list:
+            return
+        key_names = Torrent._SORT_KEY_NAMES.get(download_order) or Torrent._SORT_KEY_NAMES["site"]
+        log.info("【Downloader】择优下载：按「%s优先」排序，候选 %s 条；排序键 %s（均为数值越大越优先）"
+                 % ("做种数" if download_order == "seeder" else "站点",
+                    len(media_list),
+                    " > ".join(key_names)))
+        shown = media_list[:10]
+        for index, item in enumerate(shown):
+            _, readable = Torrent._sort_key_parts(item, download_order)
+            detail = " ".join("%s=%s" % (name, value)
+                              for name, value in zip(key_names, readable))
+            log.info("【Downloader】  第 %s 名 %s | %s | %s%s"
+                     % (index + 1,
+                        item.site or "未知站点",
+                        item.size or "-",
+                        detail,
+                        " ← 选中" if index in picked_index else ""))
+        if len(media_list) > len(shown):
+            log.info("【Downloader】  ...（共 %s 条候选，只列前 %s 条）" % (len(media_list), len(shown)))
+        # 第 1 名相对第 2 名的决胜点：只比前两名就足以回答「凭什么选它」
+        if len(media_list) > 1:
+            first = Torrent._sort_key_parts(media_list[0], download_order)[1]
+            second = Torrent._sort_key_parts(media_list[1], download_order)[1]
+            for index, (left, right) in enumerate(zip(first, second)):
+                if left != right:
+                    log.info("【Downloader】择优下载选择：%s | %s —— 决胜键：第 %s 位「%s」（%s > %s）"
+                             % (media_list[0].site or "未知站点",
+                                media_list[0].org_string,
+                                index + 1, key_names[index], left, right))
+                    break
+            else:
+                log.info("【Downloader】择优下载选择：%s | %s —— 各排序键与第 2 名完全相同，"
+                         "取排序中先出现的那条"
+                         % (media_list[0].site or "未知站点", media_list[0].org_string))
 
     @staticmethod
     def magent2torrent(url, path, timeout=20):

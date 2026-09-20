@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -218,6 +218,39 @@ v5.0.6 之前，日志里的事件分发记录是这样的：
 - **插件报错不进日志**：插件内部异常原先走 `print()`，只到 stdout，
   `config/logs` 下的日志文件里完全看不到。现在改为 `log.error`，并带上插件名与方法名；
 - 每条事件处理的成功路径补了 debug 级记录，方便判断卡在哪个插件。
+
+#### 2.9 择优过程可解释 + 下载器配置脱敏（v5.0.7）
+
+**一、日志里能直接看到「凭什么选它」**
+
+远程搜索/订阅择优下载后，日志会打出候选清单与决胜键：
+
+```
+【Downloader】择优下载：按「站点优先」排序，候选 2 条；排序键 片名 > 规则优先级 > 站点优先级 > 做种数 > 季集完整度（均为数值越大越优先）
+【Downloader】  第 1 名 学校 | 5.92G | 片名=逃出绝命街 规则优先级=100 站点优先级=100 做种数=96 季集完整度=0季0集 ← 选中
+【Downloader】  第 2 名 HDTime | 4.31G | 片名=逃出绝命街 规则优先级=100 站点优先级=90 做种数=12 季集完整度=0季0集
+【Downloader】择优下载选择：学校 | The.End.of.Oak.Street...BYNDR —— 决胜键：第 3 位「站点优先级」（100 > 90）
+```
+
+`决胜键` 是第 1 名与第 2 名**第一个不同的排序键**，也就是「为什么不是另一条」的直接答案。
+
+**二、下载器密码不再进日志**
+
+`【Downloader】下载器 before ... down_conf:` 原先会把 qBittorrent / Transmission 的
+**明文密码**一起打出来（`'password': 'xxx'`）。现在 `password / token / cookie / api_key /
+passkey / secret ...` 一律显示为 `***`，`host / port / username` 仍然保留 ——
+排查连接问题够用，账号密码不再落进日志文件。
+
+**三、`等待超时` 的意思被写清楚了**
+
+站点搜索里的「等待超时（约 15 秒）」是**本地等待上限**，不是站点故障：后台请求可能仍在跑，
+只是本轮结果作废。换下一个候选名会对同站点重新发请求 ——
+所以「第一轮超时、第二轮成功」是正常的，不代表日志自相矛盾。
+
+**四、下载目录没配会明确告警**
+
+下载器没有可用下载目录时，日志会说明「本次交给下载器默认保存路径」，
+不再只留一个 `down_dir: None` 让人猜。
 
 ### 3. 跳转与入口优化
 
@@ -794,6 +827,19 @@ media:
 
 也就是说：最终**只会下一条**，它就是上面这套排序的第一名。
 
+> **v5.0.7 起不用再翻配置反推**：日志里会直接列出候选与各自排序键的取值，并给出决胜键。
+> 例如：
+
+```
+【Downloader】择优下载：按「站点优先」排序，候选 2 条；排序键 片名 > 规则优先级 > 站点优先级 > 做种数 > 季集完整度（均为数值越大越优先）
+【Downloader】  第 1 名 学校 | 5.92G | 片名=逃出绝命街 规则优先级=100 站点优先级=100 做种数=96 季集完整度=0季0集 ← 选中
+【Downloader】  第 2 名 HDTime | 4.31G | 片名=逃出绝命街 规则优先级=100 站点优先级=90 做种数=12 季集完整度=0季0集
+【Downloader】择优下载选择：学校 | The.End.of.Oak.Street...BYNDR —— 决胜键：第 3 位「站点优先级」（100 > 90）
+```
+
+> 上例就是「两条都是 1080p WEB-DL、规则优先级相同，学校排在 HDTime 前面」的完整证据：
+> 决出胜负的是**站点优先级**。把「站点管理」里两站的优先级对调，结果就会跟着变。
+
 想让程序「先给列表、自己点」：关掉
 「设置 → 基础设置 → 远程搜索自动择优下载」，之后会回一句「共搜索到 N 个资源，点击选择下载」。
 注意关闭后必须先维护好**外网访问地址**，否则那个跳转链接点不开。
@@ -826,7 +872,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.6   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.7   # 也可继续用 latest
 docker compose up -d
 ```
 

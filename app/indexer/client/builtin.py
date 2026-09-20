@@ -130,7 +130,10 @@ def spider_search(spider, indexer, keyword=None, page=None, mtype=None, timeout=
     if not spider.is_complete:
         spider.mark_timeout()
         log.warn(f"【Spider】{indexer.name} 等待超时（约 {int(timeout * 0.5)} 秒），"
-                 f"请求可能未返回：{spider.search_state_desc}")
+                 f"请求可能未返回：{spider.search_state_desc}"
+                 f"（这是「本地不再等待」的上限，不代表站点不可用：后台请求可能仍在跑，"
+                 f"本轮已取到的结果一律作废；换一个候选名会对同站点重新发起请求，"
+                 f"若那一轮成功，说明只是这一次慢，不是站点故障）")
     # 是否发生错误
     result_flag = spider.is_error
     # 种子列表
