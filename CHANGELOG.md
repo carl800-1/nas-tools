@@ -1,3 +1,96 @@
+# v5.0.8 (2026-09-20)
+
+## 修复：在线复核不筛年份，导致「ID 不符」刷屏
+
+### 现象
+
+站点明明返回了几十条结果，最终却全部未通过，归因长这样：
+
+```
+学校 55 条数据全部未通过（TMDB无条目2/ID不符24/季集年不符29）
+```
+
+其中 **ID 不符 24 条**占比最大。这类失败以前在日志里只留一句
+「名称匹配，但 tmdbid 为 xxx，匹配失败」，用户完全看不出该改什么。
+
+### 原因
+
+`app/indexer/client/_base.py` 的在线复核分支有个前置条件 ——
+**只有种子名解析不出年份时才会走到这里**（解析得出年份的话，前面
+`year_match` 那道闸就已经把年份对不上的资源拦掉了）。
+
+而它去 TMDB 查候选时**没带年份**：
+
+```python
+cached_tmdb_infos = self.media.get_tmdb_infos(title=en_title,
+                                              mtype=match_media.type,
+                                              page=1)
+```
+
+`get_tmdb_infos` 本来就支持 `year` 参数（会透传给 TMDB 的年份查询），
+只是这里没传。于是 TMDB 按名称返回一堆同名条目 —— 重启版、同一译名下的
+另一部片、不同年份的翻拍都在里面。它们的名字与目标媒体**相似度照样能过
+0.95**，一路走到最后那道 `tmdb_id` 比对，然后集体被判「不符」。
+
+一句话：**该在入口挡掉的东西，被拖到最后才挡，于是全部记成了 ID 不符。**
+
+### 改动
+
+1. 两处在线复核分支（`filter_search_results_local_for_tv` 与
+   `filter_search_results_local_for_tv_rss` 同名逻辑）查询时带上年份：
+
+   ```python
+   cached_tmdb_infos = self.media.get_tmdb_infos(title=en_title,
+                                                 year=match_media.year,
+                                                 mtype=match_media.type,
+                                                 page=1)
+   ```
+
+2. 新增 `__tmdb_info_year_match()`，在候选循环里再卡一道年份预筛。
+   TMDB 的 year 查询**并非严格过滤** —— 没有该年条目时会放宽返回，
+   所以不能只靠查询参数，循环里还要复核一遍：
+
+   ```python
+   if match_media.year and not self.__tmdb_info_year_match(info, match_media.year):
+       continue
+   ```
+
+3. **取不到年份的候选放行**（`release_date` / `first_air_date` 都为空时返回
+   `True`）。宁可交给后面的 id 比对，也不要因为 TMDB 缺字段而误杀 ——
+   收紧的前提是不能引入新的假阴性。
+
+电影看 `release_date`、剧集看 `first_air_date`，两者都用 `_norm_year()`
+归一化后比较，与 v5.0.1 确立的年份口径保持一致。
+
+### 验证
+
+`candidate_year_prefilter_verify.py` **14 项 0 失败**（抠真实源码执行，
+不依赖 Flask / TMDB）：
+
+- 同名不同年剔除：重启版 2019、另一部 2011、剧集重启版 2020 **全部剔除**；
+- 同年放行：`"1999-04-16"` / `first_air_date` / 目标年份为 int 1999 **全部放行**；
+- 缺字段放行：无年份字段、空串、`None` 三种形态**全部放行**（不误杀）；
+- 电影 / 剧集字段各自生效；
+- 收敛模拟：5 条同名候选（仅 1 条同 id），改动前 4 条会被记「ID 不符」，
+  改动后降到 1 条，且**目标本体仍在候选内**。
+
+### 未改动与已知边界
+
+- `app/filter.py::is_torrent_match_sey` 的年份分支**保持原样**。它在
+  `_base.py` 的三处调用都发生在 `merge_media_info` 之后，而 merge 会把
+  卡片的 `release_date[0:4]` 覆盖到种子侧 `media_info.year`，两侧同源，
+  该分支实际是自比自 —— 既不会误杀，也拦不住东西。真正干活的闸门是
+  merge 之前执行的 `year_match` / `season_match`。改它没有收益，风险却不小
+  （订阅链路共用），故不动。
+- 「季集年不符」这一类仍混着季号不符、集号不符、季集列表为空三种情况，
+  暂未细分归因。
+- `ID 不符` 的另一处来源（RSS 路径重新识别后比对 `tmdb_id`）逻辑不同，
+  本次未涉及。
+
+## 版本号
+
+- 从 v5.0.7 升级至 v5.0.8
+
 # v5.0.7 (2026-09-20)
 
 ## 优化：下载器配置脱敏、择优下载可解释、超时语义澄清

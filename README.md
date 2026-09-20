@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -251,6 +251,41 @@ passkey / secret ...` 一律显示为 `***`，`host / port / username` 仍然保
 
 下载器没有可用下载目录时，日志会说明「本次交给下载器默认保存路径」，
 不再只留一个 `down_dir: None` 让人猜。
+
+#### 2.10 在线复核先筛年份：治「ID 不符」刷屏（v5.0.8）
+
+搜索结果的归因里，「**ID 不符**」长期是数量最大的一类：
+
+```
+学校 55 条数据全部未通过（TMDB无条目2/ID不符24/季集年不符29）
+```
+
+它发生在**在线复核**分支 —— 只有种子名解析不出年份时才会走到这里。
+原先它去 TMDB 查候选时**没带年份**，TMDB 就按名称返回一堆同名条目
+（重启版、同一译名下的另一部片、不同年份的翻拍），这些条目名字相似度
+照样能过阈值，一路走到最后的 `tmdb_id` 比对，然后集体被判「不符」。
+
+现在两处在线复核分支查询时带上年份，并在候选循环里**再复核一遍**
+（TMDB 的年份查询并非严格过滤，无该年条目时会放宽返回）：
+
+```python
+cached_tmdb_infos = self.media.get_tmdb_infos(title=en_title,
+                                              year=match_media.year,
+                                              mtype=match_media.type,
+                                              page=1)
+```
+
+边界处理：**取不到年份的候选放行**（宁可交给后面的 id 比对，也不因
+TMDB 缺字段误杀）。电影看 `release_date`、剧集看 `first_air_date`，
+统一经 `_norm_year()` 归一化，与 v5.0.1 的年份口径一致。
+
+模拟 5 条同名候选（仅 1 条同 id）：改动前 4 条会被记「ID 不符」，
+改动后降到 1 条，目标本体仍在候选内。
+
+> 顺带澄清一个常见误判：`is_torrent_match_sey` 的年份分支看着像「严格相等会误杀」，
+> 实际它在 `merge_media_info` 之后执行，此时种子侧 `year` 已被卡片的
+> `release_date[0:4]` 覆盖，两侧同源 —— 该分支既不会误杀也拦不住东西。
+> 真正干活的年份闸门是 merge 之前执行的 `year_match`。
 
 ### 3. 跳转与入口优化
 
@@ -872,7 +907,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.7   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.8   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -975,4 +1010,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.6_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.8_
