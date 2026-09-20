@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -161,6 +161,19 @@ v5.0.3 把 M-Team 分支改回 `allow_redirects=False`，与普通站点分支�
 
 > 提醒：下载失败的通知需要在该消息客户端里勾选「下载失败」开关，
 > 否则失败是静默的，只能翻日志。
+
+#### 2.6 下载失败的原因不再丢失（v5.0.4）
+
+v5.0.4 之前，下载失败在日志里是**完全不可见**的：`__download_fail()` 只发事件与消息、
+不写日志，整个日志只剩一行插件的事件分发记录（`处理事件：download.fail`）。
+v5.0.4 起会明确打印：
+
+```
+【Downloader】馒头 逃出绝命街 添加下载任务失败：请检查下载任务是否已存在
+```
+
+同时记住一个容易误判的点：`download.add` 事件代表「**开始尝试**下载」，
+**不代表下载器已经收下任务** —— 取种子失败时它也会先发出来。
 
 ### 3. 跳转与入口优化
 
@@ -745,7 +758,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.4   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -848,4 +861,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.3_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.4_

@@ -289,6 +289,10 @@ class Downloader:
             """
             触发下载失败事件和发送消息
             """
+            # 把失败原因写进日志：原先只发事件与消息，日志里看不到任何原因，
+            # 排查「下载失败但界面无提示」时只能翻消息中心或外部插件。
+            log.error(f"【Downloader】{media_info.site or '未知站点'} "
+                      f"{media_info.get_title_string()} 添加下载任务失败：{msg or '未知原因'}")
             self.eventmanager.send_event(EventType.DownloadFail, {
                 "media_info": media_info.to_dict(),
                 "reason": msg
