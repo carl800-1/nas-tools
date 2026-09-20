@@ -39,6 +39,36 @@ _MATCH_FAIL_HINTS = {
 }
 
 
+def _norm_year(value):
+    """
+    把年份归一化成可直接比较的字符串
+
+    ⚠ 这个函数是给「类型不一致」擦屁股的，不是放松口径：
+
+      · 种子名一侧走 MetaVideoV2 + guessit，guessit 返回的 year 是 **int**（1999）；
+      · 目标媒体一侧由 set_tmdb_info 用 release_date[0:4] 赋值，是 **str**（"1999"）。
+
+    两边直接 `==` 比较恒为 False，于是出现「种子名里明明写着 1999，
+    却被判成『与 1999 年份不匹配』」——所有站点所有带年份的资源被全部误杀，
+    现场表现就是「返回数据 N 条，不匹配 N 条（年份不符 N），有效 0」。
+
+    这里只把两侧统一成字符串，比较口径仍然是**严格相等**，不多认一个年份。
+
+    :param value: 任意形态的年份（int / str / None）
+    :return: 归一化后的字符串，无法识别时返回空串
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    # 兼容 "1999-04-16"、"1999年" 这类带后缀的写法：只取前 4 位，且要求第 5 位不是数字
+    # （"19996" 这种不成形的值保持原样，避免把 5 位数误截成 4 位后反而匹配上）
+    if len(text) > 4 and text[:4].isdigit() and not text[4].isdigit():
+        return text[:4]
+    return text
+
+
 def _bump_match_fail(detail: dict, key: str):
     """
     给「不匹配」的某个子项计数
@@ -205,7 +235,8 @@ class _IIndexClient(metaclass=ABCMeta):
             for season in media_info.tmdb_info.seasons:
                 if season.air_date:
                     year = season.air_date[0:4]
-                    if meta_info.year == year:
+                    # 年份必须跨类型比较：种子名侧是 int（guessit 解析），TMDB 侧是 str（air_date[0:4]）
+                    if _norm_year(meta_info.year) == _norm_year(year):
                         return True
 
         return match
@@ -465,7 +496,11 @@ class _IIndexClient(metaclass=ABCMeta):
                 else:
                     index_rule_fail += 1
             except Exception as err:
-                print(str(err))
+                # 以前这里只 print 到 stdout：异常既不入日志也不计数，
+                # 出错的种子凭空消失，现场只看到「有效 0、错误 0」，
+                # 无法判断是「站点真没有」还是「程序内部报错」。
+                index_error += 1
+                log.error(f"【{self.client_name}】{locals().get('torrent_name', '')} 处理出错：{err}")
         # 循环结束
         # 计算耗时
         end_time = datetime.datetime.now()
@@ -554,7 +589,7 @@ class _IIndexClient(metaclass=ABCMeta):
                     continue
 
                 if meta_info.year:
-                    if meta_info.year == match_media.year:
+                    if _norm_year(meta_info.year) == _norm_year(match_media.year):
                         ratio = self.get_similarity(meta_info.get_name(), match_media, torrent_name, description)
                         # 年份相同，相似度，中，高，都认为通过
                         if ratio >= 0:
@@ -565,7 +600,10 @@ class _IIndexClient(metaclass=ABCMeta):
                             _bump_match_fail(match_fail_detail, "ratio")
                             continue
                     else:
-                        log.info(f"【{self.client_name}】{torrent_name} 与 {match_media.year} 年份不匹配")
+                        # 两侧年份都打出来。老文案只有「与 1999 年份不匹配」，
+                        # 当种子名里也写着 1999 时，现场完全看不出问题出在哪。
+                        log.info(f"【{self.client_name}】{torrent_name} 资源年份 {meta_info.year} "
+                                 f"与目标年份 {match_media.year} 不匹配")
                         index_match_fail += 1
                         _bump_match_fail(match_fail_detail, "year")
                         continue
@@ -731,7 +769,11 @@ class _IIndexClient(metaclass=ABCMeta):
                 else:
                     index_rule_fail += 1
             except Exception as err:
-                print(str(err))
+                # 以前这里只 print 到 stdout：异常既不入日志也不计数，
+                # 出错的种子凭空消失，现场只看到「有效 0、错误 0」，
+                # 无法判断是「站点真没有」还是「程序内部报错」。
+                index_error += 1
+                log.error(f"【{self.client_name}】{locals().get('torrent_name', '')} 处理出错：{err}")
         # 循环结束
         # 计算耗时
         end_time = datetime.datetime.now()
@@ -830,8 +872,11 @@ class _IIndexClient(metaclass=ABCMeta):
                                 original_title_norm in torrent_name_norm or \
                                 org_string_norm in description_norm or \
                                 original_title_norm in description_norm
-                    year_match = (not match_media.year) or match_media.year in torrent_name or \
-                                 match_media.year in description
+                    # 年份一侧是 str（TMDB release_date[0:4]），但 match_media 若来自未填 TMDB 的
+                    # MetaInfo 就会是 int（guessit 解析），直接 `in` 会 TypeError；统一成字符串再比，语义不变。
+                    _media_year = _norm_year(match_media.year)
+                    year_match = (not _media_year) or _media_year in torrent_name or \
+                                 _media_year in description
                 if (imdbid_match or name_match) and year_match and self.recognize_enhance_enable:
                     meta_info = MetaInfo(title=torrent_name,
                                          subtitle=f"{labels} {description}",
@@ -982,7 +1027,11 @@ class _IIndexClient(metaclass=ABCMeta):
                 else:
                     index_rule_fail += 1
             except Exception as err:
-                print(str(err))
+                # 以前这里只 print 到 stdout：异常既不入日志也不计数，
+                # 出错的种子凭空消失，现场只看到「有效 0、错误 0」，
+                # 无法判断是「站点真没有」还是「程序内部报错」。
+                index_error += 1
+                log.error(f"【{self.client_name}】{locals().get('torrent_name', '')} 处理出错：{err}")
         # 循环结束
         # 计算耗时
         end_time = datetime.datetime.now()

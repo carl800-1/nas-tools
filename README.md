@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -115,6 +115,30 @@ NAS-Tools 是一套运行在 NAS / 服务器上的 **媒体库自动化管理工
 - 结论**只指向最底层的失败项**：L1 连不上时不会再提示你去改选择器；
 - **最有用的一招**：把那个搜不到片名填进探针关键词，一次看清它死在哪一层；
 - **体检全绿却仍搜不到** → 结论会明确提醒你问题在「选词 / 判定层」，站点没问题，别再折腾站点。
+
+#### 2.4 判定层年份口径：跨类型比较（v5.0.1）
+
+v5.0.0 之后仍出现过「**全站零有效**」的极端情况，日志形如：
+
+```
+The Thirteenth Floor 1999 CEE BluRay 1080p x264 TrueHD 5.1-UBits 与 1999 年份不匹配
+Local:【Indexer】馒头 16 条数据中，过滤 0，不匹配 16（年份不符16），错误 0，有效 0
+```
+
+种子名里写着 `1999`、目标年份也是 `1999`，却被判「年份不匹配」。原因不是口径太严，
+而是**两侧年份的数据类型不同**：
+
+| 侧 | 来源 | 值 | 类型 |
+|---|---|---|---|
+| 种子名 | 增强识别V2 → `guessit` | `1999` | **int** |
+| 目标媒体 | `set_tmdb_info` → `release_date[0:4]` | `'1999'` | **str** |
+
+`1999 == '1999'` 恒为 `False` —— 所有带年份的资源被一次性误杀，只有名字里恰好没写年份的
+极少数种子能通过（更早那次「馒头 7 条中，不匹配 6，有效 1」就是它）。
+
+现在三处年份比较统一先做类型归一（**仍然严格相等**，不放松口径：目标年份 2011 的资源照样被拒），
+并且年份不匹配的日志会把**两侧的值都打出来**，同类问题下次一眼可见。
+另外判定层内部的异常不再被静默吞掉，而是计入「错误 E」并写入日志。
 
 ### 3. 跳转与入口优化
 
@@ -679,7 +703,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.0   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.1   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -782,4 +806,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.0_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.1_
