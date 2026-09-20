@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -381,6 +381,26 @@ Local:【Indexer】馒头 16 条数据中，过滤 0，不匹配 16（年份不�
 
 **输出格式容错**：模型返回的 JSON 即使被包在 Markdown 代码围栏里、或前后带说明文字，也能正常解析；确实解析不出来时会在日志里打出原始返回，便于定位。
 
+#### 6.7 工具调用协议的两个兼容性修复（v5.0.2）
+
+在飞书发纯片名（如「逃出绝命街」）曾出现 AI 回「抱歉，我这次没能正确理解你的指令」，
+而日志两行都在指向别处 —— 实际是**两个独立缺陷**叠加：
+
+| # | 日志里看到什么 | 根因 |
+|---|---|---|
+| 1 | `当前模型不支持 function calling（… function_call: data did not match any variant of untagged enum FunctionCall …），改用文本协议` | 请求体里显式传了 `function_call="auto"`，而部分网关的 `FunctionCall` 是**不接受字符串**的 untagged enum → 400。错误文本含 `function` 被误判成「模型不支持」，于是无谓降级 |
+| 2 | `模型输出疑似工具调用但未能识别，已拦下不外发：{…} </think> {…}` | 带思考的模型把工具调用**输出了两遍**、中间夹着思维链结束标签；旧解析取「首尾大括号之间」整段 `json.loads`，两个对象拼一起必然失败 |
+
+修复后：
+
+- **不再传 `function_call`**（OpenAI 规范中带 `functions` 时默认即为 `auto`），
+  该网关不再 400，直接走原生 function calling；
+- 解析前**先剥思维链**，并改用 `raw_decode()` 逐个 `{` 尝试 —— 解析出一个完整对象
+  就返回，天然忽略其后的多余内容（重复输出、尾随说明都不再是问题）；
+- 降级日志文案改为「原生 function calling 不可用」，不再把网关兼容问题说成模型能力问题。
+
+> 若你的后端**确实**不支持 functions，降级到文本协议的老兜底仍然保留，行为与之前一致。
+
 ### 7. 其他
 
 - 修复 `app/indexer/client/_base.py` 中「增强识别V2」误读配置键的问题（此前种子搜索路径上的识别增强闸门实际由「入库通知精简」开关控制，导致两个开关串线）；
@@ -703,7 +723,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.2   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -806,4 +826,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.1_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.2_

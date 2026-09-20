@@ -1,3 +1,85 @@
+# v5.0.2 (2026-09-20)
+
+## 修复：在飞书发片名时 AI 回「没能正确理解你的指令」，工具一次都没执行
+
+v5.0.1 发版后实测：在飞书里发一条纯片名（如「逃出绝命街」），AI 助手回了
+「抱歉，我这次没能正确理解你的指令。请换一种说法再说一遍」。日志形如：
+
+```
+当前模型不支持 function calling（***.BadRequestError: OpenAIException - {"error":
+{"message":"Invalid JSON data: Failed to deserialize the JSON body into the target
+type: function_call: data did not match any variant of untagged enum FunctionCall
+at line 1 column 51944","type":"invalid_request_error","code":"json_parse_error"}}），改用文本协议
+模型输出疑似工具调用但未能识别，已拦下不外发：{"tool": "search_media", "args": {"keyword": "逃出绝命街"}} </think> {"tool": "search_media", "args": {"keyword": "逃出绝命街"}}
+```
+
+这是**两个独立缺陷**叠在一起，第二个把第一个的兜底也吃掉了。
+
+### 缺陷一：请求体里多了一个网关不接受的 `function_call`
+
+`__agent_loop_functions` 显式传了 `function_call="auto"`，而该网关的 `FunctionCall`
+是一个**不接受字符串**的 untagged enum，反序列化请求体时直接 400：
+
+```
+function_call: data did not match any variant of untagged enum FunctionCall
+```
+
+错误文本里含 `function`，被 `_UnsupportedToolsError` 的判定条件捕获 → 日志打成
+「当前模型不支持 function calling」并降级 —— **看起来像模型/网关不支持，实际是
+我们多发了一个字段**。
+
+按 OpenAI 规范，请求里带 `functions` 时 `function_call` 默认即为 `auto`，该字段可以省略：
+
+```python
+completion = self.__get_model(message=messages,
+                              user=userid,
+                              functions=functions,
+                              timeout=90)   # 不再传 function_call="auto"
+```
+
+### 缺陷二：文本协议解析不了「思维链 + 重复输出」
+
+降级到文本协议后，带思考的模型（Qwen3 等）把工具调用**输出了两遍**，
+中间还夹着思维链结束标签：
+
+```
+{"tool": "search_media", "args": {"keyword": "逃出绝命街"}} </think> {"tool": "search_media", "args": {"keyword": "逃出绝命街"}}
+```
+
+旧实现取「首尾大括号之间」的整段再 `json.loads` —— 两个对象拼在一起必然失败。
+于是模型明明给出了正确的工具调用，守卫却只能把它拦下、重试、再回一句兜底话术，
+**用户什么也拿不到**。
+
+修复（`app/helper/openai_helper.py`）：
+
+- 新增 `_strip_thinking()` —— 剥掉思维链；只剩结束标签时**取它之后的内容**
+  （那才是最终答复，思维链里那份常是半成品参数）
+- 新增 `_extract_json_strict()` —— 改用 `json.JSONDecoder().raw_decode()` 逐个 `{`
+  尝试，解析出一个完整对象即返回，**天然忽略对象之后的多余内容**
+- `_extract_json_object()` 先剥思维链再解析，失败才回退原文
+- 文本协议提示词补一句「也不要在思考过程里重复输出」
+
+### 验证（426 项断言全通过）
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 首次请求是否带 `function_call` | 是（`"auto"`） | **否** |
+| 模拟该网关（拒绝字符串 `function_call`） | 400 → **降级到文本协议** | 原生 functions 走通，2 次调用 |
+| 该场景下工具是否真的执行 | **否** | 是（`action=version`，结果回填第 2 轮） |
+| 用户最终拿到 | 「没能正确理解你的指令」 | 正常答复 |
+
+`_nastool_agent_test.py` 231 项（本版新增 6 项，含上述严格网关复现）
++ `_check_agent_guard.py` 27 项 + `_nastool_agent_guide_test.py` 144 项
++ 解析专项 24 项（用日志原文反向复现了故障）。
+
+### 兼容性
+
+- 不带 `function_call` 的请求语义与 `"auto"` 完全等价，支持原生 function calling
+  的后端行为不变；
+- 若后端**确实**不支持 functions，降级链路原样保留，行为与之前一致（不劣化）；
+- 降级日志文案由「当前模型不支持 function calling」改为「原生 function calling
+  不可用」，避免再把网关兼容问题误报成模型能力问题；
+
 # v5.0.1 (2026-09-20)
 
 ## 紧急修复：所有带年份的资源被判「年份不匹配」

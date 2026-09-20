@@ -50,25 +50,94 @@ def _strip_code_fence(text):
     return s
 
 
-def _extract_json_object(text):
-    """
-    从模型输出里尽力取出一个 JSON 对象，成功返回 dict，否则返回 None
+# 在文本里找 JSON 时最多尝试的大括号起始位置数，防止超长输出退化成 O(n²)
+_JSON_SCAN_LIMIT = 20
 
-    容忍两种常见偏差：外层 markdown 代码围栏、前后多余的说明文字。
+# 带思考的模型（Qwen3 等）留在正文里的思维链标记
+_THINK_BLOCK_RE = re.compile(r"<think[^>]*>.*?</think[^>]*>", re.S | re.I)
+_THINK_END_RE = re.compile(r"</think[^>]*>|<\|/think\|>", re.I)
+
+
+def _strip_thinking(text):
+    """
+    剥掉带思考的模型残留在正文里的思维链
+
+    `</think>` 之前是模型的思考过程，既不是给用户看的答复，也不是工具调用。
+    现实中有两种残留：整段 `think ... /think` 原样返回、或开头被上游截掉只剩一个
+    孤立的结束标签。思维链里模型**常常自己先写了一版工具调用 JSON**，不剥掉
+    就会拿思维链那一份去执行（参数往往是半成品）。
+    """
+    s = str(text or "")
+    if not s:
+        return ""
+    # ① 成对的 think 块整体去掉
+    s = _THINK_BLOCK_RE.sub("", s)
+    # ② 只剩结束标签（开头被截断）：取最后一个结束标签之后的内容，那才是最终答复
+    ends = list(_THINK_END_RE.finditer(s))
+    if ends:
+        tail = s[ends[-1].end():].strip()
+        if tail:
+            s = tail
+    return s.strip()
+
+
+def _extract_json_strict(text):
+    """
+    在单段文本里找第一个能解析成功的 JSON 对象，找不到返回 None
+
+    用 JSONDecoder.raw_decode 逐个 `{` 试：解析出一个完整对象就返回，
+    **天然忽略该对象之后的多余内容**。旧实现是「取首尾大括号之间的整段再
+    json.loads」，遇到 `{...} 尾巴 {...}` 这种必然失败。
     """
     s = _strip_code_fence(text)
     if not s:
         return None
-    if not (s.startswith("{") and s.endswith("}")):
-        start, end = s.find("{"), s.rfind("}")
-        if start < 0 or end <= start:
-            return None
-        s = s[start:end + 1]
-    try:
-        data = json.loads(s)
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
+    # ① 整段恰好就是一个 JSON（最常见，省一次扫描）
+    if s.startswith("{"):
+        try:
+            data = json.loads(s)
+        except Exception:
+            pass
+        else:
+            if isinstance(data, dict):
+                return data
+    # ② 从每个 `{` 起尝试解析一个完整对象
+    decoder = json.JSONDecoder()
+    pos = s.find("{")
+    tries = 0
+    while pos >= 0 and tries < _JSON_SCAN_LIMIT:
+        tries += 1
+        try:
+            data, _ = decoder.raw_decode(s, pos)
+        except Exception:
+            pass
+        else:
+            if isinstance(data, dict):
+                return data
+        pos = s.find("{", pos + 1)
+    return None
+
+
+def _extract_json_object(text):
+    """
+    从模型输出里尽力取出一个 JSON 对象，成功返回 dict，否则返回 None
+
+    容忍三类常见偏差：
+    ① 外层 markdown 代码围栏；
+    ② 前后多余的说明文字、结尾标点；
+    ③ **思维链残留 + 重复输出** —— 形如 `{...} </think> {...}`。
+       这是带思考的模型与第三方中转最常见的一种：系统提示词里给了 JSON 示例，
+       模型便在思考段里也写了一版调用，正文再写一遍。旧实现取「首尾大括号
+       之间」的整段去 json.loads，必然失败返回 None -> 工具一次都没执行，
+       用户只收到「没能正确理解你的指令」。
+    """
+    for src in (_strip_thinking(str(text or "")), text):
+        data = _extract_json_strict(src)
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 
 
 def _looks_like_tool_call(text):
@@ -609,7 +678,7 @@ class OpenAiHelper:
         try:
             return self.__agent_loop_functions(userid, text, context, tools, ask_ctx, first_time)
         except _UnsupportedToolsError as err:
-            log.warn("【Agent】当前模型不支持 function calling（%s），改用文本协议" % str(err))
+            log.warn("【Agent】原生 function calling 不可用（%s），改用文本协议" % str(err))
             return self.__agent_loop_prompt(userid, text, context, tools, ask_ctx, first_time)
 
     def __agent_loop_functions(self, userid, text, context, tools, ask_ctx=None, first_time=False):
@@ -628,7 +697,6 @@ class OpenAiHelper:
                 completion = self.__get_model(message=messages,
                                               user=userid,
                                               functions=functions,
-                                              function_call="auto",
                                               timeout=90)
             except openai.error.OpenAIError as err:
                 err_text = str(err).lower()
@@ -847,7 +915,7 @@ class OpenAiHelper:
         if text_protocol:
             prompt += (
                 "\n输出格式（必须严格遵守）：\n"
-                "需要调用工具时，只输出一个 JSON，前后不要有任何其它文字：\n"
+                "需要调用工具时，只输出一个 JSON，前后不要有任何其它文字，也不要在思考过程里重复输出：\n"
                 '{"tool": "工具名", "args": {"参数名": "参数值"}}\n'
                 "不需要调用工具时，直接输出给用户的自然语言回复即可。\n"
             )
