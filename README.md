@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -194,6 +194,30 @@ v5.0.5 修掉两个会让「点下载没反应」的崩溃：
 
 > 排查口诀：`@singleton` 装饰过的类，**类体里不要再写 `类名.属性`** ——
 > 那时类名已经是个函数了。
+
+#### 2.8 事件分发日志：不再打印函数对象的内存地址（v5.0.6）
+
+v5.0.6 之前，日志里的事件分发记录是这样的：
+
+```
+处理事件：subtitle.download - [<function ChineseSubFinder.download at 0x7ff12ef285e0>, <function OpenSubtitles.download at 0x7ff12efe32e0>, <function Webhook.send at 0x7ff12ef97250>]
+```
+
+带内存地址、看不出插件全名，一行里挤三四个还换行。现在：
+
+```
+处理事件：subtitle.download - [ChineseSubFinder.download, OpenSubtitles.download, Webhook.send]
+处理事件：transfer.finished - [LibraryRefresh.refresh, Webhook.send]
+```
+
+同一个提交里还修了三处：
+
+- **「事件发了但插件没动静」**：原先用 `handler.__qualname__.split(".")[1]` 定位插件，
+  遇到没有点号的函数（模块级函数、`functools.partial`）会抛 `IndexError` 并被吞掉，
+  插件静默不执行。现在会明确告警是哪条监听函数没被识别；
+- **插件报错不进日志**：插件内部异常原先走 `print()`，只到 stdout，
+  `config/logs` 下的日志文件里完全看不到。现在改为 `log.error`，并带上插件名与方法名；
+- 每条事件处理的成功路径补了 debug 级记录，方便判断卡在哪个插件。
 
 ### 3. 跳转与入口优化
 
@@ -753,6 +777,30 @@ media:
 6. **历史文件补整理** → 下载管理 → 媒体整理 → 手动识别，或配置「目录同步」批量整理存量文件。
 7. **PT 维护（可选）** → 站点管理 → 刷流任务做保种；插件启用自动签到、自动删种、IYUU 辅种。
 
+### 远程搜索：自动择优下载是按什么选的
+
+在微信 / Telegram / 飞书里直接发片名时，若「设置 → 基础设置 → **远程搜索自动择优下载**」
+处于开启（**默认开启**），程序不会等你点选，而是按下面这套顺序**自己挑一条**下载：
+
+| 顺序 | 依据 | 说明 |
+|---|---|---|
+| 0 | **过滤** | 先淘汰不合格的：质量、分辨率、制作组、促销、包含 / 排除 / 关键字，以及**默认过滤规则组**（包含 / 排除 / 大小 / 促销）。命中规则会给出一个优先级 |
+| 1 | 片名 | 排序键第一段，把同名资源聚到一起 |
+| 2 | **过滤规则优先级** | 规则里「优先级」**数值越小越优先**（内部换算为 `100 - 优先级`） |
+| 3 | **站点优先级** | 站点管理里的优先级 / 索引器的站点顺序，同样**数值越小越优先** |
+| 4 | 做种数 | 做种越多越优先。把「下载优先规则」设为**做种数优先**时，这一项提前到第 3 位 |
+| 5 | 季集完整度 | 季、集更全的优先 |
+| 6 | **控重** | 最后按「片名 + 年份（+ 季 + 集）」去重，**每个版本只留排序第一的那条** |
+
+也就是说：最终**只会下一条**，它就是上面这套排序的第一名。
+
+想让程序「先给列表、自己点」：关掉
+「设置 → 基础设置 → 远程搜索自动择优下载」，之后会回一句「共搜索到 N 个资源，点击选择下载」。
+注意关闭后必须先维护好**外网访问地址**，否则那个跳转链接点不开。
+
+> 「下载优先规则」（默认 / 站点优先 / 做种数优先）也在「设置 → 基础设置」。
+
+
 ## 插件
 
 系统设置 → 插件，按需启用（共 30+ 个）：
@@ -778,7 +826,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.5   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.6   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -881,4 +929,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.5_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.6_

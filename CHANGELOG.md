@@ -1,3 +1,67 @@
+# v5.0.6 (2026-09-20)
+
+## 优化：事件分发日志不再打印函数对象的内存地址
+
+### 现象
+
+日志里的事件分发记录长这样（用户现场原文）：
+
+```
+处理事件：subtitle.download - [<function ChineseSubFinder.download at 0x7ff12ef285e0>, <function OpenSubtitles.download at 0x7ff12efe32e0>, <function Webhook.send at 0x7ff12ef97250>]
+处理事件：transfer.finished - [<function LibraryRefresh.refresh at 0x7ff12ef7b490>, <function Webhook.send at 0x7ff12ef97250>]
+```
+
+带着内存地址、看不出插件全名，一行里挤三四个还换行 —— 排查时基本读不出「谁在听这个事件」。
+
+### 改了什么
+
+**1. 只打「插件类.方法」，一行读完**
+
+`app/plugins/plugin_manager.py::__run` 新增模块级 `_handler_name()`：
+
+```
+处理事件：subtitle.download - [ChineseSubFinder.download, OpenSubtitles.download, Webhook.send]
+处理事件：transfer.finished - [LibraryRefresh.refresh, Webhook.send]
+```
+
+- `_handler_name()` 优先 `__qualname__`，退化为 `__name__`，最后才用 `repr` 并正则剥掉 ` at 0x...`
+  —— **不变量：显示名里永远不出现内存地址**；
+- 没有任何监听者时老实打 `处理事件：xxx - []`，而不是空一片。
+
+**2. 修掉一个静默失败：「事件发了，插件却一声不吭」**
+
+`handler.__qualname__.split(".")[1]` 对**没有点号的函数**（模块级函数、`functools.partial`）
+直接抛 `IndexError`，恰好被外层 `except` 吞掉 —— 事件已经分发出来，插件却没被执行，
+报错里也看不出是哪个插件。现在改为长度判断 + 一条可照做的告警：
+
+```
+事件处理跳过：transfer.finished - plain_handler 不是插件类的方法，无法定位所属插件
+```
+
+> 仍按 `split(".")` 取前两段，**没有改成 `rpartition`** —— 只修崩溃，不动原有语义。
+
+**3. 插件内部异常从 `print()` 改为 `log.error()`**
+
+原先只进 stdout，**写不到 `config/logs` 下的日志文件**，排障时等于不存在。
+现在带上插件名与方法名：
+
+```
+插件运行出错：AutoSub.download - RuntimeError: ... - Traceback ...
+```
+
+**4. 成功路径补一条 debug**
+
+`事件处理完成：transfer.finished - LibraryRefresh.refresh`，便于判断卡在哪个插件
+（需把日志级别调到 debug）。
+
+### 验证
+
+`_verify_v506_eventlog.py` 37 项断言：exec 真实 `plugin_manager.py`
+（去掉 `@singleton`，用 `__new__` 绕过 `__init__`）+ 桩 `log` + 假插件实例，
+**真跑一遍事件处理主循环**再核对日志文本；反向对照钉死 `b1089e3`（v5.0.5），
+旧版必须复现 `0x` 地址、`<function`、`IndexError` 与「异常不进日志」四件事。
+既有回归 132 项 0 失败，合计 169 项。
+
 # v5.0.5 (2026-09-20)
 
 ## 修复：点「下载」没反应 —— 消息中心序号崩溃 + 下载目录为空崩溃

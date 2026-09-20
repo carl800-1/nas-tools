@@ -1,4 +1,5 @@
 import os.path
+import re
 import traceback
 from threading import Thread
 
@@ -10,6 +11,23 @@ from app.utils import SystemUtils, PathUtils, ImageUtils
 from app.utils.commons import singleton
 from app.utils.types import SystemConfigKey
 from config import Config
+
+
+def _handler_name(handler):
+    """
+    事件监听函数的可读名称
+
+    优先 __qualname__（形如 ChineseSubFinder.download），退化为 __name__，
+    最后才用 repr —— 并用正则把 repr 里的内存地址也去掉。
+    不变量：返回的字符串永远不含 "at 0x..."，日志才能前后比对。
+    """
+    for attr in ("__qualname__", "__name__"):
+        name = getattr(handler, attr, None)
+        if name:
+            return name
+    # 走到这里的是 functools.partial 之类既没有 __name__ 也没有 __qualname__ 的
+    # 可调用对象，repr 形如 functools.partial(<function f at 0x7f...>)
+    return re.sub(r" at 0x[0-9a-fA-F]+", "", repr(handler))
 
 
 @singleton
@@ -62,13 +80,26 @@ class PluginManager:
         while self._active:
             event, handlers = self.eventmanager.get_event()
             if event:
-                log.info(f"处理事件：{event.event_type} - {handlers}")
-                for handler in handlers:
+                # 只打「插件类.方法」这种可读名。直接插值 handlers 会打出
+                # [<function ChineseSubFinder.download at 0x7ff...>, ...] ——
+                # 带着内存地址、看不出插件全名，一行里挤三四个还换行，排查时纯噪音
+                names = [_handler_name(handler) for handler in handlers]
+                log.info(f"处理事件：{event.event_type} - [{', '.join(names)}]")
+                for handler, name in zip(handlers, names):
+                    # 仍按 split(".") 取前两段，不改成 rpartition —— 只为修崩溃、不改原语义。
+                    # 没有点号的函数（模块级函数、functools.partial）原写法直接抛 IndexError，
+                    # 被下面的 except 吞掉，表现成「事件发了但插件没动静」
+                    parts = name.split(".")
+                    if len(parts) < 2:
+                        log.warn(f"事件处理跳过：{event.event_type} - {name} "
+                                 f"不是插件类的方法，无法定位所属插件")
+                        continue
                     try:
-                        names = handler.__qualname__.split(".")
-                        self.run_plugin(names[0], names[1], event)
+                        self.run_plugin(parts[0], parts[1], event)
+                        log.debug(f"事件处理完成：{event.event_type} - {name}")
                     except Exception as e:
-                        log.error(f"事件处理出错：{str(e)} - {traceback.format_exc()}")
+                        log.error(f"事件处理出错：{event.event_type} - {name} - "
+                                  f"{str(e)} - {traceback.format_exc()}")
 
     def start_service(self):
         """
@@ -132,7 +163,9 @@ class PluginManager:
         try:
             return getattr(self._running_plugins[pid], method)(*args, **kwargs)
         except Exception as err:
-            print(str(err), traceback.format_exc())
+            # print 只进 stdout，写不到 config/logs 下的日志文件；
+            # 插件报错是排查时的关键信息，必须落到日志里，并带上插件名与方法名
+            log.error(f"插件运行出错：{pid}.{method} - {str(err)} - {traceback.format_exc()}")
 
     def reload_plugin(self, pid):
         """
