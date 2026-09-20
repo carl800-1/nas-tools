@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.0.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -139,6 +139,28 @@ Local:【Indexer】馒头 16 条数据中，过滤 0，不匹配 16（年份不�
 现在三处年份比较统一先做类型归一（**仍然严格相等**，不放松口径：目标年份 2011 的资源照样被拒），
 并且年份不匹配的日志会把**两侧的值都打出来**，同类问题下次一眼可见。
 另外判定层内部的异常不再被静默吞掉，而是计入「错误 E」并写入日志。
+
+#### 2.5 种子链接下载：302 重定向与磁力链（v5.0.3）
+
+搜索完成后，nas-tools 还要把命中的种子从站点拉回本地、再交给下载器。这一步在
+M-Team 上曾经必然失败，日志只有一句：
+
+```
+无法打开链接：https://api.m-team.cc/api/rss/dlv2?sign=...&tid=...&uid=...
+```
+
+原因是 M-Team 走专属通道 `MteamUtils.get_mteam_torrent_req()`，那里用了
+`allow_redirects=True`，重定向在请求层就被跟完了 —— 而 `save_torrent_file()`
+里专门识别 **302 → `magnet:`** 的那段循环因此成了死代码。`requests` 不支持
+`magnet:` 协议，跟随时会抛 `InvalidSchema`，被 `get_res()` 的 `except` 吞成
+`None`，于是对外只剩「无法打开链接」。
+
+v5.0.3 把 M-Team 分支改回 `allow_redirects=False`，与普通站点分支走同一套重定向
+处理，磁力链得以被正确识别；同时让 `get_res(raise_exception=True)` 抛出带原始
+信息的异常实例，并在失败时记录 `【MTeam】获取种子链接失败：<类型>: <原因>`。
+
+> 提醒：下载失败的通知需要在该消息客户端里勾选「下载失败」开关，
+> 否则失败是静默的，只能翻日志。
 
 ### 3. 跳转与入口优化
 
@@ -723,7 +745,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.2   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.0.3   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -826,4 +848,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.2_
+_Last updated: 2026-09-20 ｜ 当前版本 v5.0.3_

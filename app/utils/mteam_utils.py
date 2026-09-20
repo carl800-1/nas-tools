@@ -1,5 +1,7 @@
 from urllib.parse import urlparse
 
+import log
+
 from app.utils import RequestUtils, StringUtils
 from config import Config
 
@@ -72,14 +74,26 @@ class MteamUtils:
 
     @staticmethod
     def get_mteam_torrent_req(url, ua=None, referer=None, proxy=False):
-        req = MteamUtils.buildRequestUtils(
-            api_key=MteamUtils.get_api_key(url),
-            headers=ua,
-            referer=referer,
-            proxies=Config().get_proxies() if proxy else None
-        ).get_res(url=url, allow_redirects=True)
+        """
+        请求 M-Team 种子链接，返回原始响应（**不自动跟随重定向**）
 
-        return req
+        这里必须 allow_redirects=False：M-Team 的 dlv2 链接经常返回 302，
+        目标既可能是种子文件地址，也可能是磁力链（magnet:?xt=...）。
+        调用方 Torrent.save_torrent_file 有一段 while 循环专门处理 301/302
+        并识别 magnet:，若在此处就自动跟随，requests 遇到 magnet: 协议会抛
+        InvalidSchema（被 RequestUtils.get_res 吞成 None），对外只剩一句
+        「无法打开链接」，真正的失败原因完全看不到。
+        """
+        try:
+            return MteamUtils.buildRequestUtils(
+                api_key=MteamUtils.get_api_key(url),
+                headers=ua,
+                referer=referer,
+                proxies=Config().get_proxies() if proxy else None
+            ).get_res(url=url, allow_redirects=False, raise_exception=True)
+        except Exception as err:
+            log.error(f"【MTeam】获取种子链接失败：{type(err).__name__}: {str(err)}")
+            return None
 
     @staticmethod
     def get_api_key(url):

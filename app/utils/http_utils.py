@@ -126,7 +126,11 @@ class RequestUtils:
                                     allow_redirects=allow_redirects)
         except requests.exceptions.RequestException as e:
             if raise_exception:
-                raise requests.exceptions.RequestException
+                # 必须抛「实例」(e) 而不是「类」：抛类会丢掉原始异常信息，
+                # 上层只能看到一个空的 RequestException，无法区分是超时、
+                # 连接被拒，还是协议不支持（例：跟随 302 到 magnet: 时
+                # 抛出的 InvalidSchema），排障时完全抓瞎。
+                raise e
             return None
 
     def post_res(self, url, data=None, params=None, allow_redirects=True, files=None, json=None):

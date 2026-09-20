@@ -1,3 +1,74 @@
+# v5.0.3 (2026-09-20)
+
+## 修复：搜到了资源却下载不动 —— M-Team 种子链接的 302 重定向被错误跟随
+
+关闭 AI 助手后，在飞书发一条纯片名（如「逃出绝命街」），本地搜索链路一切正常：
+
+```
+所有站点搜索完成，有效资源数：8，总耗时 15 秒
+候选名「The End of Oak Street」搜索到 8 条，合并去重后共 8 条（原 4 条）
+```
+
+但紧接着就卡在下载环节，3 秒后失败：
+
+```
+无法打开链接：https://api.m-team.cc/api/rss/dlv2?sign=e2c280e01ae05c2e4e5b03fc4eb40f11&t=1789882748&tid=1253303&uid=351045
+处理事件：download.fail - [<function Webhook.send at 0x7f75edf885e0>]
+```
+
+而用户侧完全静默 —— 搜索明明成功了，却什么都没拿到。
+
+### 根因：一个被「跟随」掉的重定向
+
+`app/utils/torrent.py` 的 `save_torrent_file()` 里本来有一段专门处理重定向的循环，
+能识别 **302 → `magnet:`** 这种情况：
+
+```python
+while req and req.status_code in [301, 302]:
+    url = req.headers['Location']
+    if url and url.startswith("magnet:"):
+        return None, url, f"获取到磁力链接：{url}"
+```
+
+但 M-Team 走的是专属通道 `MteamUtils.get_mteam_torrent_req()`，那里用的是
+`allow_redirects=True` —— **重定向在请求层就被跟完了**，上面那段循环在 M-Team
+场景下永远是死代码。
+
+M-Team 的 `dlv2` 链接经常直接 302 到磁力链，而 `requests` 不支持 `magnet:` 协议，
+跟随时会抛 `InvalidSchema`（`RequestException` 的子类），被 `RequestUtils.get_res()`
+的 `except` 静默吞成 `None`，对外只剩一句「无法打开链接」，真实原因完全不可见。
+
+### 修复（3 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/utils/mteam_utils.py` | `get_mteam_torrent_req()` 改为 `allow_redirects=False`，把重定向交回上层循环统一处理（与普通站点分支一致）；同时 `raise_exception=True`，失败时记录 `【MTeam】获取种子链接失败：<类型>: <原因>` |
+| `app/utils/http_utils.py` | `get_res(raise_exception=True)` 由 `raise <异常类>` 改为 `raise e`，不再丢掉原始异常信息 |
+| `app/utils/torrent.py` | 修正 `f"mteam 种子链接获取出错，详情地址为 {url}"` —— 此处 `url` 已被覆盖为 `None`，报错等于没给线索，改为保留 `origin_url` |
+
+### 验证
+
+新增 `_verify_v503_mteam.py`，**用真实 `requests` + 本地 HTTP 服务**复现 302，
+而不是模拟：
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| 层1 | 真实 `RequestUtils`：`allow_redirects=True` + 302→magnet → 返回 `None` | 精确复现「无法打开链接」 |
+| 层1 | 真实 `RequestUtils`：`allow_redirects=False` → 拿到 302 原始响应 | 修复生效 |
+| 层2 | 真实 `save_torrent_file()` 切片跑完整链路：旧参数报错 / 新参数拿到磁力链 | 反向复现 + 正向通过 |
+| 层3 | 真实 `MteamUtils`：确认传参正确、且仍走站点 api_key 鉴权 | 通过 |
+
+11 项断言全部通过；既有回归 426 项（agent 231 + guard 27 + guide 144 + 解析 24）
+0 失败。
+
+### 附带说明
+
+- 本版**没有**改动搜索与判定逻辑，v5.0.1 的年份修复、v5.0.2 的协议修复原样保留。
+- 下载失败的通知受消息客户端里「下载失败」开关控制（设置 → 通知 → 编辑对应客户端）。
+  没勾选时失败是静默的，建议开启，否则出问题只能翻日志。
+- 若本版之后仍出现下载失败，日志里会有明确的
+  `【MTeam】获取种子链接失败：<异常类型>: <原因>`，可直接看出是超时、连接被拒还是协议问题。
+
 # v5.0.2 (2026-09-20)
 
 ## 修复：在飞书发片名时 AI 回「没能正确理解你的指令」，工具一次都没执行
