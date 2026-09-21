@@ -1,3 +1,69 @@
+# v5.1.1 (2026-09-21)
+
+## 修复：内置索引器补充 PTzone，站点体检 L0b 不再失败
+
+### 现象
+
+「PTzone」站点体检在 **L0b** 失败，提示「找不到该站点的索引器定义」，
+搜索时该站被静默跳过；而用浏览器访问完全正常。
+
+面板上同时显示「探针搜索未成功：请求超时或被拒绝」，容易让人误判成网络问题。
+
+### 原因
+
+内置索引器库里**没有这个站**。L0b 由 `app/sites/site_health.py::__get_indexer()` →
+`ProUser().get_indexer()` 判断：它把站点地址与内置规则**按域名**逐一比对，
+比对不到即判 L0b 失败。内置库 110 条规则中确实没有任何 ptzone 相关项。
+
+两处容易误读的地方顺带说明：
+
+- 「探针搜索未成功」出现在 **L5**，是 L0b 之后的表现，不是独立原因；
+- 在仓库源码里 `grep` 站名**一条都搜不到** —— 因为索引器规则并不写在 `.py` 里，
+  而是放在 `web/backend/user.sites.bin`（base64 编码的 JSON）。
+
+### 改动
+
+只改 `web/backend/user.sites.bin`（内置索引器库），**只新增、不删改**：
+
+- `indexer` 追加一条 `id=ptzone` / `domain=https://www.ptzone.xyz/`，
+  位置紧邻同族的大青虫（两者同为 NexusPHP，分类 ID 相同，便于对照维护）
+- `conf` 追加键 `ptzone.xyz`，提供详情页 `FREE` / `2XFREE` / `HR` / `PEER_COUNT` 的 XPath
+
+第二处不可省：`app/sites/siteconf.py::check_torrent_attr()` 在 `conf` 取不到该站时
+**直接返回默认值**，也就是免费与 HR 判定恒为假 —— 会让该站的刷流「免费识别」
+全部失效（把非免费种子当免费下载）。
+
+### 依据
+
+规则不是靠猜，均取自该站点专属来源：
+
+| 项 | 来源 |
+|---|---|
+| 站型为 NexusPHP | PTPP `resource/sites/www.ptzone.xyz/config.json` 标 `schema=NexusPHP`；站点实际返回标题 `PTzone :: 登錄 - Powered by NexusPHP` |
+| 分类 ID 401/402/403/404/405 | Jackett `Definitions/ptzone.yml` 的 `categorymappings`，并与 easy-upload `PTZone.yaml`、nexus-media `sites/html/ptzone.json` 三个来源一致 |
+| `conf` 的 XPath | nexus-media 的 `ptzone.json` |
+
+字段机件沿用本仓库中 **86 个同形 NexusPHP 站**的模板，以保证与本仓
+`app/indexer/client/_spider.py::__filter_text` 已实现的过滤器集合严格一致。
+
+### 验证
+
+离线、走真实代码路径（非纸面推演）：
+
+- 写库前先确认 `base64(compact JSON)` 能**逐字节复现**原文件，才允许动内容；
+- L0b：用真实 `StringUtils.get_url_domain()` 匹配 `ptzone.xyz` / `www.ptzone.xyz/` /
+  带路径的 URL 均命中（`www.` 会被归一化剥掉，两种填法等效）；
+- 搜索 URL：加载真实 `_spider.py` 走 `start_requests()`，电影搜索得到 `cat401=1`、
+  电视剧搜索得到 `cat402..405=1`，路径 `torrents.php` 正确；
+- `conf`：用真实 `lxml` 复刻判定逻辑，跑 6 组页面（2X免费 / 仅免费 / 仅 2X / 普通 /
+  50% / 带 hitandrun）全部符合预期，其中「仅 2X」**不会**被误判为下载免费；
+- 回归：原有 110 条规则与 96 个原有 `conf` 键**零改动**。
+
+### 使用
+
+站点管理里确认该站地址为 `https://www.ptzone.xyz/`（或 `https://ptzone.xyz/`，两者等效），
+并确保该站已在「索引器」页勾选；重新体检应显示 L0b 通过。
+
 # v5.1.0 (2026-09-21)
 
 ## 修复：单页片段脚本二次注入失效，站点/服务页整页按钮失灵
