@@ -1,3 +1,80 @@
+# v5.1.0 (2026-09-21)
+
+## 修复：单页片段脚本二次注入失效，站点/服务页整页按钮失灵
+
+### 现象
+
+「站点」页的**连通性测试**按钮点了完全没反应 —— 连按钮文字都不变（不是卡在
+「测试中...」）。同页的「添加站点」「编辑」等按钮也一并失效。
+
+关键特征：**F5 整页刷新后首次进入正常，切到别的页面再切回来就坏**，
+所以看起来时好时坏。
+
+### 原因
+
+这个 Web 是单页结构：`navigation.html` 是框架，页面片段通过
+`web/static/js/functions.js:70` 的 `page_content.html(data)` 注入 `#page_content`。
+jQuery 的 `.html()` **会执行**片段里的 `<script>` ——
+也就是说 **每点一次导航菜单，片段脚本就重新执行一次**。
+
+而片段里存在**顶层 `let` / `const` 声明**：
+
+```js
+let SITEHEALTH_SITEID = null;      // web/templates/site/site.html
+let backup_item_defs = [];         // web/templates/service.html
+const rankingCache = new Map();    // web/templates/site/statistics.html
+```
+
+顶层 `let`/`const` 在全局作用域**只能声明一次**。第二次注入时抛出：
+
+```
+Uncaught SyntaxError: Identifier 'SITEHEALTH_SITEID' has already been declared
+```
+
+这个错误的时机是关键：它发生在**全局声明实例化阶段**，**先于任何语句执行** ——
+所以整段脚本**一句都不执行**，包括末尾的
+`$("#sitetest_btn").unbind("click").click(...)` 按钮绑定。
+
+而 `function show_sitetest_modal()` 早在第一次注入时就已经提升为全局函数，
+**弹窗照样能打开** —— 于是形成「弹窗能开、里面所有按钮全死」这个特征签名。
+
+### 三处来源
+
+| 文件 | 顶层声明 | 引入提交 | 归属 |
+|---|---|---|---|
+| `web/templates/site/site.html` | `let SITEHEALTH_SITEID` | `233272e` | v5.0.0 站点体检 |
+| `web/templates/service.html` | `let backup_item_defs` | `1944403` | v4.1.0 备份条目化 |
+| `web/templates/site/statistics.html` | `const rankingCache` | `ace0398` | 上游 |
+
+### 改动
+
+三处顶层 `let`/`const` 一律改为 `var`（`var` 重复声明合法），各加一行
+防回退注释说明原因。共 3 个文件 +8/-3。
+
+### 验证
+
+1. **真实脚本块 A/B 对照**：从仓库直接取出 `site.html` / `service.html` /
+   `statistics.html` 的脚本块，走与线上完全相同的 jQuery 注入路径，各注入两次。
+
+   | 文件 | 修复前（第 2 次注入） | 修复后（第 2 次注入） |
+   |---|---|---|
+   | `site.html` | 执行 0 次、未跑到末尾、`already been declared` | 执行 1 次、跑到末尾、0 错误 |
+   | `service.html` | 同上 | 执行 1 次、跑到末尾、0 错误 |
+   | `statistics.html` | `already been declared` | 不再出现该错误 |
+
+2. 三个脚本块 `node --check` 全部通过。
+3. 全仓库片段扫描（`web/templates/**/*.html`）→ 顶层 `let`/`const` 违规 **0 处**。
+
+### 附：两个次要缺陷（本版未修）
+
+- 站点测试弹窗里**一个站都没勾选**时，按钮会永久卡在「测试中...」（无参数校验）。
+- `ajax_post` 的错误分支只处理 `status === 200`，其余（500 / 登录态失效重定向）
+  一律静默，同样表现成「点了没反应」。
+
+## 版本号
+
+- 从 v5.0.8 升级至 v5.1.0
+
 # v5.0.8 (2026-09-20)
 
 ## 修复：在线复核不筛年份，导致「ID 不符」刷屏
