@@ -280,12 +280,11 @@ class Qbittorrent(_IDownloadClient):
         trans_tasks = []
         for torrent in torrents:
             torrent_tags = torrent.get("tags") or ""
-            # 已含「整理标记标签」的不处理（标签名可由用户在 config.yaml 自定义，
-            # 该标签需要用户自行填写，程序不会自动添加）
-            if Tags.is_organized(torrent_tags):
+            # 已整理过的（查程序自己的转移账本）不再处理
+            if self.is_transferred(torrent.get("hash")):
                 continue
             # 开启标签隔离，未包含指定标签的不处理
-            if tag and tag not in torrent_tags:
+            if tag and tag not in (torrent_tags or "").split(","):
                 log.debug(f"【{self.client_name}】{self.name} 开启标签隔离， {torrent.get('name')} 未包含指定标签：{tag}")
                 continue
             path = torrent.get("save_path")

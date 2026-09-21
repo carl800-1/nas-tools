@@ -116,12 +116,12 @@ class TorrentTransfer(_IPluginModule):
                         {
                             'title': '转移做种任务标签',
                             'required': "",
-                            'tooltip': '转移做种添加下载时给种子打上的标签，多个标签使用英文,分隔。程序不会自动追加任何标签（历史版本的「已整理」「转移做种」已改为由你自行填写），留空则不打标签。',
+                            'tooltip': '转移做种添加下载时给种子打上的标签，多个标签使用英文,分隔。程序不会自动追加任何标签，留空则不打标签。',
                             'type': 'text',
                             'content': [
                                 {
                                     'id': 'torrent_tags',
-                                    'placeholder': '留空则不打标签，如：已整理,转移做种',
+                                    'placeholder': '留空则不打标签，如：转移做种',
                                 }
                             ]
                         }

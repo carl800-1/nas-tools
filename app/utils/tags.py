@@ -12,6 +12,12 @@
 **程序不再向用户标签集合里追加任何默认标签**，只保留「读取」能力：如果用户
 自己在上面任一位置填写了同名标签，程序依然认得它。
 
+自 v5.2.0 起，「某任务是否已整理过」的判断改为查程序自己的转移账本
+（``TRANSFER_LEDGER`` 表，见 ``app/helper/db_helper.py``），不再依赖下载器标签。
+原因是旧做法在 qBittorrent 上从未真正生效（``get_transfer_task`` 不返回 tags），
+且会把程序内部状态暴露在下载器的标签界面上。本模块因此不再提供
+``is_organized`` / ``get_organized_tag``。
+
 分隔符统一为英文逗号 ``,``。历史版本在下载设置 / 站点标签处按分号 ``;`` 拆分，
 与刷流任务侧的逗号拆分不一致，导致用分号分隔的标签永远匹配不上，本模块统一修正。
 """
@@ -24,9 +30,6 @@ TAG_SEPARATOR = ","
 # 兼容历史写法：分号同样视为分隔符，避免用户旧配置里的标签变成一个整体
 LEGACY_SEPARATORS = (";", "；", "，", "\n", "|")
 
-# 标签库 / 整理标记在 config.yaml 中的默认值
-DEFAULT_ORGANIZED_TAG = "已整理"
-
 
 class Tags:
     """
@@ -34,7 +37,6 @@ class Tags:
     """
 
     SEPARATOR = TAG_SEPARATOR
-    DEFAULT_ORGANIZED_TAG = DEFAULT_ORGANIZED_TAG
 
     @staticmethod
     def _get_pt_config():
@@ -125,35 +127,6 @@ class Tags:
         current["pt"]["tags"] = TAG_SEPARATOR.join(normalized)
         config.save_config(current)
         return normalized
-
-    @staticmethod
-    def get_organized_tag():
-        """
-        读取「整理标记」标签名。
-
-        程序**只读不写**：仅用于判断某任务是否已被整理过，避免重复整理。
-        用户可在 config.yaml 里把它改成自己习惯的名字（例如「已转移」）。
-
-        :return: 标签名，未配置时返回 None（表示不做整理去重保护）
-        """
-        configured = Tags._get_pt_config().get("tag_organized")
-        if configured is None:
-            return DEFAULT_ORGANIZED_TAG
-        name = str(configured).strip()
-        return name or None
-
-    @staticmethod
-    def is_organized(tags):
-        """
-        判断标签集合中是否已包含「整理标记」标签。
-
-        :param tags: 字符串或列表形式的标签
-        :return: bool
-        """
-        organized_tag = Tags.get_organized_tag()
-        if not organized_tag:
-            return False
-        return organized_tag in Tags.split(tags)
 
     @staticmethod
     def merge(*sources):

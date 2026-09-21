@@ -548,6 +548,31 @@ class TRANSFERUNKNOWN(Base):
     STATE = Column(Text, index=True)
 
 
+class TRANSFERLEDGER(Base):
+    """
+    转移账本：记录「已转移过的种子」，用于跳过重复整理。
+
+    替代旧版「往下载器打 已整理 标签」的做法 —— 旧做法在 qBittorrent 上从未真正生效
+    （get_transfer_task 不返回 tags，导致写入的永远是 None），且会把内部状态
+    暴露在下载器的标签界面上。本表把这份状态收归程序自己的数据库。
+
+    与 TRANSFER_HISTORY 的区别：后者是给用户看的转移记录（会被 /trh 清空、
+    只在转移成功且识别出媒体信息时才写入）；本表是程序自己用的去重标记，
+    只要转移流程跑过就登记，且**不接入任何用户可触发的清空入口**。
+    表内数据由 downloader 的定期清理（行数上限 + 过期天数）自行回收。
+    """
+    __tablename__ = 'TRANSFER_LEDGER'
+
+    ID = Column(Integer, Sequence('ID'), primary_key=True)
+    DOWNLOADER = Column(Text, index=True)
+    TORRENT_ID = Column(Text, index=True)
+    PATH = Column(Text)
+    DATE = Column(Text, index=True)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
 class USERRSSTASKHISTORY(Base):
     __tablename__ = 'USERRSS_TASK_HISTORY'
 

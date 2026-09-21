@@ -82,6 +82,22 @@ class _IDownloadClient(metaclass=ABCMeta):
         """
         pass
 
+    def is_transferred(self, torrent_id):
+        """
+        查询种子是否已整理过（查程序自己的转移账本，与下载器标签无关）
+
+        账本是本程序维护的去重记录：转移成功即登记，下次不再重复处理。
+        不再依赖下载器里的「已整理」标签 —— 该标签在 qBittorrent 上从未被真正写入过。
+
+        :param torrent_id: 种子 hash
+        :return: bool
+        """
+        try:
+            from app.helper import DbHelper
+            return DbHelper().is_transferred(self.client_id, torrent_id)
+        except Exception:
+            return False
+
     @abstractmethod
     def get_transfer_task(self, tag, match_path=None):
         """

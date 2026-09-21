@@ -1,4 +1,5 @@
 import os
+import time
 from threading import Lock
 from enum import Enum
 import json
@@ -95,6 +96,8 @@ class Downloader:
     # 下载器ID-名称枚举类
     _DownloaderEnum = None
     _scheduler = None
+    # 转移账本上次清理时间（节流用，1 小时最多清一次）
+    __ledger_prune_time = 0
 
     message = None
     mediaserver = None
@@ -608,6 +611,8 @@ class Downloader:
         """
         转移下载完成的文件，进行文件识别重命名到媒体库目录
         """
+        # 定期清理转移账本（复用本调度，不额外起定时器）
+        self.__prune_transfer_ledger()
         downloader_ids = [downloader_id] if downloader_id \
             else self._monitor_downloader_ids
         for downloader_id in downloader_ids:
@@ -634,16 +639,50 @@ class Downloader:
                         rmt_mode=rmt_mode)
                     if not done_flag:
                         log.warn(f"【Downloader】下载器 {name} 任务%s 转移失败：%s" % (task.get("path"), done_msg))
-                        _client.set_torrents_status(ids=task.get("id"),
-                                                    tags=task.get("tags"))
-                    else:
-                        if rmt_mode in [RmtMode.MOVE, RmtMode.RCLONE, RmtMode.MINIO]:
-                            log.warn(f"【Downloader】下载器 {name} 移动模式下删除种子文件：%s" % task.get("id"))
-                            _client.delete_torrents(delete_file=True, ids=task.get("id"))
-                        else:
-                            _client.set_torrents_status(ids=task.get("id"),
-                                                        tags=task.get("tags"))
+                        # 失败不登记账本，下轮会重试
+                        continue
+                    # 登记转移账本，避免下轮重复整理
+                    # （不再往下载器写「已整理」标签 —— 该状态由程序自己维护）
+                    self.__ledger_add(downloader_id, task.get("id"), task.get("path"))
+                    if rmt_mode in [RmtMode.MOVE, RmtMode.RCLONE, RmtMode.MINIO]:
+                        log.warn(f"【Downloader】下载器 {name} 移动模式下删除种子文件：%s" % task.get("id"))
+                        _client.delete_torrents(delete_file=True, ids=task.get("id"))
                 log.info(f"【Downloader】下载器 {name} 下载文件转移结束")
+
+    def __ledger_add(self, downloader_id, torrent_id, path=None):
+        """
+        登记转移账本（开关关闭或异常时静默跳过）
+        """
+        pt_conf = Config().get_config("pt") or {}
+        if not pt_conf.get("ledger_enable", True):
+            return
+        try:
+            max_rows = NumberUtils.get_int(pt_conf.get("ledger_max_rows", 5000), 5000)
+            DbHelper().insert_transfer_ledger(downloader=downloader_id,
+                                              torrent_id=torrent_id,
+                                              path=path,
+                                              max_rows=max_rows)
+        except Exception as err:
+            log.debug(f"【Downloader】登记转移账本失败：{str(err)}")
+
+    def __prune_transfer_ledger(self):
+        """
+        周期性清理转移账本中过期的记录（1 小时最多执行一次）
+        """
+        now = time.time()
+        if now - self.__ledger_prune_time < 3600:
+            return
+        self.__ledger_prune_time = now
+        try:
+            pt_conf = Config().get_config("pt") or {}
+            if not pt_conf.get("ledger_enable", True):
+                return
+            expire_days = NumberUtils.get_int(pt_conf.get("ledger_expire_days", 90), 90)
+            deleted = DbHelper().prune_transfer_ledger(expire_days=expire_days)
+            if deleted:
+                log.info(f"【Downloader】转移账本清理完成，移除 {deleted} 条过期记录")
+        except Exception as err:
+            log.debug(f"【Downloader】转移账本清理失败：{str(err)}")
 
     def get_torrents(self, downloader_id=None, ids=None, tag=None):
         """

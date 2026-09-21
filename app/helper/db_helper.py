@@ -1630,6 +1630,113 @@ class DbHelper:
             DOWNLOADHISTORY.DOWNLOAD_ID == download_id
         ).order_by(DOWNLOADHISTORY.DATE.desc()).first()
 
+    # ------------------------------------------------------------------
+    # 转移账本（TRANSFER_LEDGER）
+    #
+    # 用于判断某个种子是否「已经整理过」，从而跳过重复转移。
+    # 旧版把这份状态写成下载器里的「已整理」标签，但该做法在 qBittorrent 上
+    # 从未真正生效（get_transfer_task 不返回 tags），且会污染下载器标签界面。
+    # 改为存在本表后：只读不写下载器，去重判断真正可靠。
+    # ------------------------------------------------------------------
+
+    def is_transferred(self, downloader, torrent_id):
+        """
+        查询种子是否已在转移账本中（即已整理过）
+
+        :param downloader: 下载器 ID
+        :param torrent_id: 种子 hash
+        :return: bool
+        """
+        if not torrent_id:
+            return False
+        try:
+            count = self._db.query(TRANSFERLEDGER).filter(
+                TRANSFERLEDGER.DOWNLOADER == str(downloader),
+                TRANSFERLEDGER.TORRENT_ID == str(torrent_id)
+            ).count()
+            return count > 0
+        except Exception:
+            # 表尚未创建（升级过程中的窗口期）时按「未转移」处理，宁可多扫一轮
+            return False
+
+    @DbPersist(_db)
+    def insert_transfer_ledger(self, downloader, torrent_id, path=None, max_rows=None):
+        """
+        登记一条转移记录（已存在则忽略）。
+
+        超出 max_rows 上限时，自动删除最老的一部分记录（保留 80%），
+        保证表不会无限增长 —— 这是不依赖定时器的硬性上限保护。
+
+        :param downloader: 下载器 ID
+        :param torrent_id: 种子 hash
+        :param path: 转移时的源路径（仅用于排查，可为空）
+        :param max_rows: 行数上限，None 或 <=0 表示不限制
+        :return: bool 是否新增
+        """
+        if not torrent_id:
+            return False
+        downloader = str(downloader)
+        torrent_id = str(torrent_id)
+        try:
+            exists = self._db.query(TRANSFERLEDGER).filter(
+                TRANSFERLEDGER.DOWNLOADER == downloader,
+                TRANSFERLEDGER.TORRENT_ID == torrent_id
+            ).count()
+            if exists:
+                return False
+            # 超限则先裁剪
+            if max_rows and max_rows > 0:
+                total = self._db.query(TRANSFERLEDGER).count()
+                if total >= max_rows:
+                    keep = int(max_rows * 0.8)
+                    drop_num = total - keep
+                    old_ids = [row.ID for row in self._db.query(TRANSFERLEDGER)
+                               .order_by(TRANSFERLEDGER.DATE.asc(), TRANSFERLEDGER.ID.asc())
+                               .limit(drop_num).all()]
+                    if old_ids:
+                        self._db.query(TRANSFERLEDGER).filter(
+                            TRANSFERLEDGER.ID.in_(old_ids)
+                        ).delete(synchronize_session=False)
+            self._db.insert(TRANSFERLEDGER(
+                DOWNLOADER=downloader,
+                TORRENT_ID=torrent_id,
+                PATH=path,
+                DATE=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            ))
+            return True
+        except Exception:
+            return False
+
+    @DbPersist(_db)
+    def prune_transfer_ledger(self, expire_days=90):
+        """
+        清理超过 expire_days 天的转移账本记录。
+
+        :param expire_days: 保留天数，None 或 <=0 表示不按时间清理
+        :return: 删除的记录数
+        """
+        if not expire_days or expire_days <= 0:
+            return 0
+        try:
+            deadline = datetime.datetime.now() - datetime.timedelta(days=int(expire_days))
+            deadline_str = deadline.strftime("%Y-%m-%d %H:%M:%S")
+            deleted = self._db.query(TRANSFERLEDGER).filter(
+                TRANSFERLEDGER.DATE < deadline_str
+            ).delete(synchronize_session=False)
+            return deleted or 0
+        except Exception:
+            return 0
+
+    @DbPersist(_db)
+    def clear_transfer_ledger(self):
+        """
+        清空转移账本（仅用于手动重置去重状态，不接入用户可见的清空命令）
+        """
+        try:
+            return self._db.query(TRANSFERLEDGER).delete() or 0
+        except Exception:
+            return 0
+
     @DbPersist(_db)
     def update_brushtask(self, brush_id, item):
         """

@@ -780,8 +780,6 @@ class BrushTask(object):
         brushtask_free_limit_speed = taskinfo.get("brushtask_free_limit_speed")
         brushtask_free_ddl_delete = taskinfo.get("brushtask_free_ddl_delete")
         # 标签：只取用户自己填写的任务标签，程序不再追加任何默认标签。
-        # 「是否已整理」由站点/任务标签中是否出现「整理标记标签」（默认「已整理」）决定，
-        # 该标记需要用户自行填写，详见 config.yaml 的 pt.tag_organized。
         tag = Tags.split(taskinfo.get("label"))
         seed_size = taskinfo.get("seed_size") or None
         total_size = self.dbhelper.get_brushtask_totalsize(taskinfo.get("id"))

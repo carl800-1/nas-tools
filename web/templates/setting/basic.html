@@ -587,14 +587,30 @@
               </div>
               <div class="col-12 col-lg-5">
                 <div class="mb-3">
-                  <label class="form-label">整理标记标签 <span class="form-help"
-                        title="程序用它判断某个下载任务是否已经整理过，避免同一批文件被反复转移。程序只读取、不会自动打这个标签；你在「站点标签」或「任务标签」里填了它，程序就据此跳过重复整理。改成你习惯的名字（如「已转移」）同样生效；留空则关闭这项去重保护。"
+                  <label class="form-label">整理去重（转移账本） <span class="form-help"
+                        title="程序在数据库里记录「已整理过」的种子，下次不再重复处理，避免同一批文件被反复转移。这份记录只存在程序自己的数据库里，不会写入下载器的标签，你的 qb 标签列表不会被程序弄乱。"
                         data-bs-toggle="tooltip">?</span></label>
-                  <input type="text" class="form-control" id="pt.tag_organized"
-                         value="{{ Config.pt.tag_organized if Config.pt.tag_organized is not none else '已整理' }}"
-                         placeholder="留空则关闭整理去重保护" autocomplete="off">
+                  <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" id="pt.ledger_enable"
+                           {% if Config.pt.ledger_enable|string|lower != 'false' %}checked{% endif %}>
+                    <label class="form-check-label" for="pt.ledger_enable">启用整理去重</label>
+                  </div>
+                  <div class="row g-2">
+                    <div class="col-6">
+                      <input type="number" min="0" class="form-control" id="pt.ledger_max_rows"
+                             value="{{ Config.pt.ledger_max_rows if Config.pt.ledger_max_rows is not none else 5000 }}"
+                             placeholder="5000">
+                      <div class="form-hint">行数上限</div>
+                    </div>
+                    <div class="col-6">
+                      <input type="number" min="0" class="form-control" id="pt.ledger_expire_days"
+                             value="{{ Config.pt.ledger_expire_days if Config.pt.ledger_expire_days is not none else 90 }}"
+                             placeholder="90">
+                      <div class="form-hint">过期天数</div>
+                    </div>
+                  </div>
                   <div class="form-hint">
-                    留空表示不做整理去重；此标签需你自己在站点或任务标签里填写，程序不会自动添加。
+                    超过行数上限时自动删最老的记录；超过过期天数的记录会被定期清理。填 0 表示该项不限制。
                   </div>
                 </div>
               </div>
@@ -1502,6 +1518,10 @@
   // 保存基础设置
   function save_basic_config(type, flag=true) {
     let params = input_select_GetVal(type);
+    // 转移账本的数值项转为数字，避免写入配置时变成字符串
+    if (type === "basic_tags") {
+      params = _coerce_ledger_numbers(params);
+    }
     if (params["media.category"] === "config") {
       show_warning_modal("非法二级分类策略名称");
       return;
@@ -1780,5 +1800,15 @@
 
   // 页面加载时还原标签库视图
   $(function () { _tag_library_render(); });
+
+  // 转移账本的两个数值项：提交前把字符串转成数字，避免写进 config.yaml 变成带引号的字符串
+  function _coerce_ledger_numbers(params) {
+    ["pt.ledger_max_rows", "pt.ledger_expire_days"].forEach(function (key) {
+      if (params[key] === undefined || params[key] === "") return;
+      let n = parseInt(params[key], 10);
+      params[key] = isNaN(n) || n < 0 ? 0 : n;
+    });
+    return params;
+  }
 
 </script>
