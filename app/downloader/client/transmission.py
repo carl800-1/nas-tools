@@ -7,6 +7,7 @@ import transmission_rpc
 
 import log
 from app.utils import ExceptionUtils, StringUtils
+from app.utils.tags import Tags
 from app.utils.types import DownloaderType
 from app.downloader.client._base import _IDownloadClient
 
@@ -158,25 +159,25 @@ class Transmission(_IDownloadClient):
 
     def set_torrents_status(self, ids, tags=None):
         """
-        设置种子为已整理状态
+        设置种子标签。
+
+        程序不再自动写入任何默认标签（历史版本会强行追加「已整理」）。
+        只写入调用方传来的标签，调用方没传则不写。
         """
         if not self.trc:
             return
         ids = self.__parse_ids(ids)
-        # 合成标签
-        if tags:
-            if not isinstance(tags, list):
-                tags = [tags, "已整理"]
-            else:
-                tags.append("已整理")
-        else:
-            tags = ["已整理"]
+        # 使用调用方传入的标签，不再合成默认标签
+        tag_list = Tags.split(tags)
+        if not tag_list:
+            # 没有标签要写，直接返回，避免产生空标签
+            return
         # 打标签
         try:
-            self.trc.change_torrent(labels=tags, ids=ids)
+            self.trc.change_torrent(labels=tag_list, ids=ids)
             log.info(f"【{self.client_name}】{self.name} 设置种子标签成功")
         except Exception as err:
-            log.error(f"【{self.client_name}】{self.name} 设置种子为已整理状态出错：{str(err)}")
+            log.error(f"【{self.client_name}】{self.name} 设置种子标签出错：{str(err)}")
 
     def set_torrent_tag(self, tid, tag):
         """
@@ -269,8 +270,9 @@ class Transmission(_IDownloadClient):
                 log.error(f"【{self.client_name}】{self.name} 版本可能过低，无labels属性，请安装3.0以上版本！")
                 break
             torrent_tags = torrent.labels or ""
-            # 含"已整理"tag的不处理
-            if "已整理" in torrent_tags:
+            # 已含「整理标记标签」的不处理（标签名可由用户在 config.yaml 自定义，
+            # 该标签需要用户自行填写，程序不会自动添加）
+            if Tags.is_organized(torrent_tags):
                 continue
             # 开启标签隔离，未包含指定标签的不处理
             if tag and tag not in torrent_tags:

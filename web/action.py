@@ -45,6 +45,7 @@ from app.torrentremover import TorrentRemover
 from app.utils import StringUtils, EpisodeFormat, RequestUtils, PathUtils, \
     SystemUtils, ExceptionUtils, Torrent
 from app.utils.time_utils import TimeUtils
+from app.utils.tags import Tags
 from app.utils.types import RmtMode, OsType, SearchType, SyncType, MediaType, MovieTypes, TvTypes, \
     EventType, SystemConfigKey, RssType
 from config import RMT_MEDIAEXT, RMT_SUBEXT, RMT_AUDIO_TRACK_EXT, Config
@@ -213,6 +214,8 @@ class WebAction:
             "download_subtitle": self.__download_subtitle,
             "get_download_setting": self.__get_download_setting,
             "update_download_setting": self.__update_download_setting,
+            "get_tag_library": self.__get_tag_library,
+            "save_tag_library": self.__save_tag_library,
             "delete_download_setting": self.__delete_download_setting,
             "update_message_client": self.__update_message_client,
             "delete_message_client": self.__delete_message_client,
@@ -4445,6 +4448,21 @@ class WebAction:
                                              seeding_time_limit=seeding_time_limit or 0,
                                              downloader=downloader)
         return {"code": 0}
+
+    @staticmethod
+    def __get_tag_library(data):
+        """
+        读取用户自定义的标签库
+        """
+        return {"code": 0, "data": Tags.get_library()}
+
+    @staticmethod
+    def __save_tag_library(data):
+        """
+        保存用户自定义的标签库（整体覆盖）
+        """
+        tags = data.get("tags")
+        return {"code": 0, "data": Tags.save_library(tags)}
 
     @staticmethod
     def __delete_download_setting(data):

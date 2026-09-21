@@ -76,9 +76,9 @@ class _IDownloadClient(metaclass=ABCMeta):
     @abstractmethod
     def set_torrents_status(self, ids, tags=None):
         """
-        迁移完成后设置种子标签为 已整理
+        设置种子标签
         :param ids: 种子ID列表
-        :param tags: 种子标签列表
+        :param tags: 种子标签列表（来自用户填写，程序不再自动追加默认标签）
         """
         pass
 

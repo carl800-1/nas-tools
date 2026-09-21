@@ -72,6 +72,13 @@
                             {{ SVG.bolt('icon-filled') }}
                         </a>
                     </div>
+                    {% if Task.label_list %}
+                    <div class="d-flex flex-wrap align-items-center ms-3" style="gap:4px;">
+                        {% for TagName in Task.label_list %}
+                        <span class="badge bg-blue-lt" title="标签：{{ TagName }}">{{ TagName }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                     <div class="text-muted ms-3" id="detail_size_{{ Task.id }}"
                          style="display: {% if Count > 2 %}block{% else %}none{% endif %};">↑{{ Task.upload_size }} ↓{{
                         Task.download_size }}
@@ -226,8 +233,14 @@
                         <div class="datagrid-item">
                             <div class="datagrid-title">标签</div>
                             <div class="datagrid-content">
-                                {% if Task.label %}
-                                <span class="badge">{{ Task.label }}</span>
+                                {% if Task.label_list %}
+                                <div class="d-flex flex-wrap" style="gap:4px;">
+                                    {% for TagName in Task.label_list %}
+                                    <span class="badge bg-blue-lt">{{ TagName }}</span>
+                                    {% endfor %}
+                                </div>
+                                {% else %}
+                                <span class="text-muted">未设置</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -354,10 +367,15 @@
                     <div class="col-lg-4">
                         <div class="mb-3">
                             <label class="form-label">标签 <span class="form-help"
-                                                                 title="用户在下载器中标记该任务的种子，多个标签使用,分隔"
+                                                                 title="下载器中标记该任务的种子，多个标签使用英文逗号,分隔。标签由你自己填写，程序不会自动追加任何标签；如需「已整理」等字样请直接填在这里。"
                                                                  data-bs-toggle="tooltip">?</span></label>
                             <input type="text" id="brushtask_label" class="form-control"
-                                   placeholder="多个标签使用,分隔">
+                                   placeholder="多个标签使用,分隔" list="brushtask_tag_options" autocomplete="off">
+                            <datalist id="brushtask_tag_options">
+                                {% for Tag in TagLibrary %}
+                                <option value="{{ Tag }}"></option>
+                                {% endfor %}
+                            </datalist>
                         </div>
                     </div>
                     <div class="col-lg-4">

@@ -15,6 +15,7 @@ from app.downloader import Downloader
 from app.media.meta import MetaInfo
 from app.plugins.modules._base import _IPluginModule
 from app.utils import Torrent
+from app.utils.tags import Tags
 from app.utils.types import DownloaderType
 from config import Config
 
@@ -64,8 +65,9 @@ class TorrentTransfer(_IPluginModule):
     # 待检查种子清单
     _recheck_torrents = {}
     _is_recheck_running = False
-    # 任务标签
-    _torrent_tags = ["已整理", "转移做种"]
+    # 任务标签：由用户在此自行填写，程序不再自动追加任何默认标签。
+    # 需要「已整理」等字样时请直接写在这里，留空表示不给转移任务打标签。
+    _torrent_tags = []
 
     @staticmethod
     def get_fields():
@@ -108,6 +110,18 @@ class TorrentTransfer(_IPluginModule):
                                 {
                                     'id': 'nolabels',
                                     'placeholder': '使用,分隔多个标签',
+                                }
+                            ]
+                        },
+                        {
+                            'title': '转移做种任务标签',
+                            'required': "",
+                            'tooltip': '转移做种添加下载时给种子打上的标签，多个标签使用英文,分隔。程序不会自动追加任何标签（历史版本的「已整理」「转移做种」已改为由你自行填写），留空则不打标签。',
+                            'type': 'text',
+                            'content': [
+                                {
+                                    'id': 'torrent_tags',
+                                    'placeholder': '留空则不打标签，如：已整理,转移做种',
                                 }
                             ]
                         }
@@ -284,6 +298,8 @@ class TorrentTransfer(_IPluginModule):
             self._cron = config.get("cron")
             self._notify = config.get("notify")
             self._nolabels = config.get("nolabels")
+            # 标签由用户自行配置，程序不再追加默认值
+            self._torrent_tags = Tags.split(config.get("torrent_tags"))
             self._frompath = config.get("frompath")
             self._topath = config.get("topath")
             self._fromdownloader = config.get("fromdownloader")
@@ -329,6 +345,7 @@ class TorrentTransfer(_IPluginModule):
                     "cron": self._cron,
                     "notify": self._notify,
                     "nolabels": self._nolabels,
+                    "torrent_tags": Tags.join(self._torrent_tags),
                     "frompath": self._frompath,
                     "topath": self._topath,
                     "fromdownloader": self._fromdownloader,

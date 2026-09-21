@@ -18,6 +18,7 @@ from app.plugins import EventManager
 from app.sites import Sites, SiteSubtitle
 from app.utils import Torrent, StringUtils, SystemUtils, ExceptionUtils, NumberUtils
 from app.utils.commons import singleton
+from app.utils.tags import Tags
 from app.utils.types import MediaType, DownloaderType, SearchType, RmtMode, EventType, SystemConfigKey
 from config import Config, PT_TAG, RMT_MEDIAEXT, PT_TRANSFER_INTERVAL
 
@@ -452,26 +453,15 @@ class Downloader:
             # 下载设置中的分类
             category = download_attr.get("category")
             # 合并TAG
-            tags = download_attr.get("tags")
-            if tags:
-                tags = str(tags).split(";")
-                if tag:
-                    if isinstance(tag, list):
-                        tags.extend(tag)
-                    else:
-                        tags.append(tag)
-            else:
-                # 字符串是空串或者None
-                tags = []
-                if tag:
-                    if isinstance(tag, list):
-                        tags = tag
-                    else:
-                        tags = [tag]
+            # 分隔符统一为英文逗号（历史版本此处按分号拆分，与刷流任务侧的逗号
+            # 拆分不一致，导致同一个标签在不同入口写法不同、永远匹配不上）
+            tags = Tags.split(download_attr.get("tags"))
+            if tag:
+                tags = Tags.merge(tags, tag)
             # 添加站点tag
             site_tags = self.sites.get_site_download_tags(media_info.site)
             if site_tags:
-                tags.extend(str(site_tags).split(";"))
+                tags = Tags.merge(tags, site_tags)
 
             # 暂停
             if is_paused is None:

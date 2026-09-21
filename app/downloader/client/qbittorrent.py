@@ -9,6 +9,7 @@ import log
 import qbittorrentapi
 from app.downloader.client._base import _IDownloadClient
 from app.utils import ExceptionUtils, StringUtils
+from app.utils.tags import Tags
 from app.utils.types import DownloaderType
 
 
@@ -241,15 +242,25 @@ class Qbittorrent(_IDownloadClient):
 
     def set_torrents_status(self, ids, tags=None):
         """
-        设置种子状态为已整理，以及是否强制做种
+        设置种子状态标签。
+
+        程序不再自动写入任何默认标签（历史版本会强行打上「已整理」）。
+        只写入调用方传来的标签，调用方没传则不写。
+
+        :param ids: 种子Hash列表
+        :param tags: 调用方指定的标签（来自用户填写，字符串或列表）
         """
         if not self.qbc:
             return
+        tag_list = Tags.split(tags)
+        if not tag_list:
+            # 没有标签要写，直接返回，避免产生空标签
+            return
         try:
             # 打标签
-            self.qbc.torrents_add_tags(tags="已整理", torrent_hashes=ids)
+            self.qbc.torrents_add_tags(tags=Tags.SEPARATOR.join(tag_list), torrent_hashes=ids)
         except Exception as err:
-            log.error(f"【{self.client_name}】{self.name} 设置种子状态为已整理出错：{str(err)}")
+            log.error(f"【{self.client_name}】{self.name} 设置种子标签出错：{str(err)}")
 
     def torrents_set_force_start(self, ids):
         """
@@ -269,8 +280,9 @@ class Qbittorrent(_IDownloadClient):
         trans_tasks = []
         for torrent in torrents:
             torrent_tags = torrent.get("tags") or ""
-            # 含"已整理"tag的不处理
-            if "已整理" in torrent_tags:
+            # 已含「整理标记标签」的不处理（标签名可由用户在 config.yaml 自定义，
+            # 该标签需要用户自行填写，程序不会自动添加）
+            if Tags.is_organized(torrent_tags):
                 continue
             # 开启标签隔离，未包含指定标签的不处理
             if tag and tag not in torrent_tags:

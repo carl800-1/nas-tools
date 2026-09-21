@@ -16,6 +16,7 @@ from app.message import Message
 from app.sites import Sites, SiteConf
 from app.utils import StringUtils, ExceptionUtils
 from app.utils.commons import singleton
+from app.utils.tags import Tags
 from app.utils.types import BrushDeleteType
 from config import BRUSH_REMOVE_TORRENTS_INTERVAL, Config
 
@@ -114,6 +115,8 @@ class BrushTask(object):
                 "site_id": task.SITE,
                 "interval": task.INTEVAL,
                 "label": task.LABEL,
+                # 标签列表：用于界面常驻展示（用户填写的标签，程序不追加任何默认标签）
+                "label_list": Tags.split(task.LABEL),
                 "up_limit": task.UP_LIMIT,
                 "dl_limit": task.DL_LIMIT,
                 "savepath": task.SAVEPATH,
@@ -694,8 +697,10 @@ class BrushTask(object):
                 return False
 
         # 检查是否添加标签
-        label = list(set((taskinfo.get("label").split(',') if taskinfo.get("label") else []) +
-                 (site_info.get("tags").split(',') if site_info.get("tags") else [])))
+        # 标签全部来自用户填写（任务标签 + 站点标签），统一按英文逗号拆分并去重。
+        # 历史版本此处只按逗号拆分站点标签，而下载设置侧按分号拆分，导致同一个
+        # 标签在不同入口写法不同、永远匹配不上；现由 Tags 统一归一化处理。
+        label = Tags.merge(taskinfo.get("label"), site_info.get("tags"))
         if label is None or len(label) <= 0:
             return True
 
@@ -767,7 +772,6 @@ class BrushTask(object):
             return False
         taskid = taskinfo.get("id")
         taskname = taskinfo.get("name")
-        transfer = taskinfo.get("transfer")
         sendmessage = taskinfo.get("sendmessage")
         downloader_id = taskinfo.get("downloader")
         download_limit = rss_rule.get("downspeed")
@@ -775,18 +779,18 @@ class BrushTask(object):
         download_dir = taskinfo.get("savepath")
         brushtask_free_limit_speed = taskinfo.get("brushtask_free_limit_speed")
         brushtask_free_ddl_delete = taskinfo.get("brushtask_free_ddl_delete")
-        tag = taskinfo.get("label").split(',') if taskinfo.get("label") else None
+        # 标签：只取用户自己填写的任务标签，程序不再追加任何默认标签。
+        # 「是否已整理」由站点/任务标签中是否出现「整理标记标签」（默认「已整理」）决定，
+        # 该标记需要用户自行填写，详见 config.yaml 的 pt.tag_organized。
+        tag = Tags.split(taskinfo.get("label"))
         seed_size = taskinfo.get("seed_size") or None
         total_size = self.dbhelper.get_brushtask_totalsize(taskinfo.get("id"))
         origin_limit = size
         if seed_size:
             origin_limit = max(0, float(seed_size) * 1024 ** 3 - int(total_size))
-        # 标签
-        if not transfer:
-            if tag:
-                tag += ["已整理"]
-            else:
-                tag = ["已整理"]
+        # 标签为空时传 None，避免给下载器写入空标签
+        if not tag:
+            tag = None
 
         # 开始下载
         meta_info = MetaInfo(title=title)

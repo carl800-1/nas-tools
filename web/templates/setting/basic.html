@@ -556,6 +556,65 @@
         </div>
       </div>
       <div class="col-md-12">
+        <div class="card" id="basic_tags">
+          <div class="card-header">
+            <h3 class="card-title"><strong>标签</strong></h3>
+            <div class="card-actions">
+              <span class="text-muted small">标签由你自行定义，程序只读取与展示，不会自动追加任何标签</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <input type="hidden" id="pt.tags" value="{{ Config.pt.tags or '' }}">
+            <div class="row">
+              <div class="col-12 col-lg-7">
+                <div class="mb-1">
+                  <label class="form-label">我的标签库 <span class="form-help"
+                        title="在这里维护你自己要用的标签清单。填好后可在「站点设置」「刷流任务」「下载设置」的标签输入框中引用，避免各处写错名称。程序只读取这份清单用于补全和展示，绝不自动往里加东西。"
+                        data-bs-toggle="tooltip">?</span></label>
+                  <div class="input-group mb-2">
+                    <input type="text" class="form-control" id="new_tag_input"
+                           placeholder="输入标签名称，回车即可新增" autocomplete="off"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();add_tag_from_input();}">
+                    <a href="javascript:add_tag_from_input()" class="btn btn-primary">新增</a>
+                  </div>
+                  <div id="tag_library_box" class="d-flex flex-wrap gap-2 p-2 border rounded"
+                       style="min-height:56px;align-content:flex-start;">
+                  </div>
+                  <div id="tag_library_empty" class="text-muted small mt-1">
+                    暂无标签。新增后会在这里生成标签块，点击标签块可重命名或删除。
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-lg-5">
+                <div class="mb-3">
+                  <label class="form-label">整理标记标签 <span class="form-help"
+                        title="程序用它判断某个下载任务是否已经整理过，避免同一批文件被反复转移。程序只读取、不会自动打这个标签；你在「站点标签」或「任务标签」里填了它，程序就据此跳过重复整理。改成你习惯的名字（如「已转移」）同样生效；留空则关闭这项去重保护。"
+                        data-bs-toggle="tooltip">?</span></label>
+                  <input type="text" class="form-control" id="pt.tag_organized"
+                         value="{{ Config.pt.tag_organized if Config.pt.tag_organized is not none else '已整理' }}"
+                         placeholder="留空则关闭整理去重保护" autocomplete="off">
+                  <div class="form-hint">
+                    留空表示不做整理去重；此标签需你自己在站点或任务标签里填写，程序不会自动添加。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="row align-items-center">
+              <div class="col">
+                <span class="text-muted small" id="tag_library_hint"></span>
+              </div>
+              <div class="col-auto">
+                <a id="basic_tags_btn" href="javascript:save_basic_config('basic_tags')" class="btn btn-primary">
+                  保存
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-12">
         <div class="card" id="security">
           <div class="card-header">
             <h3 class="card-title"><strong>安全</strong></h3>
@@ -1614,5 +1673,112 @@
     fontFamily: "Consolas, Monaco, monospace",
     fontSize: "10pt"
   });
+
+  /* ==================== 标签库管理 ==================== */
+
+  // 标签库保存在隐藏域中（逗号分隔），由这里的增删改维护后统一提交给 pt.tags
+  function _tag_library_items() {
+    let raw = $("#pt\\.tags").val() || "";
+    let list = [];
+    raw.split(",").forEach(function (item) {
+      let name = (item || "").trim();
+      if (name && list.indexOf(name) === -1) list.push(name);
+    });
+    return list;
+  }
+
+  function _tag_library_store(items) {
+    $("#pt\\.tags").val(items.join(","));
+  }
+
+  function _tag_library_render() {
+    let items = _tag_library_items();
+    let $box = $("#tag_library_box");
+    let $empty = $("#tag_library_empty");
+    $box.empty();
+    if (!items.length) {
+      $empty.show();
+    } else {
+      $empty.hide();
+      items.forEach(function (name) {
+        let $chip = $("<span class='badge bg-blue-lt d-inline-flex align-items-center' style='gap:6px;font-size:12px;padding:6px 8px;cursor:pointer;'></span>");
+        $chip.append($("<span></span>").text(name));
+        $chip.attr("title", "点击重命名");
+        $chip.on("click", function () { rename_tag_from_library(name); });
+        let $del = $("<span style='cursor:pointer;opacity:.7;font-weight:500;' title='删除该标签'>×</span>");
+        $del.on("click", function (event) {
+          event.stopPropagation();
+          delete_tag_from_library(name);
+        });
+        $chip.append($del);
+        $box.append($chip);
+      });
+    }
+    let hint = items.length
+      ? "共 " + items.length + " 个标签，保存后可在各处的标签输入框中引用"
+      : "标签库为空，各处的标签输入框仍可自由填写";
+    $("#tag_library_hint").text(hint);
+  }
+
+  function add_tag_from_input() {
+    let name = ($("#new_tag_input").val() || "").trim();
+    if (!name) {
+      show_warning_modal("请输入标签名称");
+      return;
+    }
+    // 名称里不允许再出现分隔符，否则会被拆成多个标签
+    if (name.indexOf(",") >= 0 || name.indexOf(";") >= 0) {
+      show_warning_modal("标签名称中不能包含逗号或分号");
+      return;
+    }
+    let items = _tag_library_items();
+    if (items.indexOf(name) >= 0) {
+      show_warning_modal("标签「" + name + "」已存在");
+      return;
+    }
+    items.push(name);
+    _tag_library_store(items);
+    $("#new_tag_input").val("");
+    _tag_library_render();
+  }
+
+  function rename_tag_from_library(old_name) {
+    let new_name = window.prompt("修改标签名称", old_name);
+    if (new_name === null) return;
+    new_name = new_name.trim();
+    if (!new_name) {
+      show_warning_modal("标签名称不能为空");
+      return;
+    }
+    if (new_name.indexOf(",") >= 0 || new_name.indexOf(";") >= 0) {
+      show_warning_modal("标签名称中不能包含逗号或分号");
+      return;
+    }
+    if (new_name === old_name) return;
+    let items = _tag_library_items();
+    if (items.indexOf(new_name) >= 0) {
+      show_warning_modal("标签「" + new_name + "」已存在");
+      return;
+    }
+    let idx = items.indexOf(old_name);
+    if (idx < 0) return;
+    items[idx] = new_name;
+    _tag_library_store(items);
+    _tag_library_render();
+    show_success_modal("已重命名为「" + new_name + "」，保存后生效");
+  }
+
+  function delete_tag_from_library(name) {
+    let items = _tag_library_items();
+    let idx = items.indexOf(name);
+    if (idx < 0) return;
+    items.splice(idx, 1);
+    _tag_library_store(items);
+    _tag_library_render();
+    show_success_modal("已删除「" + name + "」，保存后生效");
+  }
+
+  // 页面加载时还原标签库视图
+  $(function () { _tag_library_render(); });
 
 </script>

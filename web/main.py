@@ -43,6 +43,7 @@ from app.subscribe import Subscribe
 from app.sync import Sync
 from app.torrentremover import TorrentRemover
 from app.utils import DomUtils, SystemUtils, ExceptionUtils, StringUtils
+from app.utils.tags import Tags
 from app.utils.types import *
 from config import PT_TRANSFER_INTERVAL, Config, TMDB_API_DOMAINS
 from web.action import WebAction
@@ -406,7 +407,8 @@ def sites():
                            DownloadSettings=DownloadSettings,
                            ChromeOk=ChromeOk,
                            CookieCloudCfg=CookieCloudCfg,
-                           CookieUserInfoCfg=CookieUserInfoCfg)
+                           CookieUserInfoCfg=CookieUserInfoCfg,
+                           TagLibrary=Tags.get_library())
 
 
 # 站点列表页面
@@ -689,6 +691,7 @@ def brushtask():
                            Count=len(Tasks),
                            Sites=CfgSites,
                            Tasks=Tasks,
+                           TagLibrary=Tags.get_library(),
                            Downloaders=Downloaders)
 
 

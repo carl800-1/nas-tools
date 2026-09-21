@@ -310,10 +310,16 @@
           <div class="col-lg-8">
             <div class="mb-3">
             <label class="form-label">站点标签 <span class="form-help"
-                  title="下载站点资源时使用的标签，多个使用英文分号即;分割，下载时会和下载设置中标签合并，可留空。" data-bs-toggle="tooltip">?</span></label>
+                  title="下载站点资源时使用的标签，多个使用英文逗号即,分割，下载时会和下载设置中标签合并，可留空。标签由你自己填写，程序不会自动追加任何标签。" data-bs-toggle="tooltip">?</span></label>
               <div class="input-group input-group-flat">
-                <input type="text" class="form-control" id="site_tags" value="" placeholder="站点标签">
+                <input type="text" class="form-control" id="site_tags" value="" placeholder="多个标签使用,分割"
+                       list="tag_library_options" autocomplete="off">
               </div>
+              <datalist id="tag_library_options">
+                {% for Tag in TagLibrary %}
+                <option value="{{ Tag }}"></option>
+                {% endfor %}
+              </datalist>
             </div>
           </div>
         </div>
