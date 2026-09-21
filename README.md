@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.1.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.1.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -307,6 +307,27 @@ jQuery 的 `.html()` 会执行片段里的 `<script>`，所以**每导航一次�
 > **给二次开发者的规则**：`web/templates/**/*.html` 里作为 SPA 片段注入的
 > 脚本块，**顶层不要用 `let`/`const`**，一律用 `var`；需要局部变量就包进
 > IIFE 或函数里。仓库内已有扫描脚本可自查。
+
+#### 2.12 体检为什么有时跳过 L5，以及「经代理复测」（v5.1.2）
+
+体检报告里 L5/L6 会显示「因 L2 请求未取到响应（reset）而跳过」。这不是漏测：
+L2 都没拿到响应时，L5 走同一条网络路径必然同样失败，而抓取侧的等待上限是
+**本地 15.5 秒**（`spider_search` 默认 `timeout=30`，循环 `sleep(0.5)`，31 次即到顶），
+跳过它可以让这种必败的体检从约 16 秒降到 1 秒内。若 L2 拿到了响应（例如 HTTP 500），
+L5 仍会照常执行。
+
+另外，站点没打开「代理」开关时，**即使「基础设置 → 系统」里配了全局代理也是裸连**
+（代码是 `if site.proxy: Config().get_proxies()`）。所以直连失败时，体检会自动用那个
+代理再请求一次，并把结论写进 L2 明细：
+
+| 明细 | 含义与下一步 |
+|---|---|
+| `经代理复测：可达（HTTP 200）` | 就是缺代理 —— 到站点管理打开该站点的「代理」开关 |
+| `经代理复测：仍失败（reset）` | 代理本身不通，或该代理对本站点不可用 |
+| （没有这一项） | 系统里没配代理，或该站点本来就已打开代理开关 |
+
+> 注意 `config.yaml` 的默认值是 `proxies: {http: , https: }` —— 「键存在、值为空」，
+> 判空必须逐项判，不能直接写 `if not proxies`。
 
 ### 3. 跳转与入口优化
 
@@ -928,7 +949,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.1.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.1.2   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1031,4 +1052,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-21 ｜ 当前版本 v5.1.1_
+_Last updated: 2026-09-21 ｜ 当前版本 v5.1.2_
