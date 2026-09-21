@@ -158,7 +158,15 @@ class Torrent:
             with open(file_path, 'wb') as f:
                 f.write(file_content)
         elif req is None:
-            return None, None, "无法打开链接：%s" % url
+            # req 为 None 只说明「请求没成功」，具体是超时、被拒还是域名不可达
+            # 都已被 RequestUtils 吞掉。M-Team 的下载直链走 *.halomt.com，
+            # 该域名在部分网络下会被阻断（TCP 通、TLS 握手即被 RST），
+            # 此时对外只喊「无法打开链接」会让人以为是程序 bug —— 补一句可操作的提示。
+            hint = ""
+            if "halomt.com" in url:
+                hint = ("（M-Team 下载域名可能被网络阻断，请查看日志中的具体异常；"
+                        "可尝试在站点设置中为 M-Team 开启「使用代理」后重试）")
+            return None, None, "无法打开链接：%s%s" % (url, hint)
         elif req.status_code == 429:
             return None, None, "触发站点流控，请稍后重试"
         else:

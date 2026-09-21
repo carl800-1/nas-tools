@@ -20,7 +20,13 @@ class MTeamSpider(object):
             self._proxy = Config().get_proxies() if indexer.proxy else None
             self._cookie = indexer.cookie
             self._ua = indexer.ua
-        self._api_url = self._api_url % MteamUtils.get_api_url(self._domain)
+        api_url = MteamUtils.build_api_url(self._domain, "/api/torrent/search")
+        if not api_url:
+            # 域名不含 m-team 时推导失败，拼出 "None/api/..." 会变成一个
+            # 看似合法实则必然失败的 URL，不如在调用前拦下
+            log.error(f"【MTeam】索引器 {self._name} 的域名 {self._domain} 无法推导 API 地址")
+            raise Exception(f"M-Team 索引器域名配置有误：{self._domain}")
+        self._api_url = api_url
         self.init_config()
 
     def init_config(self):

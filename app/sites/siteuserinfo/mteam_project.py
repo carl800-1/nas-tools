@@ -68,8 +68,9 @@ class MteamSiteUserInfo(_ISiteUserInfo):
         return "M-Team" in html_text
 
     def _parse_logged_in(self, html_text):
-        api = "%s/api/member/profile"
-        api = api % MteamUtils.get_api_url(self.site_url)
+        api = MteamUtils.build_api_url(self.site_url, "/api/member/profile")
+        if not api:
+            return False, f"无法从 {self.site_url} 推导 M-Team API 地址"
         res = MteamUtils.buildRequestUtils(
             headers=self._ua,
             api_key=MteamUtils.get_api_key(self.site_url),
@@ -86,8 +87,9 @@ class MteamSiteUserInfo(_ISiteUserInfo):
         return False, "连接馒头失败"
 
     def get_user_profile(self):
-        api = "%s/api/member/profile"
-        api = api % MteamUtils.get_api_url(self.site_url)
+        api = MteamUtils.build_api_url(self.site_url, "/api/member/profile")
+        if not api:
+            return None
         res = MteamUtils.buildRequestUtils(
             headers=self._ua,
             api_key=MteamUtils.get_api_key(self.site_url),
@@ -137,8 +139,11 @@ class MteamSiteUserInfo(_ISiteUserInfo):
         self.seeding_info = json.dumps(all_seeding_info)
 
     def getSeedingPage(self, user_id, page_num, page_size):
-        api = "%s/api/member/getUserTorrentList"
-        api = api % MteamUtils.get_api_url(self.site_url)
+        api = MteamUtils.build_api_url(self.site_url, "/api/member/getUserTorrentList")
+        if not api:
+            # 返回空字典而非 None：调用方 parse_seeding 直接对结果调 .get()，
+            # 给 None 会抛 AttributeError，掩盖真正的原因（域名推导失败）
+            return {}
         params = {
             "pageNumber": page_num,
             "pageSize": page_size,

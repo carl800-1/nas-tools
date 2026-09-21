@@ -227,7 +227,10 @@ class MteamRssGen(_IPluginModule):
 
     def fetch_new_item(self):
         self.info('fetch new torrents start')
-        search_url = self._search_api % MteamUtils.get_api_url(self._site_base_url)
+        search_url = MteamUtils.build_api_url(self._site_base_url, "/api/torrent/search")
+        if not search_url:
+            self.error(f"无法从 {self._site_base_url} 推导 M-Team API 地址，跳过本次刷流")
+            return
         # 所有需要刷流的种子
         torrents_info_array = []
 
