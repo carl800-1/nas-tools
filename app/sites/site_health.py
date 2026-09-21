@@ -330,6 +330,79 @@ def classify_http_error(err):
     return "unknown", "请求失败：%s" % err
 
 
+
+def usable_proxies(proxies):
+    """
+    判断 app.proxies 里是否**真的**填了代理
+
+    注意 config.yaml 的默认值是 `proxies: {http: , https: }` —— 一个「键存在、
+    值为空」的字典，`if not proxies` 为 False，会把「没配代理」误判成「配了代理」。
+    所以必须逐项判空，不能直接判真假。
+
+    :param proxies: Config().get_proxies() 的返回值
+    :return: 布尔值
+    """
+    if isinstance(proxies, str):
+        return bool(proxies.strip())
+    if not isinstance(proxies, dict):
+        return False
+    return bool(str(proxies.get("http") or "").strip()) or \
+        bool(str(proxies.get("https") or "").strip())
+
+
+def transport_error_kind(l2_level):
+    """
+    从 L2 结果里取出「传输层归类码」（timeout / reset / refused / dns / ssl / unknown）
+
+    只有 `res is None`（请求根本没拿到响应）那条分支才会写入「归类」这个明细项。
+    返回 None 表示 L2 拿到了响应、失败在站点侧（例如 HTTP 500）—— 那种情况下
+    探针搜索仍有诊断价值，不该跳过。
+
+    :param l2_level: L2 层结果字典
+    :return: 归类码字符串，或 None
+    """
+    if not l2_level or l2_level.get("status") != STATUS_FAIL:
+        return None
+    for item in l2_level.get("items") or []:
+        if item.get("key") == "归类":
+            return item.get("value")
+    return None
+
+
+def retry_via_proxy(request_url, ua, site_info, timeout):
+    """
+    直连失败、而系统里配了全局代理时，自动改用代理复测一次
+
+    目的：把「这个站点就是缺代理」这个结论**直接摆进报告**。否则用户只看到
+    「连接被重置」，既不知道为什么，也不知道该动哪一步。
+    本函数只做诊断，不修改任何配置。
+
+    :return: (要追加的明细 items, 建议文案；没有可用代理时返回 ([], ""))
+    """
+    if site_info.get("proxy"):
+        # 站点本来就勾了代理，失败原因不可能是「忘了勾代理」
+        return [], ""
+    proxies = Config().get_proxies()
+    if not usable_proxies(proxies):
+        return [], ""
+    try:
+        res = requests.get(request_url,
+                           verify=False,
+                           headers={"User-Agent": ua},
+                           proxies=proxies,
+                           cookies=RequestUtils.cookie_parse(site_info.get("cookie")),
+                           timeout=min(timeout or _HTTP_TIMEOUT, 15),
+                           allow_redirects=True)
+        return ([{"key": "经代理复测", "value": "可达（HTTP %s）" % res.status_code, "ok": True}],
+                "直连被拦截，但**经你已配置的代理可以访问** —— 这不是规则问题："
+                "请到「站点管理」编辑该站点、打开「代理」开关，然后重新体检。")
+    except Exception as ex:
+        kind, _desc = classify_http_error(ex)
+        return ([{"key": "经代理复测", "value": "仍失败（%s）" % kind, "ok": False}],
+                "直连与经代理都没能取到响应：请先确认「基础设置 → 系统」里的代理本身可用，"
+                "或该代理对本站点不通。")
+
+
 # ---------------------------------------------------------------------------
 # 体检主体
 # ---------------------------------------------------------------------------
@@ -399,11 +472,22 @@ class SiteHealth:
         levels.extend(http_levels)
 
         # ---------------- L5/L6 探针搜索 ----------------
-        if indexer is not None:
-            levels.extend(self.__check_search(site_info, indexer, probe_keyword))
-        else:
+        l2_level = next((lv for lv in http_levels if lv.get("code") == "L2"), None)
+        transport_kind = transport_error_kind(l2_level)
+        if indexer is None:
             for code in ("L5", "L6"):
                 levels.append(new_level(code, STATUS_SKIP, "缺少索引器定义，无法进行探针搜索"))
+        elif transport_kind:
+            # 请求在网络上就没出去（没拿到任何响应），搜索走同一条路径必然同样失败。
+            # 跳过它可以省下约 15.5 秒的本地白等（不是站点慢，是本地等待上限）。
+            skip_note = ("因 L2 请求未取到响应（%s）而跳过：搜索走同一条网络路径，"
+                         "必然同样失败，无需再等" % transport_kind)
+            for code in ("L5", "L6"):
+                levels.append(new_level(code, STATUS_SKIP, skip_note))
+            log.info("【站点体检】L2 传输层失败（%s），跳过 L5/L6 探针搜索以免白等"
+                     % transport_kind)
+        else:
+            levels.extend(self.__check_search(site_info, indexer, probe_keyword))
 
         report = self.__build_report(site_info, levels, probe_keyword, started)
         log.info("【站点体检】%s 完成，结论：%s" % (site_name, report.get("conclusion")))
@@ -563,11 +647,16 @@ class SiteHealth:
             ]
             # 结论里给中文说明（kind 是给程序看的英文归类码，不直接抛给用户）
             skip_detail = [{"key": "归类", "value": kind, "ok": False}]
+            # 直连失败时，若系统里配了全局代理就自动复测一次：
+            # 把「缺代理」与「代理也不通」在报告里分开，用户才知道该动哪一步
+            retry_items, retry_suggestion = retry_via_proxy(
+                request_url, ua, site_info, timeout)
             return [
                 new_level("L2", STATUS_FAIL, "HTTP 请求失败：%s" % desc, detail=desc,
-                          items=items + skip_detail,
-                          suggestion="请先解决网络层问题：确认是否需要代理、"
-                                     "域名是否仍然有效。可用 curl 手工验证同一地址。"),
+                          items=items + skip_detail + retry_items,
+                          suggestion=(retry_suggestion or
+                                      "请先解决网络层问题：确认是否需要代理、"
+                                      "域名是否仍然有效。可用 curl 手工验证同一地址。")),
                 new_level("L3", STATUS_SKIP, "因 L2 失败而跳过"),
                 new_level("L4", STATUS_SKIP, "因 L2 失败而跳过"),
             ]
