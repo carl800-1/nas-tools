@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.1.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.2.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -346,17 +346,8 @@ L5 仍会照常执行。
 **分隔符统一为英文逗号 `,`。** 历史版本里下载设置与站点标签按分号拆分、
 刷流任务按逗号拆分，同一个标签换个入口就匹配不上；现在四处一致。
 
-「是不是已经整理过」这个判断还在，但变成了**只读**配置：
-
-```yaml
-pt:
-  tags: 电影,电视剧        # 你的标签库，逗号分隔，留空即不用
-  tag_organized: 已整理    # 程序只读：你在上面任一处填了这个名字，
-                          # 才跳过该任务的重复整理。留空 = 关闭这层去重保护
-```
-
-也就是说：**要保留「整理过就别重复整理」的行为，请自己把「已整理」
-填进站点标签或刷流任务标签。** 不填的话，已完成的任务每轮都会重新检查整理。
+「是不是已经整理过」这个判断不再依赖标签 —— v5.2.0 起改由程序自己的
+**转移账本**承担，见下一节。
 
 界面上的标签现在常驻显示：刷流任务列表的卡片标题旁直接是彩色徽标，
 不用展开、不用悬停。
@@ -364,6 +355,41 @@ pt:
 给二次开发者的提醒：改 `config.yaml` 后写盘**必须就地修改配置对象**，
 不要 `dict(cfg)` 再存 —— config.yaml 是 ruamel 的注释感知结构，
 浅拷贝会让全部说明注释静默消失（实测漂移 1343 字节）。
+
+#### 2.14 整理去重改用「转移账本」（v5.2.0）
+
+v5.1.3 把「已整理」标签去掉之后，还留着一个问题：**程序怎么知道某个种子
+已经整理过了？** 答案一度是「自己把『已整理』填进标签里」，但这要求你自己维护，
+忘记填就会重复整理。
+
+v5.2.0 换成程序自己记账：
+
+```yaml
+pt:
+  ledger_enable: true       # 记录「已整理过」的种子，下次不再重复处理
+  ledger_max_rows: 5000     # 行数上限，超出自动删最老的（0 = 不限制）
+  ledger_expire_days: 90    # 超过天数的记录定期清理（0 = 不清理）
+```
+
+**这份记录只存在程序自己的数据库里（表 `TRANSFER_LEDGER`），不会写入下载器标签**，
+所以你的 qb 标签列表始终干净。
+
+两个问题一次解决：
+
+- **不会无限增长**：插入前先看总行数，达到上限就先删到 80% 再插，行数硬性封顶；
+  另有按天数的过期清理（每小时最多执行一次，复用现有调度，不额外开线程）。
+- **不会被误清空**：账本是独立表，不挂在 `/trh`（那是清 `TRANSFER_HISTORY`）
+  任何用户可触发的清空入口上。
+
+按每天 20 个种子估算，5000 条约覆盖 8 个月；即使一个都不清理，
+一年的数据量也只有十几 MB（SQLite 上限是 281 TB）。
+
+关掉 `ledger_enable` 也不会真的重复转移 —— 还有「目标文件已存在」这层兜底 ——
+只是每轮都会白扫一遍下载目录并多打日志。
+
+顺带修掉一个存在已久的判定 bug：开启「只处理 NASTOOL 标签」时，原实现用
+字符串子串匹配，会导致 `NASTOOLX` 被误判成命中了 `NASTOOL`；现在改为按
+逗号切分后精确比对。
 
 ### 3. 跳转与入口优化
 
@@ -985,7 +1011,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.1.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.2.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1088,4 +1114,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-21 ｜ 当前版本 v5.1.3_
+_Last updated: 2026-09-22 ｜ 当前版本 v5.2.0_

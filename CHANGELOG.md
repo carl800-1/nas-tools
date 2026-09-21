@@ -1,3 +1,113 @@
+# v5.2.0 (2026-09-22)
+
+## 新特性：整理去重改用「转移账本」，不再依赖下载器标签
+
+v5.1.3 把程序写死的「已整理」标签去掉了，但留下一个尾巴：程序怎么判断
+某个种子已经整理过了？当时的答案是「你自己把『已整理』填进标签」——
+这等于把去重的正确性押在你记得填上。v5.2.0 换成程序自己记账。
+
+### 1. 旧机制为什么不可靠（本次排查的结论）
+
+排查发现，**「已整理」标签在 qBittorrent 上其实从未真正生效过**：
+
+| 环节 | 事实 |
+|---|---|
+| `downloader.py:637/644` | 调 `set_torrents_status(ids=..., tags=task.get("tags"))` |
+| `qbittorrent.py` `get_transfer_task` | 返回的字典**只有 `path` 和 `id`，没有 `tags` 键** |
+| 结果 | `task.get("tags")` 恒为 `None` → `Tags.split(None)` 为空 → 直接 `return` |
+
+也就是说，`move` / `rclone` / `minio` 模式（种子整理后被删除，本来就不需要去重）
+之外，真正需要去重的 `copy` / `link` / `softlink` 模式，恰恰是标签写不进去的那条路。
+
+那为什么没出过问题？因为还有一层兜底：`filetransfer.py:400` 检查
+`os.path.exists(new_file)`，文件在就跳过。代价是**每轮都要重扫一遍下载目录**。
+
+结论：判断的输入（下载器标签）根本没人写，靠恢复旧逻辑（只读不写）是空判断，
+必须换成程序自己维护的状态。
+
+### 2. 新表 `TRANSFER_LEDGER`
+
+```
+ID          主键
+DOWNLOADER  下载器 ID（索引）
+TORRENT_ID  种子 hash（索引）
+PATH        整理后的路径
+DATE        登记时间（索引）
+```
+
+配套迁移脚本 `scripts/versions/89ea3ada7589_1_3_6.py`
+（`down_revision = 'd116d793ba9f'`，建表 + 3 个索引，容忍表已存在）。
+
+为什么不用现成的表：
+
+- `TRANSFER_HISTORY` 被 `/trh` 命令暴露给用户，会 `delete()` 整表 —— 拿它当账本，
+  用户清一次记录就全部重复整理；
+- `DOWNLOAD_HISTORY` 会被后续的 `update` 改写，状态不稳定。
+
+所以用**独立专表**，且**不接入任何用户可触发的清空入口**。
+
+### 3. 两个防膨胀机制
+
+用户指出「不做回收的话，长期运行会无限增长爆掉」，故补上双保险：
+
+| 机制 | 配置项 | 默认 | 行为 |
+|---|---|---|---|
+| 行数硬上限 | `pt.ledger_max_rows` | 5000 | 插入前若总行数达上限，先删到 80% 再插，行数封顶 |
+| 过期清理 | `pt.ledger_expire_days` | 90 | 按 `DATE` 删除过期记录，每小时最多执行一次 |
+
+另有 `pt.ledger_enable`（默认 `true`）总开关。
+
+行数上限是**硬闸门**，不依赖定时器是否按时跑；过期清理复用 downloader 现有的
+5 分钟调度并做 1 小时节流，不额外开线程。
+
+容量不是问题：按每天 20 个种子算，5000 条约覆盖 8 个月，一年数据量约十几 MB
+（SQLite 单库上限 281 TB）。阈值取 5000 是保守选择。
+
+### 4. 移除旧 API
+
+- `config/config.yaml`：删除 `pt.tag_organized`
+- `app/utils/tags.py`：删除 `DEFAULT_ORGANIZED_TAG`、`get_organized_tag()`、
+  `is_organized()`；模块 docstring 说明改由账本承担
+- `web/templates/setting/basic.html`：删除「整理标记标签」输入框，
+  替换为「整理去重（转移账本）」区块（开关 + 行数上限 + 过期天数）
+- `app/brushtask.py`、`iyuuautoseed.py`、`torrenttransfer.py`：清理相关提示文案
+
+### 5. 顺带修掉：标签隔离的子串误判
+
+开启「只处理指定标签」时，原实现是 `if tag not in torrent_tags`（字符串子串匹配），
+于是标签 `NASTOOLX` 会被误判为命中了 `NASTOOL`。现在改为
+`(torrent_tags or "").split(",")` 后精确比对 —— qBittorrent 与 Transmission 同时修正。
+
+### 6. 新增工具方法
+
+- `app/utils/number_utils.py`：新增 `NumberUtils.get_int()`（从字符串安全取整数，
+  用于界面上 `type="number"` 提交上来的字符串）
+- `app/downloader/client/_base.py`：新增非抽象方法 `is_transferred(torrent_id)`，
+  内部查账本；下载器下线时返回 `False`（按未转移处理，不阻断流程）
+- `web/templates/setting/basic.html`：新增 `_coerce_ledger_numbers()`，
+  把两个数字字段 `parseInt` 后回写，避免 YAML 里存成字符串
+
+### 7. 验证
+
+| 检查 | 结果 |
+|---|---|
+| `transfer_ledger_verify.py`（真 SQLAlchemy + 临时 SQLite 跑真实 `DbHelper`） | 25 通过 / 0 失败 |
+| `tag_behavior_verify.py`（账本判定 + 标签精确匹配，16 项） | 16 通过 / 0 失败 |
+| `tags_utils_verify.py`（含「旧 API 已移除」断言） | 29 通过 / 0 失败 |
+| `tag_system_source_verify.py`（71 项源码级断言） | 71 通过 / 0 失败 |
+| `config_save_comment_verify.py`（注释保留 + 幂等） | 15 通过 / 0 失败 |
+| `decorator_structure_check.py` | 6/6 通过 |
+| `web_main_import_verify.py`（64 个路由装饰器真实 eval） | 6/6 通过 |
+| 模板语法（basic / brushtask / site） | 全部通过 |
+| `py_compile`（12 个改动文件） | 全部通过 |
+| `config.yaml` 解析与类型 | `true` / `5000` / `90`（bool / int / int） |
+
+## 版本号
+
+v5.2.0
+
+---
+
 # v5.1.3 (2026-09-21)
 
 ## 新特性：标签完全由你自己定义，程序不再自动追加
