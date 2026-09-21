@@ -794,7 +794,10 @@
 
   // ===================== 站点体检（L0-L6） =====================
 
-  let SITEHEALTH_SITEID = null;
+  // 注意：本页脚本作为 SPA 片段会被反复注入（functions.js: page_content.html(data)），
+  // 顶层必须用 var —— 顶层 let/const 在二次注入时会抛 "already been declared"，
+  // 导致整段脚本（含下方所有按钮绑定）全部不执行。
+  var SITEHEALTH_SITEID = null;
 
   // 打开体检弹窗（参数从 data 属性取，避免站点名里的引号破坏内联 JS）
   function show_site_health(el) {

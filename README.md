@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.0.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.1.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -286,6 +286,27 @@ TMDB 缺字段误杀）。电影看 `release_date`、剧集看 `first_air_date`�
 > 实际它在 `merge_media_info` 之后执行，此时种子侧 `year` 已被卡片的
 > `release_date[0:4]` 覆盖，两侧同源 —— 该分支既不会误杀也拦不住东西。
 > 真正干活的年份闸门是 merge 之前执行的 `year_match`。
+
+#### 2.11 单页片段的脚本只能注入一次（v5.1.0）
+
+「站点」页的**连通性测试**按钮点了毫无反应，连按钮文字都不变 —— 而且
+**F5 刷新后首次进入是好的，切走再切回来就坏**。
+
+原因是它的 Web 结构：`navigation.html` 框架 + 页面片段经
+`functions.js:70` 的 `page_content.html(data)` 注入 `#page_content`。
+jQuery 的 `.html()` 会执行片段里的 `<script>`，所以**每导航一次片段脚本就重跑一次**。
+片段里的顶层 `let`/`const`（如 `site.html` 的 `let SITEHEALTH_SITEID`）在全局
+只能声明一次，二次注入直接抛 `Identifier ... has already been declared`；
+该错误发生在**全局声明实例化阶段、先于任何语句**，于是整段脚本一句都不执行，
+按钮绑定全部丢失 —— 而 `function show_sitetest_modal()` 早已提升为全局，
+**弹窗照开、按钮全死**。
+
+同一根因还波及另外两页（`service.html` 的备份/恢复按钮、
+`statistics.html` 的排行缓存）。三处顶层 `let`/`const` 已统一改为 `var`。
+
+> **给二次开发者的规则**：`web/templates/**/*.html` 里作为 SPA 片段注入的
+> 脚本块，**顶层不要用 `let`/`const`**，一律用 `var`；需要局部变量就包进
+> IIFE 或函数里。仓库内已有扫描脚本可自查。
 
 ### 3. 跳转与入口优化
 
@@ -907,7 +928,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.0.8   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.1.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1010,4 +1031,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-20 ｜ 当前版本 v5.0.8_
+_Last updated: 2026-09-21 ｜ 当前版本 v5.1.0_

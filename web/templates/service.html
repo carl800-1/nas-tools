@@ -393,7 +393,8 @@
   // ======================= 备份&恢复 =======================
 
   // 备份/恢复条目定义（服务端下发，避免前后端名称不一致）
-  let backup_item_defs = [];
+  // 注意：本页脚本作为 SPA 片段会被反复注入，顶层必须用 var（let/const 二次注入会整段失效）
+  var backup_item_defs = [];
 
   // HTML转义
   function escape_text(text) {

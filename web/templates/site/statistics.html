@@ -954,7 +954,8 @@
       ]
     });
 
-    const rankingCache = new Map();
+    // 注意：本页脚本作为 SPA 片段会被反复注入，顶层必须用 var（let/const 二次注入会整段失效）
+    var rankingCache = new Map();
 
     function rankingRequirementMeta(item) {
       const key = item.key || '';
