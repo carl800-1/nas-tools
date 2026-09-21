@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.1.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.1.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -328,6 +328,42 @@ L5 仍会照常执行。
 
 > 注意 `config.yaml` 的默认值是 `proxies: {http: , https: }` —— 「键存在、值为空」，
 > 判空必须逐项判，不能直接写 `if not proxies`。
+
+#### 2.13 标签完全由你自己定义（v5.1.3）
+
+**程序不再往下载器里写任何你没有填过的标签。** 历史版本会在你未开启「转移」时
+强行给种子加上「已整理」，而这个名字在界面上无处可改 —— v5.1.3 起彻底去掉。
+
+标签有四个来源，全部由你填写，程序只读取与拼接：
+
+| 位置 | 作用域 | 说明 |
+|---|---|---|
+| 设置 → 标签 → 我的标签库 | 全局 | 只是候选清单，供各处下拉补全，便于统一命名 |
+| 站点设置 → 站点标签 | 单个站点 | 该站点所有下载都带上 |
+| 刷流任务 → 标签 | 单个任务 | 仅该刷流任务 |
+| 下载设置 → 标签 | 单条下载设置 | 按下载设置生效 |
+
+**分隔符统一为英文逗号 `,`。** 历史版本里下载设置与站点标签按分号拆分、
+刷流任务按逗号拆分，同一个标签换个入口就匹配不上；现在四处一致。
+
+「是不是已经整理过」这个判断还在，但变成了**只读**配置：
+
+```yaml
+pt:
+  tags: 电影,电视剧        # 你的标签库，逗号分隔，留空即不用
+  tag_organized: 已整理    # 程序只读：你在上面任一处填了这个名字，
+                          # 才跳过该任务的重复整理。留空 = 关闭这层去重保护
+```
+
+也就是说：**要保留「整理过就别重复整理」的行为，请自己把「已整理」
+填进站点标签或刷流任务标签。** 不填的话，已完成的任务每轮都会重新检查整理。
+
+界面上的标签现在常驻显示：刷流任务列表的卡片标题旁直接是彩色徽标，
+不用展开、不用悬停。
+
+给二次开发者的提醒：改 `config.yaml` 后写盘**必须就地修改配置对象**，
+不要 `dict(cfg)` 再存 —— config.yaml 是 ruamel 的注释感知结构，
+浅拷贝会让全部说明注释静默消失（实测漂移 1343 字节）。
 
 ### 3. 跳转与入口优化
 
@@ -949,7 +985,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.1.2   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.1.3   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1052,4 +1088,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-21 ｜ 当前版本 v5.1.2_
+_Last updated: 2026-09-21 ｜ 当前版本 v5.1.3_
