@@ -1058,12 +1058,12 @@ class BrushTask(object):
                     torrent_year = self.__get_torrent_year(title)
                     if not torrent_year:
                         log.debug("【Brush】%s 标题中未解析到发布年份，跳过年份判断" % title)
-                    elif rule_years[0] == "gt" and torrent_year < min_year:
-                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 不早于 %d" % (
+                    elif rule_years[0] == "gt" and torrent_year <= min_year:
+                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 大于 %d" % (
                             title, torrent_year, min_year))
                         return False
-                    elif rule_years[0] == "lt" and torrent_year > min_year:
-                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 不晚于 %d" % (
+                    elif rule_years[0] == "lt" and torrent_year >= min_year:
+                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 小于 %d" % (
                             title, torrent_year, min_year))
                         return False
                     elif rule_years[0] == "bw" and (

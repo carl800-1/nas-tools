@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.2.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.2.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -414,6 +414,17 @@ pt:
 
 同区的「当前站点下载任务数」已移除 —— 它只有任务配了标签才生效，实际经常形同虚设，
 且与「当前站点下载数」重叠；老任务里的该键不再读取，无需迁移。
+
+#### 2.16 发布年份改用「大于 / 小于」，边界改为严格（v5.2.3）
+
+「发布年份」的下拉文案由「不早于 / 不晚于」改成「大于 / 小于」，判断同步
+从**含端点**改成**严格比较**：`gt#2000` 现在是**年份 > 2000**（2001 年起，
+不再放行 2000 年），`lt#2020` 是**年份 < 2020**（至 2019 年，不再放行 2020 年）；
+「介于」仍含两端。
+
+**已保存的任务会立刻按新口径生效** —— 如果原先的「不早于 2000」本意是想连
+2000 年一起放行，把值减 1（填 1999）即可。任务卡片上的徽章、开放 API 说明
+与运行日志里的措辞一并同步。
 
 ### 3. 跳转与入口优化
 
@@ -1035,7 +1046,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.2.2   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.2.3   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1138,4 +1149,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-22 ｜ 当前版本 v5.2.2_
+_Last updated: 2026-09-22 ｜ 当前版本 v5.2.3_

@@ -2553,8 +2553,8 @@ class WebAction:
         if rules.get("year"):
             years = rules.get("year").split("#")
             if len(years) >= 2 and years[0]:
-                # 年份用「不早于/不晚于」表达，避免被误读成大小比较
-                year_filter_string = {"gt": "不早于", "lt": "不晚于", "bw": "介于"}
+                # 年份用「大于/小于」表达，与新建任务界面下拉保持一致（严格比较，不含该年）
+                year_filter_string = {"gt": "大于", "lt": "小于", "bw": "介于"}
                 rule_htmls.append(
                     '<span class="badge badge-outline text-blue me-1 mb-1" title="发布年份">发布年份: %s %s</span>'
                     % (year_filter_string.get(years[0], ""), years[1].replace(",", "-") if years[1] else ""))

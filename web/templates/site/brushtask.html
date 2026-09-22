@@ -636,7 +636,7 @@
                     <div class="col-lg-4">
                         <div class="mb-3">
                             <label class="form-label">发布年份 <span class="form-help"
-                                                                  title="按种子标题解析出的发布年份过滤：不早于＝年份≥该值，不晚于＝年份≤该值，介于时使用英文逗号,分隔两个值，均包含边界；标题中解析不到年份的种子不会被此条件拦截"
+                                                                  title="按种子标题解析出的发布年份过滤：大于＝年份大于该值（不含该年），小于＝年份小于该值（不含该年），介于时使用英文逗号,分隔两个值，均包含边界；标题中解析不到年份的种子不会被此条件拦截"
                                                                   data-bs-toggle="tooltip">?</span></label>
                             <div class="input-group">
                                 <button type="button" class="btn dropdown-toggle" data-bs-toggle="dropdown"
@@ -652,11 +652,11 @@
                                     </a>
                                     <a class="dropdown-item" id="brushtask_year_do_gt" href="javascript:void(0)"
                                        onclick="filter_item_change('gt', 'brushtask_year',$(this))">
-                                        不早于
+                                        大于
                                     </a>
                                     <a class="dropdown-item" id="brushtask_year_do_lt" href="javascript:void(0)"
                                        onclick="filter_item_change('lt', 'brushtask_year',$(this))">
-                                        不晚于
+                                        小于
                                     </a>
                                     <a class="dropdown-item" id="brushtask_year_do_bw" href="javascript:void(0)"
                                        onclick="filter_item_change('bw', 'brushtask_year',$(this))">
