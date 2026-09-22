@@ -19,6 +19,7 @@ from app.plugins import EventManager
 from app.sites import Sites, SiteSubtitle
 from app.utils import Torrent, StringUtils, SystemUtils, ExceptionUtils, NumberUtils
 from app.utils.commons import singleton
+from app.utils.media_classifier import MediaClassifier, MediaCategory
 from app.utils.tags import Tags
 from app.utils.types import MediaType, DownloaderType, SearchType, RmtMode, EventType, SystemConfigKey
 from config import Config, PT_TAG, RMT_MEDIAEXT, PT_TRANSFER_INTERVAL
@@ -32,6 +33,128 @@ BRUSH_SKIP_CACHE_INTERVAL = 60
 
 # 添加下载失败后，默认最多再回退尝试几个同名候选（laboratory.search_retry_max）
 DEFAULT_DOWNLOAD_RETRY_MAX = 20
+
+# 「按类型自动分类」的扫描间隔（秒）
+# 判定是纯本地正则，开销可忽略；间隔主要控制问下载器要任务列表的频率。
+AUTO_CATEGORY_INTERVAL = 300
+
+
+def _cfg_bool(value, default=False):
+    """
+    宽松布尔解析（配置开关专用）
+
+    config.yaml 里可以直接写 YAML 布尔（``true`` / ``false``，ruamel 会解析成
+    Python 的 True/False）；但从 WEB 设置页保存回来的值是**字符串** ——
+    后端按 ``id="pt.xxx"`` 拆分后原样写入，不做任何类型转换。
+
+    所以这里必须归一化：否则字符串 ``"false"`` 经 ``bool()`` 会变成 True，
+    开关等于关不掉。无法识别的值一律回落 ``default``。
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "是", "开")
+
+
+# 「下载目录设置」里「自动分类」列的取值
+#   空串      = 不启用（该行不参与自动分类）
+#   「自动」  = 判定出的类型与本行「类型」一致时命中（「类型」为「全部」时任意类型都命中）
+#   其余三个  = 固定接收该类型的任务，不看判定结果
+AUTO_CATEGORY_AUTO = "自动"
+AUTO_CATEGORY_FIXED = ("电影", "电视剧", "其它")
+# 「下载目录设置」里「类型」列的取值 → 分类判定结果。动漫按产品需求并入电视剧
+AUTO_CATEGORY_TYPE_MAP = {
+    "电影": "电影",
+    "电视剧": "电视剧",
+    "动漫": "电视剧",
+    "全部": None,
+}
+
+
+def get_auto_category_config():
+    """
+    读取「按类型自动分类」的兜底配置（config.yaml 的 pt 段）
+
+    **主配置不在这里**，而是在下载器的「下载目录设置」里（每行一个「自动分类」
+    下拉，见 :func:`get_auto_category_rules`）—— 配了规则就生效，全设成「不启用」
+    就等于关闭功能，不需要额外的总开关。
+
+    本节只放几个通常不用改的兜底项，配置缺失或写错时一律回落安全默认值。
+
+    三个安全相关的默认值是有意选的：
+
+    * ``create=True`` —— 目标分类不存在时自动创建（**不带保存路径**）。否则用户的
+      qB 里没有同名分类时，写入会被 qB 拒绝（409），功能静默失效。
+    * ``skip_auto_tmm=True`` —— 跳过开着「自动种子管理」的任务。qB 在改分类时会把
+      这类任务的文件搬到分类的保存路径下，一旦搬动正在做种的数据就是事故。
+    * ``use_files=False`` —— 文件清单二次确认会给每个判成「其它」的任务多一次
+      请求，任务量大时明显变慢，默认关闭。
+
+    :return: dict，键为 scope / create / skip_auto_tmm / use_files / other_keywords
+    """
+    pt_conf = Config().get_config("pt") or {}
+    scope = str(pt_conf.get("auto_category_scope") or "completed").strip().lower()
+    if scope not in ("completed", "all"):
+        scope = "completed"
+    return {
+        "scope": scope,
+        "create": _cfg_bool(pt_conf.get("auto_category_create"), True),
+        "skip_auto_tmm": _cfg_bool(pt_conf.get("auto_category_skip_auto_tmm"), True),
+        "use_files": _cfg_bool(pt_conf.get("auto_category_use_files"), False),
+        "other_keywords": Tags.split(pt_conf.get("auto_category_other_keywords")),
+    }
+
+
+def get_auto_category_rules(download_dir):
+    """
+    从下载器的「下载目录设置」里提取自动分类规则
+
+    下载目录设置每一行在 DB 里是一个 dict，字段对应界面上的列：
+
+    ================  ==========================================
+    ``type``          「类型」：全部 / 电影 / 电视剧 / 动漫
+    ``category``      「二级分类」
+    ``label``         「分类标签，仅QB有效」—— 就是 qB 的分类名
+    ``save_path``     「下载保存目录」
+    ``container_path``「NAStool访问目录」
+    ``auto_category`` 「自动分类」（本次新增）
+    ================  ==========================================
+
+    「自动分类」列取值：
+
+    * 空 —— 不参与自动分类
+    * ``自动`` —— 判定类型与本行「类型」一致时命中；「类型」为「全部」则任意类型都命中
+    * ``电影`` / ``电视剧`` / ``其它`` —— 固定接收该类型的任务，不看判定结果
+
+    规则**按界面上的先后顺序**返回，先命中先用，用户可以把更具体的规则排前面。
+
+    :param download_dir: 下载器配置里的 download_dir（JSON 文本或已是列表）
+    :return: [{"types": <可命中的类别集合或 None 表示任意>, "label": <分类名>}, ...]
+    """
+    rules = []
+    for attr in _load_download_dir(download_dir):
+        if not isinstance(attr, dict):
+            continue
+        target = str(attr.get("auto_category") or "").strip()
+        if not target:
+            continue
+        # 分类名优先用本行的「分类标签」；留空则用分类目标本身（电影/电视剧/其它）。
+        # 「自动」这一档的分类名允许为空 —— 此时在匹配阶段用判定结果兜底。
+        label = str(attr.get("label") or "").strip()
+        if target == AUTO_CATEGORY_AUTO:
+            rule_type = str(attr.get("type") or "").strip() or "全部"
+            if rule_type not in AUTO_CATEGORY_TYPE_MAP:
+                # 「类型」值异常（手工改过 DB / 旧数据）→ 当作「全部」，宁可多归类也不错停
+                rule_type = "全部"
+            match_type = AUTO_CATEGORY_TYPE_MAP[rule_type]
+            rules.append({
+                "types": {match_type} if match_type else None,
+                "label": label,
+            })
+        elif target in AUTO_CATEGORY_FIXED:
+            rules.append({"types": {target}, "label": label or target})
+    return rules
 
 
 def get_download_retry_max():
@@ -328,6 +451,14 @@ class Downloader:
                                     args=[downloader_id],
                                     trigger='interval',
                                     seconds=PT_TRANSFER_INTERVAL)
+        # 自动分类：与转移任务共用一个调度器，按自己的间隔独立触发。
+        # 这里**不判断有没有配置规则** —— 规则存在下载器的「下载目录设置」里，
+        # 用户随时可能在 Web 上新增一行，而 start_service 不会因此重启。
+        # 所以固定注册、由任务自己判断「没有规则就直接返回」，避免出现
+        # 「配好了却要重启程序才生效」这种最难排查的问题。
+        self._scheduler.add_job(func=self.auto_category_torrents,
+                                trigger='interval',
+                                seconds=AUTO_CATEGORY_INTERVAL)
         self._scheduler.print_jobs()
         self._scheduler.start()
         log.info("下载文件转移服务启动，目的目录：媒体库")
@@ -746,6 +877,178 @@ class Downloader:
                 log.info(f"【Downloader】转移账本清理完成，移除 {deleted} 条过期记录")
         except Exception as err:
             log.debug(f"【Downloader】转移账本清理失败：{str(err)}")
+
+    def auto_category_torrents(self, downloader_id=None):
+        """
+        按种子名称自动判断媒体类型，并把「电影 / 电视剧 / 其它」写进下载器分类
+
+        判定完全在本地完成（见 app/utils/media_classifier.py），不联网、不调用
+        TMDB，因此可以对下载器里的全量任务周期性扫描 —— 包括手工添加的、刷流
+        下载的、从未走过 nastool 识别链路的任务，这些是识别链路覆盖不到的部分。
+
+        规则来源是**下载器自己的「下载目录设置」**（见 :func:`get_auto_category_rules`）：
+        每行末尾的「自动分类」下拉决定这一行接不接收、接收哪一类，命中的行用它的
+        「分类标签」作为分类名。所以「配了规则就生效、全设不启用就等于关闭」。
+
+        只处理 qBittorrent：Transmission 没有「分类」这个概念（只有 labels），
+        而 qB 的分类自带保存路径，两边语义无法简单对齐 —— 强行适配只会得到
+        一个在 TR 上行为完全不同的功能。TR 的标签可以继续走别的手段。
+
+        :param downloader_id: 指定下载器 ID，不传则处理所有「已监控」的下载器
+        """
+        conf = get_auto_category_config()
+        downloader_ids = [downloader_id] if downloader_id else self._monitor_downloader_ids
+        if not downloader_ids:
+            return
+
+        for did in downloader_ids:
+            downloader_conf = self.get_downloader_conf(did) or {}
+            name = downloader_conf.get("name") or did
+            # 规则为空（用户在界面上一行都没启用）→ 直接返回，不碰下载器
+            rules = get_auto_category_rules(downloader_conf.get("download_dir"))
+            if not rules:
+                continue
+
+            _client = self.__get_client(did)
+            if not _client:
+                continue
+            if getattr(_client, "client_id", "") != "qbittorrent":
+                log.debug(f"【Downloader】下载器 {name} 不是 qBittorrent，自动分类跳过")
+                continue
+
+            try:
+                if conf.get("scope") == "all":
+                    torrents, error = _client.get_torrents()
+                    if error:
+                        continue
+                else:
+                    torrents = _client.get_completed_torrents()
+            except Exception as err:
+                ExceptionUtils.exception_traceback(err)
+                log.error(f"【Downloader】下载器 {name} 获取任务列表出错：{str(err)}")
+                continue
+
+            if not torrents:
+                continue
+
+            # 分类清单只取一次：qB 的分类是全局的，逐任务去查会白打 N 次请求
+            try:
+                categories = _client.get_categories()
+            except Exception as err:
+                log.error(f"【Downloader】下载器 {name} 获取分类清单出错：{str(err)}")
+                categories = {}
+
+            changed = 0
+            skipped_auto_tmm = 0
+            missing_category = set()
+            for torrent in torrents:
+                # qBittorrent 的任务是 dict（keys: name/hash/category/auto_tmm）
+                if not isinstance(torrent, dict):
+                    continue
+                title = torrent.get("name")
+                tid = torrent.get("hash")
+                if not title or tid is None:
+                    continue
+                current_category = str(torrent.get("category") or "").strip()
+
+                result = MediaClassifier.classify(
+                    title,
+                    category=current_category,
+                    extra_other_keywords=conf.get("other_keywords"),
+                )
+                # 「其它」是最需要二次确认的类别：标题里没有任何影视特征时，
+                # 再看一眼任务内的文件清单（可选，默认关闭 —— 每个任务多一次请求）
+                if conf.get("use_files") and result.category is MediaCategory.OTHER:
+                    file_names = self.__get_torrent_file_names(_client, tid)
+                    if file_names:
+                        confirmed = MediaClassifier.classify(
+                            title,
+                            files=file_names,
+                            category=current_category,
+                            extra_other_keywords=conf.get("other_keywords"),
+                        )
+                        if confirmed.category is not MediaCategory.OTHER:
+                            result = confirmed
+
+                rule = self.__match_category_rule(rules, result.category)
+                if not rule:
+                    # 没有任何一行接收这一类，跳过（用户可能只配了「电影」）
+                    continue
+                label = rule.get("label") or result.category.value
+                if current_category == label:
+                    # 已经是目标分类，不重复调用下载器接口
+                    continue
+
+                # 开了「自动种子管理」的任务：qB 改分类时会连文件一起搬走。
+                # 搬动正在做种的目录是有实际损失的操作，默认跳过并汇总提示。
+                if conf.get("skip_auto_tmm") and torrent.get("auto_tmm"):
+                    skipped_auto_tmm += 1
+                    continue
+
+                if label not in categories:
+                    if not conf.get("create"):
+                        missing_category.add(label)
+                        continue
+                    if not _client.create_category(label):
+                        missing_category.add(label)
+                        continue
+                    # 建出来的分类没有保存路径，写入不会引发任何文件搬移
+                    categories[label] = ""
+
+                if not _client.set_torrents_category([tid], label):
+                    continue
+                changed += 1
+                log.info(f"【Downloader】自动分类：{name} 「{title}」→ {label}"
+                         f"（{result.reason}）")
+
+            if changed:
+                log.info(f"【Downloader】下载器 {name} 自动分类完成，"
+                         f"共设置 {changed} 个任务的分类")
+            if skipped_auto_tmm:
+                log.warn(f"【Downloader】下载器 {name} 有 {skipped_auto_tmm} 个任务开启了"
+                         f"「自动种子管理」，改分类会导致 qB 搬移任务文件，已跳过。"
+                         f"确认可接受搬移时，把 pt.auto_category_skip_auto_tmm 设为 false")
+            if missing_category:
+                log.warn(f"【Downloader】下载器 {name} 以下分类在 qB 中不存在且未能创建，"
+                         f"相关任务未归类：{'、'.join(sorted(missing_category))}"
+                         f"（可在 pt.auto_category_create 开启自动创建）")
+
+    @staticmethod
+    def __match_category_rule(rules, category):
+        """
+        按顺序找出第一条接收该分类结果的规则，没有则返回 None
+
+        规则里的 ``types`` 为 None 表示「任意类型都收」（对应界面上的「类型=全部」）。
+        """
+        for rule in rules:
+            types = rule.get("types")
+            if types is None or category.value in types:
+                return rule
+        return None
+
+    @staticmethod
+    def __get_torrent_file_names(_client, tid):
+        """
+        取任务内文件名清单，供媒体类型二次确认使用
+
+        两种客户端返回的文件结构不同（qBittorrent 是 dict 列表、Transmission 是
+        对象列表），这里统一抽成文件名列表；任何异常都吞掉并返回 None —— 拿不到
+        文件清单只意味着少一个判定依据，不应影响本次扫描的其它任务。
+
+        :return: 文件名列表；取不到时返回 None
+        """
+        try:
+            files = _client.get_files(tid)
+        except Exception:
+            return None
+        if not files:
+            return None
+        names = []
+        for item in files:
+            name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+            if name:
+                names.append(str(name))
+        return names or None
 
     def get_brush_skip_map(self, force=False):
         """

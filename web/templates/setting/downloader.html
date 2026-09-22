@@ -308,7 +308,7 @@
         CURRENT_DIRDIV_LEVEL = 0;
         $("#div_downloader_downloaddir").empty();
         for (let download_dir of download_dirs) {
-          add_downloaddir(download_dir.type, download_dir.category, download_dir.save_path, download_dir.container_path, download_dir.label);
+          add_downloaddir(download_dir.type, download_dir.category, download_dir.save_path, download_dir.container_path, download_dir.label, download_dir.auto_category);
         }
         $("#delete_downloader_client_btn").show();
         $("#modal-downloader").modal("show");
@@ -406,7 +406,8 @@
         type: $(`#dir_type_${suffix}`).val(),
         category: $(`#dir_subtype_${suffix}`).val(),
         container_path: $(`#container_path_${suffix}`).val(),
-        label: $(`#path_label_${suffix}`).val()
+        label: $(`#path_label_${suffix}`).val(),
+        auto_category: $(`#dir_auto_${suffix}`).val()
       });
     });
     const params = {
@@ -449,7 +450,7 @@
 
   var CURRENT_DIRDIV_LEVEL = 0;
   //添加下载目录
-  function add_downloaddir(dir_type, dir_subtype, save_path, container_path, label) {
+  function add_downloaddir(dir_type, dir_subtype, save_path, container_path, label, auto_category) {
     let html = $("#div_downloader_downloaddir_template").text();
     $("#div_downloader_downloaddir").append(html.replaceAll('{DIRDIV_LEVEL}', CURRENT_DIRDIV_LEVEL));
     $(`#container_path_${CURRENT_DIRDIV_LEVEL}`).attr("onclick", "openFileBrowser(this,$(this).val(),'',true,false);");
@@ -468,6 +469,9 @@
     }
     if (label) {
       $(`#path_label_${CURRENT_DIRDIV_LEVEL}`).val(label);
+    }
+    if (auto_category) {
+      $(`#dir_auto_${CURRENT_DIRDIV_LEVEL}`).val(auto_category);
     }
     CURRENT_DIRDIV_LEVEL = CURRENT_DIRDIV_LEVEL + 1;
   }
@@ -576,6 +580,16 @@
       </div>
       <div class="col-12 col-lg mb-1">
         <input type="text" value="" id="path_label_{DIRDIV_LEVEL}" class="form-control" placeholder="分类标签，仅QB有效" autocomplete="off">
+      </div>
+      <div class="col-12 col-lg mb-1">
+        <select class="form-select" id="dir_auto_{DIRDIV_LEVEL}"
+                title="自动分类：程序按种子名称判定「电影/电视剧/其它」后，把命中的这一行的「分类标签」写成 qBittorrent 分类。选「自动」= 判定类型与本行「类型」一致时命中（本行类型为「全部」则任意类型都收）；选固定类别 = 本行固定接收该类，不看判定结果；选「不启用」= 本行不参与。全部行都选「不启用」即等于关闭本功能。仅 qBittorrent 支持（Transmission 没有分类概念）。">
+          <option value="" selected>不启用自动分类</option>
+          <option value="自动">自动</option>
+          <option value="电影">固定：电影</option>
+          <option value="电视剧">固定：电视剧</option>
+          <option value="其它">固定：其它</option>
+        </select>
       </div>
     </div>
     <div class="row">

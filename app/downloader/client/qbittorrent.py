@@ -262,6 +262,67 @@ class Qbittorrent(_IDownloadClient):
         except Exception as err:
             log.error(f"【{self.client_name}】{self.name} 设置种子标签出错：{str(err)}")
 
+    def get_categories(self):
+        """
+        获取下载器中的分类清单
+
+        :return: dict，{分类名: 保存路径}；读取失败返回空 dict
+        """
+        if not self.qbc:
+            return {}
+        try:
+            categories = self.qbc.torrents_categories(requests_args={'timeout': (10, 30)}) or {}
+        except Exception as err:
+            log.error(f"【{self.client_name}】{self.name} 获取分类清单出错：{str(err)}")
+            return {}
+        return {name: ((item or {}).get("savePath") or "")
+                for name, item in categories.items()}
+
+    def create_category(self, name):
+        """
+        创建分类（**不绑定保存路径**）
+
+        只传 name、不传 save_path 是有意为之：分类一旦绑了保存路径，
+        qBittorrent 在任务开着「自动种子管理」时会把任务文件搬到那个路径下。
+        自动分类只负责给任务归类，不该动用户的数据位置。
+
+        :param name: 分类名
+        :return: bool，是否创建成功
+        """
+        if not self.qbc or not name:
+            return False
+        try:
+            self.qbc.torrents_create_category(name=name)
+            log.info(f"【{self.client_name}】{self.name} 创建分类：{name}（不带保存路径）")
+            return True
+        except Exception as err:
+            log.error(f"【{self.client_name}】{self.name} 创建分类 {name} 出错：{str(err)}")
+            return False
+
+    def set_torrents_category(self, ids, category):
+        """
+        设置种子分类
+
+        ⚠️ qBittorrent 的分类**自带保存路径**：任务开着「自动种子管理」时，
+        改分类会让 qB 把任务文件搬到该分类的保存路径下（分类没有保存路径则搬回
+        默认保存路径）。调用方必须自己判断任务信息里的 ``auto_tmm`` 字段，
+        决定是否跳过 —— 本方法不做这个判断，因为能否接受搬移只有用户知道。
+
+        :param ids: 种子 Hash 列表
+        :param category: 分类名
+        :return: bool，是否写入成功
+        """
+        # 空 ids 必须挡住：qB 的 setCategory 对空 hashes 的行为没有保证，
+        # 万一被解释成「全部任务」，就会把整个下载器的分类一次刷掉。
+        if not self.qbc or not category or not ids:
+            return False
+        try:
+            self.qbc.torrents_set_category(torrent_hashes=ids, category=category)
+            return True
+        except Exception as err:
+            log.error(f"【{self.client_name}】{self.name} 设置种子分类出错：{str(err)}")
+            return False
+
     def torrents_set_force_start(self, ids):
         """
         设置强制作种
