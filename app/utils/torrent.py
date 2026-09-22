@@ -306,9 +306,32 @@ class Torrent:
                  readable_season_episode])
 
     @staticmethod
+    def _media_name(media_info):
+        """
+        控重用的「媒体名」：电影是片名，剧集是片名 + 季集
+
+        与 get_download_list 的控重主链是同一把尺子，抽出来供下载回退逻辑复用
+        （batch_download 判断「这一季集是否已经下过」必须与控重用同一判据，
+        否则回退成功后原始项会在后续季集轮次里被重复下载）。
+        """
+        if media_info.type != MediaType.MOVIE:
+            return "%s%s" % (media_info.get_title_string(),
+                             media_info.get_season_episode_string())
+        return media_info.get_title_string()
+
+    @staticmethod
     def get_download_list(media_list, download_order):
         """
         对媒体信息进行排序、去重
+
+        ⚠️ 行为说明（v5.2.5）：每个名称仍然只返回排序最高的那一条（控重不变），
+        但**同名的其余候选不再被丢弃** —— 它们按同样的顺序挂在选中项的
+        `_fallback_list` 属性上，供 batch_download 在添加下载失败时逐个回退。
+
+        为什么需要：原先这些候选被直接扔掉，于是第 1 名添加失败时
+        （例如站点下载域名被网络阻断），排在后面、完全可用的候选
+        一次都不会被尝试，日志里就会出现「候选 48 条」紧接着
+        「未下载到资源」的矛盾现象。
         """
         if not media_list:
             return []
@@ -326,17 +349,23 @@ class Torrent:
         # 被选中的项在「排序后列表」里的下标，仅用于日志标注，不参与选择
         picked_index = []
         # 排序后重新加入数组，按真实名称控重，即只取每个名称的第一个
+        # 同名候选不再直接丢弃：先按名称分组收集，稍后挂到选中项上作为回退候选
+        grouped = {}
         for index, t_item in enumerate(media_list):
             # 控重的主链是名称、年份、季、集
-            if t_item.type != MediaType.MOVIE:
-                media_name = "%s%s" % (t_item.get_title_string(),
-                                       t_item.get_season_episode_string())
-            else:
-                media_name = t_item.get_title_string()
+            media_name = Torrent._media_name(t_item)
+            grouped.setdefault(media_name, []).append(t_item)
             if media_name not in can_download_list:
                 can_download_list.append(media_name)
                 can_download_list_item.append(t_item)
                 picked_index.append(index)
+
+        # 把同名的其他候选（按同样的排序，不含被选中的那条）挂到选中项上。
+        # 属性名以下划线开头，属于本模块与 Downloader 之间的约定；
+        # 每次调用都会重新赋值，不会把上一轮的候选带过来。
+        for item in can_download_list_item:
+            group = grouped.get(Torrent._media_name(item)) or []
+            setattr(item, "_fallback_list", [x for x in group if x is not item])
 
         # 把「为什么选了这一个」写进日志
         # 现场问题：日志里只有一句「实际下载了 1 个资源」，既看不到候选清单，
@@ -364,12 +393,20 @@ class Torrent:
             _, readable = Torrent._sort_key_parts(item, download_order)
             detail = " ".join("%s=%s" % (name, value)
                               for name, value in zip(key_names, readable))
+            # 选中项补一句「还有多少同名候选可回退」，让「候选 48 条却下载失败」
+            # 这种疑问在日志里当场就能解释清楚
+            suffix = ""
+            if index in picked_index:
+                suffix = " ← 选中"
+                fallbacks = len(getattr(item, "_fallback_list", None) or [])
+                if fallbacks:
+                    suffix += "（另有 %s 个同名候选可回退）" % fallbacks
             log.info("【Downloader】  第 %s 名 %s | %s | %s%s"
                      % (index + 1,
                         item.site or "未知站点",
                         item.size or "-",
                         detail,
-                        " ← 选中" if index in picked_index else ""))
+                        suffix))
         if len(media_list) > len(shown):
             log.info("【Downloader】  ...（共 %s 条候选，只列前 %s 条）" % (len(media_list), len(shown)))
         # 第 1 名相对第 2 名的决胜点：只比前两名就足以回答「凭什么选它」

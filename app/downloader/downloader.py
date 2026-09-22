@@ -30,6 +30,37 @@ client_lock = Lock()
 # 目录同步每处理一个文件都要判定一次，不能每次都去问下载器。
 BRUSH_SKIP_CACHE_INTERVAL = 60
 
+# 添加下载失败后，默认最多再回退尝试几个同名候选（laboratory.search_retry_max）
+DEFAULT_DOWNLOAD_RETRY_MAX = 20
+
+
+def get_download_retry_max():
+    """
+    读取「添加下载失败后最多回退几个同名候选」
+
+    背景：择优下载原先每个名称只取排序最高的一条，第 1 名添加失败后
+    整部片子就直接判定为「未下载到资源」，排在后面、完全可用的候选
+    一次都没有被尝试过。配置项 laboratory.search_retry_max 控制回退上限：
+        0  -> 关闭回退（与老版本行为一致，可作回退开关）
+        20 -> 最多再试 20 个同名候选（默认）
+        -1 -> 不限制，把同名候选全部试完
+    为什么不默认不限：每个失败候选都要走一次网络请求（站点下载域名不通时
+    往往是等超时），而同名候选可能有几十条，全部试完会把单次搜索拖到数分钟。
+
+    配置缺失或非法值一律回落默认值，保证不会因为配置写错而悄悄关掉回退。
+
+    :return: 回退候选数量上限，-1 表示不限
+    """
+    laboratory = Config().get_config("laboratory") or {}
+    try:
+        value = int(laboratory.get("search_retry_max", DEFAULT_DOWNLOAD_RETRY_MAX))
+    except (TypeError, ValueError):
+        return DEFAULT_DOWNLOAD_RETRY_MAX
+    # 小于 -1 视为非法：-1 是「不限」的合法取值，0 是「关闭」
+    if value < -1:
+        return DEFAULT_DOWNLOAD_RETRY_MAX
+    return value
+
 
 def _load_download_dir(raw):
     """
@@ -320,6 +351,22 @@ class Downloader:
                 self.clients[str(did)] = self.__build_class(ctype, config)
             return self.clients.get(str(did))
 
+    def __notify_download_fail(self, media_info, msg, in_from=None):
+        """
+        触发下载失败事件并发送失败消息
+
+        v5.2.5 把原先 download() 里的闭包抽成独立方法：择优下载添加失败后会回退
+        尝试下一个同名候选，中间候选必须「静默失败」—— 否则一次搜索下来
+        （同名候选几十条就代表几十次尝试）就是几十条失败消息 + 几十次 webhook。
+        所以只有调用方确认整组候选都失败时，才走这里通知一次。
+        """
+        self.eventmanager.send_event(EventType.DownloadFail, {
+            "media_info": media_info.to_dict(),
+            "reason": msg
+        })
+        if in_from:
+            self.message.send_download_fail_message(media_info, f"添加下载任务失败：{msg}")
+
     def download(self,
                  media_info,
                  is_paused=None,
@@ -333,7 +380,8 @@ class Downloader:
                  in_from=None,
                  user_name=None,
                  skip_size_check=False,
-                 proxy=None):
+                 proxy=None,
+                 notify_fail=True):
         """
         添加下载任务，根据当前使用的下载器分别调用不同的客户端处理
         :param media_info: 需下载的媒体信息，含URL地址
@@ -349,23 +397,26 @@ class Downloader:
         :param user_name: 用户名
         :param skip_size_check: 跳过尺寸检查，用于刷流部分下载
         :param proxy: 是否使用代理，指定该选项为 True/False 会覆盖 site_info 的设置
+        :param notify_fail: 添加失败时是否立刻发失败事件与消息。默认 True（原行为）；
+            择优下载回退重试时对中间候选传 False，由 batch_download 汇总后统一通知一次。
         :return: 下载器类型, 种子ID，错误信息
         """
 
         def __download_fail(msg):
             """
-            触发下载失败事件和发送消息
+            记录失败原因，并按需触发下载失败事件与消息
             """
             # 把失败原因写进日志：原先只发事件与消息，日志里看不到任何原因，
             # 排查「下载失败但界面无提示」时只能翻消息中心或外部插件。
-            log.error(f"【Downloader】{media_info.site or '未知站点'} "
-                      f"{media_info.get_title_string()} 添加下载任务失败：{msg or '未知原因'}")
-            self.eventmanager.send_event(EventType.DownloadFail, {
-                "media_info": media_info.to_dict(),
-                "reason": msg
-            })
-            if in_from:
-                self.message.send_download_fail_message(media_info, f"添加下载任务失败：{msg}")
+            if notify_fail:
+                log.error(f"【Downloader】{media_info.site or '未知站点'} "
+                          f"{media_info.get_title_string()} 添加下载任务失败：{msg or '未知原因'}")
+                self.__notify_download_fail(media_info, msg, in_from)
+            else:
+                # 回退重试中的中间候选：只留一条 warn，不发事件、不发消息
+                log.warn(f"【Downloader】{media_info.site or '未知站点'} "
+                         f"{media_info.get_title_string()} 候选添加失败（将继续尝试下一个候选）："
+                         f"{msg or '未知原因'}")
 
         # 触发下载事件
         self.eventmanager.send_event(EventType.DownloadAdd, {
@@ -911,26 +962,70 @@ class Downloader:
 
         # 已下载的项目
         return_items = []
+        # 本次已成功添加下载的媒体名（含回退成功的候选）。
+        # 与 return_items 的区别：回退成功时实际下载的是同名候选，
+        # 而调用方（TV 路径）是按原始 item 判断「这一季集是否已经下过」的，
+        # 只记 item 会让原始项在后续季集轮次里被再下一次。
+        downloaded_names = set()
+        # 添加下载失败后最多回退尝试几个同名候选（laboratory.search_retry_max）
+        retry_max = get_download_retry_max()
         # 返回按季、集数倒序排序的列表
         download_list = Torrent().get_download_list(media_list, self._download_order)
 
         def __download(download_item, torrent_file=None, tag=None, is_paused=None):
             """
             下载及发送通知
+
+            v5.2.5：添加下载失败时自动回退到下一个同名候选（顺序即择优顺序），
+            直到成功或用尽候选项。中间候选静默失败（不发事件、不发消息），
+            只有整组候选都失败时才统一通知一次，避免一次搜索产生几十条通知。
             """
-            _downloader_id, did, dir, msg = self.download(
-                media_info=download_item,
-                download_dir=download_item.save_path,
-                download_setting=download_item.download_setting,
-                torrent_file=torrent_file,
-                tag=tag,
-                is_paused=is_paused,
-                in_from=in_from,
-                user_name=user_name)
-            if did:
-                if download_item not in return_items:
-                    return_items.append(download_item)
-            return _downloader_id, did
+            # 候选清单：原始选中项 + 挂在它身上的同名其他候选
+            candidates = [download_item]
+            if retry_max != 0:
+                fallbacks = list(getattr(download_item, "_fallback_list", None) or [])
+                if retry_max > 0:
+                    fallbacks = fallbacks[:retry_max]
+                candidates.extend(fallbacks)
+
+            last_msg = ""
+            for index, candidate in enumerate(candidates):
+                _downloader_id, did, dir, msg = self.download(
+                    media_info=candidate,
+                    download_dir=candidate.save_path,
+                    download_setting=candidate.download_setting,
+                    # 种子文件只对首个候选有效：回退候选没有对应的本地种子文件，
+                    # 交给 download() 用 enclosure 链接重新解析
+                    torrent_file=torrent_file if candidate is download_item else None,
+                    tag=tag,
+                    is_paused=is_paused,
+                    in_from=in_from,
+                    user_name=user_name,
+                    # 通知时机由这里统一控制，download() 内部不再各自发消息
+                    notify_fail=False)
+                if did:
+                    if index > 0:
+                        log.info("【Downloader】%s 前 %s 个候选均失败，已回退到第 %s 个候选添加成功：%s | %s"
+                                 % (download_item.get_title_string(), index, index + 1,
+                                    candidate.site or "未知站点", candidate.org_string))
+                    if candidate not in return_items:
+                        return_items.append(candidate)
+                    downloaded_names.add(Torrent._media_name(download_item))
+                    return _downloader_id, did
+                last_msg = msg or "未知原因"
+                if index < len(candidates) - 1:
+                    log.info("【Downloader】%s 第 %s/%s 个候选添加失败：%s | %s —— %s，继续尝试下一个候选"
+                             % (download_item.get_title_string(), index + 1, len(candidates),
+                                candidate.site or "未知站点", candidate.org_string, last_msg))
+
+            # 走到这里说明候选全部失败，统一通知一次（不再逐条发）
+            if len(candidates) > 1:
+                summary = "已尝试 %s 个同名候选全部失败，最后一个失败原因：%s" % (len(candidates), last_msg)
+                log.warn("【Downloader】%s %s" % (download_item.get_title_string(), summary))
+            else:
+                summary = last_msg
+            self.__notify_download_fail(download_item, summary, in_from)
+            return None, None
 
         def __update_seasons(tmdbid, need, current):
             """
@@ -1034,7 +1129,9 @@ class Downloader:
                         if item.type == MediaType.MOVIE:
                             continue
                         if item.tmdb_id == need_tmdbid:
-                            if item in return_items:
+                            # 判据与控重一致（片名 + 季集）：回退成功时实际下载的是
+                            # 同名候选，此时原始项也算「已下过」，否则会被重复下载
+                            if Torrent._media_name(item) in downloaded_names:
                                 continue
                             # 只处理单季含集的种子
                             item_season = item.get_season_list()
@@ -1070,7 +1167,7 @@ class Downloader:
                     for item in download_list:
                         if item.type == MediaType.MOVIE:
                             continue
-                        if item in return_items:
+                        if Torrent._media_name(item) in downloaded_names:
                             continue
                         if not need_episodes:
                             break
