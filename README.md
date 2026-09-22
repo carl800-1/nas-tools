@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.2.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.2.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -425,6 +425,18 @@ pt:
 **已保存的任务会立刻按新口径生效** —— 如果原先的「不早于 2000」本意是想连
 2000 年一起放行，把值减 1（填 1999）即可。任务卡片上的徽章、开放 API 说明
 与运行日志里的措辞一并同步。
+
+#### 2.17 实时日志会自动滚到最新了（v5.2.4）
+
+「实时日志」弹窗以前只会把新日志追加进去，不保证跟着滚。原因不是滚动容器坏了，
+而是判定「要不要自动跟随」用的是 `scrollTop + offsetHeight >= scrollHeight`
+这种**零容差**写法，并且只在追加前算一次 —— 滚动位置差 1px 到不了理论最大值
+（物理像素吸附、亚像素布局都会），判据即为假，而**为假之后就不再跟随**，
+也不会自己恢复。
+
+现在改成：默认永远跟随最新；用户手动往上翻才暂停，此时按钮栏会出现
+**「回到底部」**，点一下或自己滚回底部即恢复跟随。打开弹窗、切换日志来源
+都会重新从最新开始跟随。
 
 ### 3. 跳转与入口优化
 
@@ -1046,7 +1058,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.2.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.2.4   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1149,4 +1161,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-22 ｜ 当前版本 v5.2.3_
+_Last updated: 2026-09-22 ｜ 当前版本 v5.2.4_

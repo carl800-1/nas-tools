@@ -144,6 +144,61 @@ function start_logging() {
   };
 }
 
+// 实时日志：是否自动跟随最新（用户手动往上翻时暂停）
+let LoggingAutoFollow = true;
+
+// 判定滚动容器是否停在最新（留 8px 容差：缩放/亚像素会让 scrollTop 差零点几像素，
+// 严格 >= 的写法一旦不成立就再也不跟随）
+function logging_at_bottom(el) {
+  return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 8;
+}
+
+// 实时日志：滚到最新。若本容器不可滚（页面结构变化），依次兜底尝试外层容器
+function scroll_logging_to_bottom() {
+  let node = document.getElementById("logging_table");
+  let guard = 0;
+  while (node && guard++ < 8) {
+    if (node.scrollHeight - node.clientHeight > 2) {
+      node.scrollTop = node.scrollHeight;
+    }
+    if (node.classList && node.classList.contains("modal-content")) {
+      break;
+    }
+    node = node.parentElement;
+  }
+}
+
+// 显示/隐藏「回到底部」
+function logging_follow_hint(show) {
+  let btn = document.getElementById("logging_follow_btn");
+  if (!btn) {
+    return;
+  }
+  let want = show ? "" : "none";
+  if (btn.style.display !== want) {
+    btn.style.display = want;
+  }
+}
+
+// 点「回到底部」：恢复跟随并滚到最新
+function logging_follow_bottom() {
+  LoggingAutoFollow = true;
+  logging_follow_hint(false);
+  scroll_logging_to_bottom();
+}
+
+// 用户手动滚动日志时更新跟随开关（scroll 不冒泡，用捕获阶段监听）
+document.addEventListener("scroll", function (event) {
+  let el = event.target;
+  if (el && el.id === "logging_table") {
+    let follow = logging_at_bottom(el);
+    if (follow !== LoggingAutoFollow) {
+      LoggingAutoFollow = follow;
+      logging_follow_hint(!follow);
+    }
+  }
+}, true);
+
 // 刷新日志
 function render_logging(log_list) {
   if (log_list) {
@@ -185,16 +240,18 @@ function render_logging(log_list) {
                   </tr>`;
     }
     if (tbody) {
-      let logging_table_obj = $("#logging_table");
-      let bool_ToScrolTop = (logging_table_obj.scrollTop() + logging_table_obj.prop("offsetHeight")) >= logging_table_obj.prop("scrollHeight");
       let logging_content = $("#logging_content");
       if (logging_content.text().indexOf("刷新中...") !== -1) {
         logging_content.empty();
+        // 换了一份新日志，重新从最新开始跟随
+        LoggingAutoFollow = true;
       }
       logging_content.append(tbody);
-      if (bool_ToScrolTop) {
+      if (LoggingAutoFollow) {
+        // 先滚一次；再在 500ms 后补一次（长日志换行会让 scrollHeight 再变化）
+        scroll_logging_to_bottom();
         setTimeout(function () {
-          logging_table_obj.scrollTop(logging_table_obj.prop("scrollHeight"));
+          scroll_logging_to_bottom();
         }, 500);
       }
     }
@@ -221,6 +278,10 @@ function show_logging_modal() {
   // 显示窗口
   $("#logging_stop_btn").text("暂停");
   $('#modal-logging').modal('show');
+  // 重新打开时复位为「跟随最新」
+  LoggingAutoFollow = true;
+  logging_follow_hint(false);
+  scroll_logging_to_bottom();
   // 连接日志服务
   start_logging();
 }
@@ -235,7 +296,10 @@ function logger_select(source) {
   if (LoggingSource) {
     logtype = `【${LoggingSource}】刷新中...`;
   }
-  $("#logging_content").html(`<tr><td colspan="3" class="text-center">${logtype}</td></tr>`);
+    $("#logging_content").html(`<tr><td colspan="3" class="text-center">${logtype}</td></tr>`);
+  // 换了日志来源，重新从最新开始跟随
+  LoggingAutoFollow = true;
+  logging_follow_hint(false);
   // 拉取新日志
   start_logging();
 }
