@@ -227,7 +227,6 @@ class BrushTask(object):
         if not self.__is_allow_new_torrent(taskinfo=taskinfo,
                                            dlcount=rss_rule.get("dlcount"),
                                            current_site_count=rss_rule.get("current_site_count"),
-                                           current_site_dlcount=rss_rule.get("current_site_dlcount"),
                                            site_info=site_info):
             return
 
@@ -252,8 +251,6 @@ class BrushTask(object):
 
         # 当前站点任务总数
         current_site_count = rss_rule.get("current_site_count")
-        # 当前站点下载任务数
-        current_site_dlcount = rss_rule.get("current_site_dlcount")
 
         for res in rss_result:
             try:
@@ -293,7 +290,6 @@ class BrushTask(object):
                                                    dlcount=max_dlcount,
                                                    torrent_size=size,
                                                    current_site_count=current_site_count,
-                                                   current_site_dlcount=current_site_dlcount,
                                                    site_info=site_info):
                     continue
                 # 检查是否已处理过
@@ -327,7 +323,6 @@ class BrushTask(object):
                     if not self.__is_allow_new_torrent(taskinfo=taskinfo,
                                                        dlcount=max_dlcount,
                                                        current_site_count=current_site_count,
-                                                       current_site_dlcount=current_site_dlcount,
                                                        site_info=site_info):
                         break
                     self._torrents_cache.append(enclosure)
@@ -673,7 +668,7 @@ class BrushTask(object):
 
         return True
 
-    def __is_allow_new_torrent(self, taskinfo, dlcount, current_site_dlcount, current_site_count, site_info, torrent_size=None):
+    def __is_allow_new_torrent(self, taskinfo, dlcount, current_site_count, site_info, torrent_size=None):
         """
         检查是否还能添加新的下载
         """
@@ -718,17 +713,6 @@ class BrushTask(object):
             return True
 
         site_name = site_info.get("name")
-
-        # 检查当前站点正在下载的任务数量
-        if current_site_dlcount:
-            current_site_count_downloading = self.__get_downloading_count(downloader_id, tag=label)
-            if current_site_count_downloading is None:
-                log.error("【Brush】任务 %s 下载器 %s 无法连接" % (task_name, downloader_name))
-                return False
-            if int(current_site_count_downloading) >= int(current_site_dlcount):
-                log.warn("【Brush】站点 %s 正在下载任务数：%s，超过设定上限，暂不添加下载" % (
-                    site_name, current_site_count_downloading))
-                return False
 
         # 检查当前站点任务数量
         if current_site_count:
@@ -891,6 +875,44 @@ class BrushTask(object):
 
         return False
 
+    @staticmethod
+    def __get_torrent_year(title):
+        """
+        从种子发布名解析发布年份
+
+        优先用 guessit（搜索链路 MetaVideoV2.year 同源解析器），
+        它能正确处理「片名本身带数字」的情况，例如：
+            2012.2009.1080p        -> 2009（片名《2012》，实际 2009 年上映）
+            Blade.Runner.2049.2017 -> 2017
+        解析不到或异常时退回正则；两者都拿不到则返回 None（调用方不应据此拦截）。
+        :param title: 种子名称
+        :return: 年份 int，解析不到返回 None
+        """
+        if not title:
+            return None
+        # ① guessit：与搜索/识别链路同一个解析口径
+        try:
+            import guessit
+            guess_year = guessit.guessit(title).get("year")
+            if guess_year:
+                return int(guess_year)
+        except Exception:
+            pass
+        # ② 正则兜底：前不接数字/x/X、后不接数字/x/X
+        #    用来挡掉分辨率与组合写法：1920x1080、1080x1920、20190
+        try:
+            # 年份区间惯用写法 2019.2022 / 2019-2022 / 2019~2022，取靠后的年份
+            year_span = re.search(
+                r"(?<![0-9Xx])((?:19|20)\d{2})\s*[.\-~]\s*((?:19|20)\d{2})(?![0-9Xx])", title)
+            if year_span:
+                return max(int(year_span.group(1)), int(year_span.group(2)))
+            year_single = re.search(r"(?<![0-9Xx])(19\d{2}|20\d{2})(?![0-9Xx])", title)
+            if year_single:
+                return int(year_single.group(1))
+        except Exception:
+            pass
+        return None
+
     def __check_rss_rule(self,
                          rss_rule,
                          title,
@@ -1019,6 +1041,36 @@ class BrushTask(object):
                             float(min_pubdate) <= pudate_hour <= float(max_pubdate))):
                         log.debug("【Brush】%s `判断发布时间, 判断条件: pubdate: %s %d %d" % (
                             title, rule_pubdates[0], float(min_pubdate), float(max_pubdate or 0)))
+                        return False
+
+            # 检查发布年份
+            # 年份取自种子标题，标题里没有年份时不做判断（避免误杀）
+            if rss_rule.get("year"):
+                rule_years = rss_rule.get("year").split("#")
+                if len(rule_years) >= 2 and rule_years[1]:
+                    min_max_years = rule_years[1].split(",")
+                    min_year = int(min_max_years[0])
+                    max_year = int(min_max_years[1]) if len(min_max_years) > 1 and min_max_years[1] else None
+                    # 区间写反时自动对调，避免一条规则把所有种子都挡掉（刷流是静默运行的，很难排查）
+                    if max_year is not None and min_year > max_year:
+                        min_year, max_year = max_year, min_year
+                    # 缺上限（开放 API 只传了一个值）按「不设上限」处理
+                    torrent_year = self.__get_torrent_year(title)
+                    if not torrent_year:
+                        log.debug("【Brush】%s 标题中未解析到发布年份，跳过年份判断" % title)
+                    elif rule_years[0] == "gt" and torrent_year < min_year:
+                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 不早于 %d" % (
+                            title, torrent_year, min_year))
+                        return False
+                    elif rule_years[0] == "lt" and torrent_year > min_year:
+                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 不晚于 %d" % (
+                            title, torrent_year, min_year))
+                        return False
+                    elif rule_years[0] == "bw" and (
+                            torrent_year < min_year
+                            or (max_year is not None and torrent_year > max_year)):
+                        log.debug("【Brush】%s `判断发布年份, 判断条件: year:%d 介于 %d-%s" % (
+                            title, torrent_year, min_year, max_year))
                         return False
 
         except Exception as err:

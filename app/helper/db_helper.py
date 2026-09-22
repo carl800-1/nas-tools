@@ -10,6 +10,10 @@ from app.db.models import *
 from app.utils import StringUtils
 from app.utils.types import MediaType, RmtMode
 
+# 刷流任务「转移到媒体库」被明确关闭时的取值；其它取值（含空值）一律按开启处理，
+# 避免历史数据或接口未传该字段时升级后静默停掉整理。
+BRUSHTASK_TRANSFER_OFF_VALUES = ("N", "n", "0", "false", "False")
+
 
 class DbHelper:
     _db = MainDb()
@@ -1736,6 +1740,31 @@ class DbHelper:
             return self._db.query(TRANSFERLEDGER).delete() or 0
         except Exception:
             return 0
+
+    def get_brushtask_untransfer_torrents(self):
+        """
+        查询「所属刷流任务已关闭『转移到媒体库』」的种子（下载器 + 种子 hash）
+
+        刷流任务的 SITE_BRUSH_TASK.TRANSFER 为 'Y' 表示允许整理入库，明确写成
+        'N'/'0'/'false' 表示只做种、不整理。只认「明确关闭」的取值，字段为空
+        （历史数据、接口未传）时按允许处理，避免升级后静默停掉整理。
+
+        :return: [{"downloader": 下载器ID, "hash": 种子hash}, ...]
+        """
+        try:
+            rows = self._db.query(SITEBRUSHTORRENTS.DOWNLOADER,
+                                  SITEBRUSHTORRENTS.DOWNLOAD_ID).join(
+                SITEBRUSHTASK,
+                cast(SITEBRUSHTORRENTS.TASK_ID, Integer) == SITEBRUSHTASK.ID
+            ).filter(
+                SITEBRUSHTORRENTS.DOWNLOAD_ID != '0',
+                SITEBRUSHTASK.TRANSFER.in_(BRUSHTASK_TRANSFER_OFF_VALUES)
+            ).all()
+        except Exception:
+            # 表结构未就绪等异常按「没有需要跳过的种子」处理
+            return []
+        return [{"downloader": str(row[0]), "hash": str(row[1])}
+                for row in rows if row[0] and row[1]]
 
     @DbPersist(_db)
     def update_brushtask(self, brush_id, item):

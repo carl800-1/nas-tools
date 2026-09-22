@@ -176,7 +176,7 @@
               <label class="form-label required">转移方式</label>
               <select class="form-select" id="downloader_rmt_mode">
                 {% for mode in RmtModeDict %}
-                  <option value="{{ mode.value }}">{{ mode.name }}</option>
+                  <option value="{{ mode.value }}" {% if SyncMod==mode.value %}selected{% endif %}>{{ mode.name }}</option>
                 {% endfor %}
               </select>
             </div>
@@ -258,7 +258,7 @@
     $("#downloader_transfer").val("0");
     $("#downloader_only_nastool").val("0");
     $("#downloader_match_path").val("0");
-    $("#downloader_rmt_mode").val("link");
+    $("#downloader_rmt_mode").val("{{ SyncMod }}");
     CURRENT_DIRDIV_LEVEL = 0;
     $("#div_downloader_downloaddir").empty();
     add_downloaddir();

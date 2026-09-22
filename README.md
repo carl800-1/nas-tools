@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.2.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.2.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -390,6 +390,30 @@ pt:
 顺带修掉一个存在已久的判定 bug：开启「只处理 NASTOOL 标签」时，原实现用
 字符串子串匹配，会导致 `NASTOOLX` 被误判成命中了 `NASTOOL`；现在改为按
 逗号切分后精确比对。
+
+#### 2.15 刷流只做种、年份过滤与默认复制（v5.2.2）
+
+**「转移到媒体库」开关以前是死的。** 关掉它的本意是「只做种、不整理」，
+但 v5.1.3 去掉「已整理」标签、v5.2.0 改用转移账本之后，这个开关再没有任何
+代码读它 —— 关掉也照样刮削入库。v5.2.2 让两条自动入库路径都认它：
+下载器监控按**种子 hash** 跳过（带 60 秒清单缓存，查库异常则降级为不跳过），
+目录同步按**文件路径**跳过（按分隔符对齐前缀，`/brush/MovieB` 不会误伤
+`/brush/MovieBB`）。只有明确关闭的任务才跳过，其余一律照常入库。
+
+**三处「转移方式」下拉的默认值统一了。** 以前目录同步默认复制、下载器新增写死
+硬链接、手动识别弹窗读 `media.default_rmt_mode`，三处口径不一。现在统一同源于
+`media.default_rmt_mode`（出厂 `copy`），`filetransfer.py` 的兜底也从影子配置
+`pt.rmt_mode` 换到同一个键；配置缺失或填了非法值一律回落复制，已保存的配置不动。
+另需知道：`SystemUtils.link` 是裸 `os.link`，**跨卷会直接失败、没有 copy 兜底**，
+同机跨盘转移时复制比硬链接稳。
+
+**选种规则新增「发布年份」。** 四种取值：不限制 `#`、不早于 `gt#2000`、
+不晚于 `lt#2020`、介于 `bw#2000,2020`（均含端点）。年份用 guessit 从标题解析，
+《2012》《Blade Runner 2049》这类标题里的数字不会被误当成年份；
+**解析不到年份不拦截**。保存任务时写入 `rss_rule["year"]`，每轮轮询新种时判定。
+
+同区的「当前站点下载任务数」已移除 —— 它只有任务配了标签才生效，实际经常形同虚设，
+且与「当前站点下载数」重叠；老任务里的该键不再读取，无需迁移。
 
 ### 3. 跳转与入口优化
 
@@ -1011,7 +1035,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.2.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.2.2   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1114,4 +1138,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-22 ｜ 当前版本 v5.2.1_
+_Last updated: 2026-09-22 ｜ 当前版本 v5.2.2_

@@ -278,7 +278,7 @@
               <div class="col-lg-3">
                 <div class="mb-3">
                   <label class="form-label required">默认文件转移方式 <span class="form-help"
-                                                                        title="手动识别等未指定转移方式的场景默认使用的转移方式"
+                                                                        title="新增下载器、新增同步目录、手动识别三处下拉框的默认选中值（出厂为复制）；只影响下拉的默认选中，不会改动已保存的配置"
                                                                         data-bs-toggle="tooltip">?</span></label>
                   <select id="media.default_rmt_mode" class="form-select">
                     {% for mode in RmtModeDict %}
@@ -560,58 +560,54 @@
           <div class="card-header">
             <h3 class="card-title"><strong>标签</strong></h3>
             <div class="card-actions">
-              <span class="text-muted small">标签由你自行定义，程序只读取与展示，不会自动追加任何标签</span>
+              <span class="text-muted" style="font-size:13px;">标签由你自行定义，程序只读取与展示，不会自动追加任何标签</span>
             </div>
           </div>
           <div class="card-body">
             <input type="hidden" id="pt.tags" value="{{ Config.pt.tags or '' }}">
             <div class="row">
-              <div class="col-12 col-lg-7">
-                <div class="mb-1">
-                  <label class="form-label">我的标签库 <span class="form-help"
-                        title="在这里维护你自己要用的标签清单。填好后可在「站点设置」「刷流任务」「下载设置」的标签输入框中引用，避免各处写错名称。程序只读取这份清单用于补全和展示，绝不自动往里加东西。"
-                        data-bs-toggle="tooltip">?</span></label>
-                  <div class="input-group mb-2">
-                    <input type="text" class="form-control" id="new_tag_input"
-                           placeholder="输入标签名称，回车即可新增" autocomplete="off"
-                           onkeydown="if(event.key==='Enter'){event.preventDefault();add_tag_from_input();}">
-                    <a href="javascript:add_tag_from_input()" class="btn btn-primary">新增</a>
-                  </div>
-                  <div id="tag_library_box" class="d-flex flex-wrap gap-2 p-2 border rounded"
-                       style="min-height:56px;align-content:flex-start;">
-                  </div>
-                  <div id="tag_library_empty" class="text-muted small mt-1">
+              <div class="col-12 col-lg-6 d-flex flex-column">
+                <label class="form-label">我的标签库 <span class="form-help"
+                      title="在这里维护你自己要用的标签清单。填好后可在「站点设置」「刷流任务」「下载设置」的标签输入框中引用，避免各处写错名称。程序只读取这份清单用于补全和展示，绝不自动往里加东西。"
+                      data-bs-toggle="tooltip">?</span></label>
+                <div class="input-group">
+                  <input type="text" class="form-control" id="new_tag_input"
+                         placeholder="输入标签名称，回车即可新增" autocomplete="off"
+                         onkeydown="if(event.key==='Enter'){event.preventDefault();add_tag_from_input();}">
+                  <a href="javascript:add_tag_from_input()" class="btn btn-primary">新增</a>
+                </div>
+                <div id="tag_library_box" class="d-flex flex-wrap gap-2 p-2 border rounded mt-2 flex-grow-1"
+                     style="min-height:56px;align-content:center;">
+                  <div id="tag_library_empty" class="text-muted w-100 text-center" style="font-size:13px;">
                     暂无标签。新增后会在这里生成标签块，点击标签块可重命名或删除。
                   </div>
                 </div>
               </div>
-              <div class="col-12 col-lg-5">
-                <div class="mb-3">
-                  <label class="form-label">整理去重（转移账本） <span class="form-help"
-                        title="程序在数据库里记录「已整理过」的种子，下次不再重复处理，避免同一批文件被反复转移。这份记录只存在程序自己的数据库里，不会写入下载器的标签，你的 qb 标签列表不会被程序弄乱。"
-                        data-bs-toggle="tooltip">?</span></label>
-                  <div class="form-check form-switch mb-2">
-                    <input class="form-check-input" type="checkbox" id="pt.ledger_enable"
-                           {% if Config.pt.ledger_enable|string|lower != 'false' %}checked{% endif %}>
-                    <label class="form-check-label" for="pt.ledger_enable">启用整理去重</label>
+              <div class="col-12 col-lg-6">
+                <label class="form-label">整理去重（转移账本） <span class="form-help"
+                      title="程序在数据库里记录「已整理过」的种子，下次不再重复处理，避免同一批文件被反复转移。这份记录只存在程序自己的数据库里，不会写入下载器的标签，你的 qb 标签列表不会被程序弄乱。"
+                      data-bs-toggle="tooltip">?</span></label>
+                <div class="form-check form-switch mb-3">
+                  <input class="form-check-input" type="checkbox" id="pt.ledger_enable"
+                         {% if Config.pt.ledger_enable|string|lower != 'false' %}checked{% endif %}>
+                  <label class="form-check-label" for="pt.ledger_enable">启用整理去重</label>
+                </div>
+                <div class="row g-3">
+                  <div class="col-6">
+                    <label class="form-label" for="pt.ledger_max_rows">行数上限</label>
+                    <input type="number" min="0" class="form-control" id="pt.ledger_max_rows"
+                           value="{{ Config.pt.ledger_max_rows if Config.pt.ledger_max_rows is not none else 5000 }}"
+                           placeholder="5000">
                   </div>
-                  <div class="row g-2">
-                    <div class="col-6">
-                      <input type="number" min="0" class="form-control" id="pt.ledger_max_rows"
-                             value="{{ Config.pt.ledger_max_rows if Config.pt.ledger_max_rows is not none else 5000 }}"
-                             placeholder="5000">
-                      <div class="form-hint">行数上限</div>
-                    </div>
-                    <div class="col-6">
-                      <input type="number" min="0" class="form-control" id="pt.ledger_expire_days"
-                             value="{{ Config.pt.ledger_expire_days if Config.pt.ledger_expire_days is not none else 90 }}"
-                             placeholder="90">
-                      <div class="form-hint">过期天数</div>
-                    </div>
+                  <div class="col-6">
+                    <label class="form-label" for="pt.ledger_expire_days">过期天数</label>
+                    <input type="number" min="0" class="form-control" id="pt.ledger_expire_days"
+                           value="{{ Config.pt.ledger_expire_days if Config.pt.ledger_expire_days is not none else 90 }}"
+                           placeholder="90">
                   </div>
-                  <div class="form-hint">
-                    超过行数上限时自动删最老的记录；超过过期天数的记录会被定期清理。填 0 表示该项不限制。
-                  </div>
+                </div>
+                <div class="form-hint mt-2">
+                  超过行数上限时自动删最老的记录；超过过期天数的记录会被定期清理。填 0 表示该项不限制。
                 </div>
               </div>
             </div>
@@ -619,7 +615,7 @@
           <div class="card-footer">
             <div class="row align-items-center">
               <div class="col">
-                <span class="text-muted small" id="tag_library_hint"></span>
+                <span class="text-muted" id="tag_library_hint" style="font-size:13px;"></span>
               </div>
               <div class="col-auto">
                 <a id="basic_tags_btn" href="javascript:save_basic_config('basic_tags')" class="btn btn-primary">
@@ -783,12 +779,12 @@
               {# 分区一：Telegram Bot API 代理 —— 仅 Telegram 机器人的专属配置，与 AI 助手无关 #}
               <div class="col-12">
                 <div class="mb-3">
-                  <span style="font-weight:500;">Telegram Bot API 代理</span>
+                  <span style="font-size:15px; font-weight:600;">Telegram Bot API 代理</span>
                   <span class="form-help"
                         title="使用Cloudflare Worker搭建Telegram Bot Api 代理, 配置教程：https://www.yuque.com/u21363723/nt6hcz/whq99ankmn87arcq?singleDoc"
                         data-bs-toggle="tooltip">?</span>
-                  <div class="text-muted" style="font-size:12px; margin-top:2px;">
-                    仅对 Telegram 机器人生效：用它替换被墙的 <code>https://api.telegram.org</code>，不填即直连官方地址。与 AI 助手无关。
+                  <div class="text-muted" style="font-size:13px; margin-top:2px;">
+                    仅对 Telegram 机器人生效：用它替换被墙的 <code style="font-size:inherit;">https://api.telegram.org</code>，不填即直连官方地址。与 AI 助手无关。
                   </div>
                 </div>
               </div>
@@ -805,11 +801,11 @@
               {% set openai_conf = Config.openai | default({}) %}
               <div class="col-12">
                 <div class="mb-3 pt-3 border-top">
-                  <span style="font-weight:500;">AI 助手</span>
+                  <span style="font-size:15px; font-weight:600;">AI 助手</span>
                   <span class="form-help"
                         title="让消息渠道（飞书/微信/Telegram等）里的机器人听懂自然语言并直接操作系统：可查询下载、站点、订阅、媒体库等状态，也能加订阅、搜资源、启停任务、重启服务等。需要填写下面的 API 信息并打开「AI助手」开关后生效"
                         data-bs-toggle="tooltip">?</span>
-                  <div class="text-muted" style="font-size:12px; margin-top:2px;">
+                  <div class="text-muted" style="font-size:13px; margin-top:2px;">
                     本区只放 AI 通用配置，接入 OpenAI 官方、第三方中转或本地模型（OMLX / Ollama 等）均可；改完记得点本卡片右下角的「保存」。
                   </div>
                 </div>
@@ -844,7 +840,7 @@
               <div class="col-12 col-xl-3">
                 <div class="mb-3">
                   <label class="form-label d-none d-xl-block">&nbsp;</label>
-                  <a id="openai_test_btn" href="javascript:test_openai_config()" class="btn btn-outline-primary w-100">测试连接</a>
+                  <a id="openai_test_btn" href="javascript:test_openai_config()" class="btn btn-outline-primary">测试连接</a>
                 </div>
               </div>
               <div class="col-12">
@@ -927,7 +923,7 @@
               {# 分区三：识别与搜索 —— 实验室原有的媒体识别与搜索策略开关 #}
               <div class="col-12">
                 <div class="mb-3 pt-3 border-top">
-                  <span style="font-weight:500;">识别与搜索</span>
+                  <span style="font-size:15px; font-weight:600;">识别与搜索</span>
                   <span class="form-help"
                         title="媒体识别与搜索策略开关：影响识别文件名、搜索站点资源的行为，与 AI 助手无关"
                         data-bs-toggle="tooltip">?</span>
@@ -1715,13 +1711,13 @@
     let items = _tag_library_items();
     let $box = $("#tag_library_box");
     let $empty = $("#tag_library_empty");
-    $box.empty();
+    $box.children(".tag-chip").remove();
     if (!items.length) {
       $empty.show();
     } else {
       $empty.hide();
       items.forEach(function (name) {
-        let $chip = $("<span class='badge bg-blue-lt d-inline-flex align-items-center' style='gap:6px;font-size:12px;padding:6px 8px;cursor:pointer;'></span>");
+        let $chip = $("<span class='badge bg-blue-lt d-inline-flex align-items-center tag-chip' style='gap:6px;font-size:12px;padding:6px 8px;cursor:pointer;'></span>");
         $chip.append($("<span></span>").text(name));
         $chip.attr("title", "点击重命名");
         $chip.on("click", function () { rename_tag_from_library(name); });

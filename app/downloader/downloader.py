@@ -26,6 +26,10 @@ from config import Config, PT_TAG, RMT_MEDIAEXT, PT_TRANSFER_INTERVAL
 lock = Lock()
 client_lock = Lock()
 
+# 刷流「转移到媒体库」关闭的种子缓存时长（秒）。
+# 目录同步每处理一个文件都要判定一次，不能每次都去问下载器。
+BRUSH_SKIP_CACHE_INTERVAL = 60
+
 
 def _load_download_dir(raw):
     """
@@ -98,6 +102,9 @@ class Downloader:
     _scheduler = None
     # 转移账本上次清理时间（节流用，1 小时最多清一次）
     __ledger_prune_time = 0
+    # 刷流「转移到媒体库」关闭的种子缓存：{下载器ID: {种子hash: 本机路径}}
+    _brush_skip_map = {}
+    __brush_skip_time = 0
 
     message = None
     mediaserver = None
@@ -633,6 +640,11 @@ class Downloader:
                 else:
                     continue
                 for task in trans_tasks:
+                    # 刷流任务关闭「转移到媒体库」的种子只做种、不整理入库
+                    if self.is_brush_skip_torrent(downloader_id, task.get("id")):
+                        log.debug("【Downloader】下载器 %s 任务 %s 所属刷流任务已关闭"
+                                  "「转移到媒体库」，跳过整理" % (name, task.get("id")))
+                        continue
                     done_flag, done_msg = self.filetransfer.transfer_media(
                         in_from=self._DownloaderEnum[str(downloader_id)],
                         in_path=task.get("path"),
@@ -683,6 +695,71 @@ class Downloader:
                 log.info(f"【Downloader】转移账本清理完成，移除 {deleted} 条过期记录")
         except Exception as err:
             log.debug(f"【Downloader】转移账本清理失败：{str(err)}")
+
+    def get_brush_skip_map(self, force=False):
+        """
+        获取「所属刷流任务已关闭『转移到媒体库』」的种子清单
+
+        刷流下载是否入库由 SITE_BRUSH_TASK.TRANSFER 决定，但下载器监控只认标签、
+        目录同步只认文件路径，两条链路都不知道种子属于哪个刷流任务，因此统一在这里
+        反查：先从 SITE_BRUSH_TORRENTS 取到「已明确关闭转移」的种子，再问对应下载器
+        要这些种子的本机路径（复用 get_transfer_task 的保存路径换算，避免重复实现）。
+
+        :param force: 忽略缓存强制刷新
+        :return: {下载器ID(str): {种子hash: 本机路径}}
+        """
+        now = time.time()
+        if not force and now - self.__brush_skip_time < BRUSH_SKIP_CACHE_INTERVAL:
+            return self._brush_skip_map
+        skip_map = {}
+        try:
+            by_downloader = {}
+            for item in self.dbhelper.get_brushtask_untransfer_torrents() or []:
+                by_downloader.setdefault(item.get("downloader"), set()).add(item.get("hash"))
+            for downloader_id, hashes in by_downloader.items():
+                _client = self.__get_client(downloader_id)
+                if not _client:
+                    continue
+                for task in (_client.get_transfer_task(tag=None, match_path=False) or []):
+                    if task.get("id") in hashes:
+                        skip_map.setdefault(str(downloader_id), {})[task.get("id")] = task.get("path")
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+        # 仅在清单内容变化时打日志，避免每轮刷屏
+        old_keys = {(did, tid) for did, items in self._brush_skip_map.items() for tid in items}
+        new_keys = {(did, tid) for did, items in skip_map.items() for tid in items}
+        if new_keys != old_keys:
+            log.info(f"【Downloader】刷流任务关闭「转移到媒体库」的种子 {len(new_keys)} 个，"
+                     f"这些下载不会被整理入库")
+        self._brush_skip_map = skip_map
+        self.__brush_skip_time = now
+        return self._brush_skip_map
+
+    def is_brush_skip_torrent(self, downloader_id, torrent_id):
+        """
+        判断某个种子是否属于「已关闭『转移到媒体库』」的刷流任务（按 hash 精确判断）
+        """
+        if not downloader_id or not torrent_id:
+            return False
+        return torrent_id in (self.get_brush_skip_map().get(str(downloader_id)) or {})
+
+    def is_brush_skip_path(self, path):
+        """
+        判断某个文件/目录是否属于「已关闭『转移到媒体库』」的刷流任务（按路径前缀判断）
+
+        目录同步只有文件路径、拿不到种子信息，用它来跳过刷流的下载。
+        """
+        if not path:
+            return False
+        target = os.path.normpath(path).replace("\\", "/").rstrip("/")
+        for items in self.get_brush_skip_map().values():
+            for skip_path in items.values():
+                if not skip_path:
+                    continue
+                skip_norm = os.path.normpath(skip_path).replace("\\", "/").rstrip("/")
+                if target == skip_norm or target.startswith(skip_norm + "/"):
+                    return True
+        return False
 
     def get_torrents(self, downloader_id=None, ids=None, tag=None):
         """

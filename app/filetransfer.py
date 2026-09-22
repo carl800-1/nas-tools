@@ -148,8 +148,10 @@ class FileTransfer:
                 if len(tv_formats) > 2:
                     self._tv_season_rmt_format = tv_formats[-2]
                     self._tv_file_rmt_format = tv_formats[-1]
-        self._default_rmt_mode = ModuleConf.RMT_MODES.get(Config().get_config('pt').get('rmt_mode', 'copy'),
-                                                          RmtMode.COPY)
+        # 与网页「基础设置 - 媒体库 - 默认文件转移方式」同源，未设置或非法时取复制
+        self._default_rmt_mode = ModuleConf.RMT_MODES.get(
+            Config().get_config('media').get('default_rmt_mode'),
+            RmtMode.COPY)
 
     @staticmethod
     def __transfer_command(file_item, target_file, rmt_mode):

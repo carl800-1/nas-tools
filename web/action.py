@@ -2022,7 +2022,6 @@ class WebAction:
         brushtask_exclude = data.get("brushtask_exclude")
         brushtask_dlcount = data.get("brushtask_dlcount")
         brushtask_current_site_count = data.get("brushtask_current_site_count")
-        brushtask_current_site_dlcount = data.get("brushtask_current_site_dlcount")
         brushtask_peercount = data.get("brushtask_peercount")
         brushtask_seedtime = data.get("brushtask_seedtime")
         brushtask_seedratio = data.get("brushtask_seedratio")
@@ -2031,6 +2030,7 @@ class WebAction:
         brushtask_avg_upspeed = data.get("brushtask_avg_upspeed")
         brushtask_iatime = data.get("brushtask_iatime")
         brushtask_pubdate = data.get("brushtask_pubdate")
+        brushtask_year = data.get("brushtask_year")
         brushtask_upspeed = data.get("brushtask_upspeed")
         brushtask_downspeed = data.get("brushtask_downspeed")
         frac_before_range = data.get("frac_before_range")
@@ -2045,9 +2045,9 @@ class WebAction:
             "exclude": brushtask_exclude,
             "dlcount": brushtask_dlcount,
             "current_site_count": brushtask_current_site_count,
-            "current_site_dlcount": brushtask_current_site_dlcount,
             "peercount": brushtask_peercount,
             "pubdate": brushtask_pubdate,
+            "year": brushtask_year,
             "upspeed": brushtask_upspeed,
             "downspeed": brushtask_downspeed
         }
@@ -2550,6 +2550,14 @@ class WebAction:
                 rule_htmls.append(
                     '<span class="badge badge-outline text-blue me-1 mb-1" title="发布时间">发布时间: %s %s小时</span>'
                     % (rule_filter_string.get(pubdates[0]), pubdates[1]))
+        if rules.get("year"):
+            years = rules.get("year").split("#")
+            if len(years) >= 2 and years[0]:
+                # 年份用「不早于/不晚于」表达，避免被误读成大小比较
+                year_filter_string = {"gt": "不早于", "lt": "不晚于", "bw": "介于"}
+                rule_htmls.append(
+                    '<span class="badge badge-outline text-blue me-1 mb-1" title="发布年份">发布年份: %s %s</span>'
+                    % (year_filter_string.get(years[0], ""), years[1].replace(",", "-") if years[1] else ""))
         if rules.get("upspeed"):
             rule_htmls.append('<span class="badge badge-outline text-blue me-1 mb-1" title="上传限速">上传限速: %sB/s</span>'
                               % StringUtils.str_filesize(int(rules.get("upspeed")) * 1024))

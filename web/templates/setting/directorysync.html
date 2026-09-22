@@ -178,7 +178,7 @@
                                                                 data-bs-toggle="tooltip">?</span></label>
               <select id="sync_path_syncmod" class="form-select">
                 {% for mode in RmtModeDict %}
-                <option value="{{ mode.value }}">{{ mode.name }}</option>
+                <option value="{{ mode.value }}" {% if SyncMod==mode.value %}selected{% endif %}>{{ mode.name }}</option>
                 {% endfor %}
               </select>
             </div>
@@ -234,6 +234,7 @@
     $("#sync_path_rename").prop("checked", true);
     $("#sync_path_enabled").prop("checked", true);
     $("#sync_path_locating").prop("checked", false);
+    $("#sync_path_syncmod").val("{{ SyncMod }}");
     $("#modal-directory").modal('show');
     refresh_locating_state();
   }

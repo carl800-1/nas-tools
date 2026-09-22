@@ -163,6 +163,21 @@ class Sync(object):
                     and config.get("enabled"):
                 self.dbhelper.check_config_sync_paths(sid=sid, enabled=0)
 
+    def __is_brush_untransfer(self, path):
+        """
+        判断路径是否属于「已关闭『转移到媒体库』」的刷流任务
+
+        目录同步只认「文件落在监控目录里」，与种子来源无关，所以刷流的下载同样会被
+        识别入库。这里按刷流任务的开关把它排除：关闭了「转移到媒体库」的任务，其下载
+        不再走识别转移。（懒加载 Downloader，避免模块间的循环引用）
+        """
+        try:
+            from app.downloader import Downloader
+            return Downloader().is_brush_skip_path(path)
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+            return False
+
     def file_change_handler(self, event, text, event_path):
         """
         处理文件变化
@@ -249,6 +264,10 @@ class Sync(object):
                         ext = os.path.splitext(name)[-1]
                         if ext.lower() not in RMT_MEDIAEXT:
                             return
+                    # 刷流任务关闭了「转移到媒体库」的，不识别入库
+                    if self.__is_brush_untransfer(event_path):
+                        log.info("【Sync】%s 所属刷流任务已关闭「转移到媒体库」，跳过整理" % event_path)
+                        return
                     # 监控根目录下的文件发生变化时直接发走
                     if is_root_path:
                         ret, ret_msg = self.filetransfer.transfer_media(in_from=SyncType.MON,
@@ -312,15 +331,18 @@ class Sync(object):
                     for sid in self._monitor_sync_path_ids:
                         if os.path.normpath(self.get_sync_path_conf(sid).get("from")) == os.path.normpath(src_path):
                             is_root_path = True
-                    ret, ret_msg = self.filetransfer.transfer_media(in_from=SyncType.MON,
-                                                                    in_path=src_path,
-                                                                    files=files,
-                                                                    target_dir=target_path,
-                                                                    unknown_dir=unknown_path,
-                                                                    rmt_mode=sync_mode,
-                                                                    root_path=is_root_path)
-                    if not ret:
-                        log.warn("【Sync】%s转移失败：%s" % (path, ret_msg))
+                    if self.__is_brush_untransfer(src_path):
+                        log.info("【Sync】%s 所属刷流任务已关闭「转移到媒体库」，跳过整理" % src_path)
+                    else:
+                        ret, ret_msg = self.filetransfer.transfer_media(in_from=SyncType.MON,
+                                                                        in_path=src_path,
+                                                                        files=files,
+                                                                        target_dir=target_path,
+                                                                        unknown_dir=unknown_path,
+                                                                        rmt_mode=sync_mode,
+                                                                        root_path=is_root_path)
+                        if not ret:
+                            log.warn("【Sync】%s转移失败：%s" % (path, ret_msg))
                 self._need_sync_paths.pop(path)
         finally:
             lock.release()
@@ -400,6 +422,10 @@ class Sync(object):
             else:
                 for path in PathUtils.get_dir_level1_medias(mon_path, RMT_MEDIAEXT):
                     if PathUtils.is_invalid_path(path):
+                        continue
+                    # 刷流任务关闭了「转移到媒体库」的，不识别入库
+                    if self.__is_brush_untransfer(path):
+                        log.info("【Sync】%s 所属刷流任务已关闭「转移到媒体库」，跳过整理" % path)
                         continue
                     ret, ret_msg = self.filetransfer.transfer_media(in_from=SyncType.MON,
                                                                     in_path=path,

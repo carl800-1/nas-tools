@@ -214,6 +214,19 @@ def login():
             return redirect_to_login('用户名或密码错误')
 
 
+def get_default_rmt_mode():
+    """
+    获取默认转移方式
+    新增下载器、新增同步目录、手动识别弹窗三处下拉框的默认选中值，
+    同源于「基础设置 - 媒体库 - 默认文件转移方式」，未设置或非法时统一取复制。
+    """
+    mode = Config().get_config('media').get('default_rmt_mode')
+    modes = [x.get("value") for x in WebAction().get_rmt_modes()]
+    if mode in modes:
+        return mode
+    return "copy" if "copy" in modes else modes[0]
+
+
 @App.route('/web', methods=['POST', 'GET'])
 @login_required
 def web():
@@ -221,11 +234,9 @@ def web():
     GoPage = request.args.get("next") or ""
     # 判断当前的运营环境
     SystemFlag = SystemUtils.get_system()
-    SyncMod = Config().get_config('media').get('default_rmt_mode')
+    SyncMod = get_default_rmt_mode()
     TMDBFlag = 1 if Config().get_config('app').get('rmt_tmdbkey') else 0
     DefaultPath = Config().get_config('media').get('media_default_path')
-    if not SyncMod:
-        SyncMod = "link"
     RmtModeDict = WebAction().get_rmt_modes()
     RestypeDict = ModuleConf.TORRENT_SEARCH_PARAMS.get("restype")
     PixDict = ModuleConf.TORRENT_SEARCH_PARAMS.get("pix")
@@ -908,7 +919,8 @@ def directorysync():
     return render_template("setting/directorysync.html",
                            SyncPaths=SyncPaths,
                            SyncCount=len(SyncPaths),
-                           RmtModeDict=RmtModeDict)
+                           RmtModeDict=RmtModeDict,
+                           SyncMod=get_default_rmt_mode())
 
 
 # 下载器页面
@@ -930,6 +942,7 @@ def downloader():
                            DownloadersCount=DownloadersCount,
                            Categories=Categories,
                            RmtModeDict=RmtModeDict,
+                           SyncMod=get_default_rmt_mode(),
                            DownloaderConf=ModuleConf.DOWNLOADER_CONF)
 
 

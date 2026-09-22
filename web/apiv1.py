@@ -1726,7 +1726,6 @@ class BrushTaskUpdate(ClientResource):
     parser.add_argument('brushtask_exclude', type=str, help='排除', location='form')
     parser.add_argument('brushtask_dlcount', type=int, help='同时下载任务数', location='form')
     parser.add_argument('brushtask_current_site_count', type=int, help='当前站点任务总数', location='form')
-    parser.add_argument('brushtask_current_site_dlcount', type=int, help='当前站点下载任务数', location='form')
     parser.add_argument('brushtask_peercount', type=int, help='做种人数限制', location='form')
     parser.add_argument('brushtask_seedtime', type=float, help='做种时间(小时)', location='form')
     parser.add_argument('brushtask_seedratio', type=float, help='分享率', location='form')
@@ -1735,6 +1734,9 @@ class BrushTaskUpdate(ClientResource):
     parser.add_argument('brushtask_avg_upspeed', type=int, help='平均上传速度(KB/S)', location='form')
     parser.add_argument('brushtask_iatime', type=float, help='未活动时间(小时)', location='form')
     parser.add_argument('brushtask_pubdate', type=int, help='发布时间（小时）', location='form')
+    parser.add_argument('brushtask_year', type=str,
+                        help='发布年份（不早于/不晚于/介于，格式 gt#2000 / lt#2020 / bw#2000,2020）',
+                        location='form')
     parser.add_argument('brushtask_upspeed', type=int, help='上传限速（KB/S）', location='form')
     parser.add_argument('brushtask_downspeed', type=int, help='下载限速（KB/S）', location='form')
 

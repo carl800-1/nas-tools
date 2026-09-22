@@ -431,7 +431,7 @@
                             <label class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" id="brushtask_transfer">
                                 <span class="form-check-label">转移到媒体库 <span class="form-help"
-                                                                                  title="开启后刷流的下载也会进行转移并识别重命名到媒体库"
+                                                                                  title="开启后刷流的下载会被识别重命名并整理到媒体库；关闭则只做种、不整理（下载器监控与目录同步的识别转移都会跳过它）"
                                                                                   data-bs-toggle="tooltip">?</span></span>
                             </label>
                         </div>
@@ -486,14 +486,6 @@
                                                                            title="下载器中正在下载的任务数超过此值时不再添加下载"
                                                                            data-bs-toggle="tooltip">?</span></label>
                             <input type="text" id="brushtask_dlcount" class="form-control" placeholder="10">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-label">当前站点下载任务数 <span class="form-help"
-                                                                           title="当前站点下载任务数超过此值时不再添加下载，为站点或刷流任务添加标签后生效"
-                                                                           data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_current_site_dlcount" class="form-control" placeholder="5">
                         </div>
                     </div>
                     <div class="col-lg-4">
@@ -638,6 +630,41 @@
                                     </a>
                                 </div>
                                 <input type="text" id="brushtask_pubdate" class="form-control" placeholder="" readonly/>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="mb-3">
+                            <label class="form-label">发布年份 <span class="form-help"
+                                                                  title="按种子标题解析出的发布年份过滤：不早于＝年份≥该值，不晚于＝年份≤该值，介于时使用英文逗号,分隔两个值，均包含边界；标题中解析不到年份的种子不会被此条件拦截"
+                                                                  data-bs-toggle="tooltip">?</span></label>
+                            <div class="input-group">
+                                <button type="button" class="btn dropdown-toggle" data-bs-toggle="dropdown"
+                                        aria-haspopup="true"
+                                        aria-expanded="false" id="brushtask_year_btn">
+                                    不限制
+                                </button>
+                                <input type="hidden" id="brushtask_year_do">
+                                <div class="dropdown-menu" style="">
+                                    <a class="dropdown-item" id="brushtask_year_do_" href="javascript:void(0)"
+                                       onclick="filter_item_change('', 'brushtask_year',$(this))">
+                                        不限制
+                                    </a>
+                                    <a class="dropdown-item" id="brushtask_year_do_gt" href="javascript:void(0)"
+                                       onclick="filter_item_change('gt', 'brushtask_year',$(this))">
+                                        不早于
+                                    </a>
+                                    <a class="dropdown-item" id="brushtask_year_do_lt" href="javascript:void(0)"
+                                       onclick="filter_item_change('lt', 'brushtask_year',$(this))">
+                                        不晚于
+                                    </a>
+                                    <a class="dropdown-item" id="brushtask_year_do_bw" href="javascript:void(0)"
+                                       onclick="filter_item_change('bw', 'brushtask_year',$(this))">
+                                        介于
+                                    </a>
+                                </div>
+                                <input type="text" id="brushtask_year" class="form-control" placeholder="如 2000"
+                                       readonly/>
                             </div>
                         </div>
                     </div>
@@ -867,6 +894,8 @@
       }
       $("#brushtask_modal_title").text("新建任务");
       $("#brushtask_id").val("");
+      //发布年份（新建时必须显式清空，否则会残留上一次编辑的值）
+      filter_item_change('', 'brushtask_year', $('#brushtask_year_do_'));
       $("#modal-brushtask").modal('show');
     });
   }
@@ -926,7 +955,6 @@
         }
         $("#brushtask_dlcount").val(ret.task.rss_rule.dlcount)
         $("#brushtask_current_site_count").val(ret.task.rss_rule.current_site_count)
-        $("#brushtask_current_site_dlcount").val(ret.task.rss_rule.current_site_dlcount)
         $("#brushtask_peercount").val(ret.task.rss_rule.peercount)
         $("#brushtask_include").val(ret.task.rss_rule.include);
         $("#brushtask_exclude").val(ret.task.rss_rule.exclude);
@@ -985,6 +1013,9 @@
           let pubdate_str = ret.task.rss_rule.pubdate.split('#');
           filter_item_change(pubdate_str[0], 'brushtask_pubdate', $('#brushtask_pubdate_do_' + pubdate_str[0]), pubdate_str[1])
         }
+        //发布年份（取不到时必须显式清空，否则会残留上一次编辑的值）
+        let year_str = ret.task.rss_rule.year ? ret.task.rss_rule.year.split('#') : ['', ''];
+        filter_item_change(year_str[0], 'brushtask_year', $('#brushtask_year_do_' + year_str[0]), year_str[1])
         //上传限速
         $("#brushtask_upspeed").val(ret.task.rss_rule.upspeed);
         //下载限速
@@ -1164,19 +1195,6 @@
     } else {
       $("#brushtask_current_site_count").removeClass("is-invalid");
     }
-    //当前站点任务下载数
-    let brushtask_current_site_dlcount = $("#brushtask_current_site_dlcount").val();
-    if (brushtask_current_site_dlcount && isNaN(brushtask_current_site_dlcount)) {
-      $("#brushtask_current_site_dlcount").addClass("is-invalid");
-      return;
-    } else {
-        // 需要搭配站点任务总数一起使用
-        if(brushtask_current_site_dlcount && !brushtask_current_site_count){
-            $("#brushtask_current_site_count").addClass("is-invalid");
-            return;
-        }
-      $("#brushtask_current_site_dlcount").removeClass("is-invalid");
-    }
     //上传限速
     let brushtask_upspeed = $("#brushtask_upspeed").val();
     if (brushtask_upspeed && isNaN(brushtask_upspeed)) {
@@ -1208,6 +1226,26 @@
         return;
       }
       $("#brushtask_pubdate").removeClass("is-invalid");
+    }
+    //发布年份
+    let brushtask_year_do = $("#brushtask_year_do").val();
+    let brushtask_year = $("#brushtask_year").val();
+    if (brushtask_year_do && !brushtask_year) {
+      $("#brushtask_year").addClass("is-invalid");
+      return;
+    } else {
+      if (brushtask_year && brushtask_year_do != 'bw' && !/^\d{4}$/.test(brushtask_year)) {
+        $("#brushtask_year").addClass("is-invalid");
+        return;
+      } else if (brushtask_year && brushtask_year_do == 'bw' && !/^\d{4},\d{4}$/.test(brushtask_year)) {
+        $("#brushtask_year").addClass("is-invalid");
+        return;
+      } else if (brushtask_year && brushtask_year_do == 'bw'
+                 && parseInt(brushtask_year.split(',')[0]) > parseInt(brushtask_year.split(',')[1])) {
+        $("#brushtask_year").addClass("is-invalid");
+        return;
+      }
+      $("#brushtask_year").removeClass("is-invalid");
     }
     //做种人数
     let brushtask_peercount_do = $("#brushtask_peercount_do").val();
@@ -1396,7 +1434,6 @@
       brushtask_exclude: brushtask_exclude,
       brushtask_dlcount: brushtask_dlcount,
       brushtask_current_site_count: brushtask_current_site_count,
-      brushtask_current_site_dlcount: brushtask_current_site_dlcount,
       brushtask_peercount: brushtask_peercount_do + "#" + brushtask_peercount,
       brushtask_seedtime: brushtask_seedtime_do + "#" + brushtask_seedtime,
       brushtask_seedratio: brushtask_seedratio_do + "#" + brushtask_seedratio,
@@ -1409,7 +1446,8 @@
       frac_before_range: frac_before_range,
       frac_before_percent: frac_before_percent,
       frac_after_range: frac_after_range,
-      brushtask_pubdate: brushtask_pubdate_do + "#" + brushtask_pubdate
+      brushtask_pubdate: brushtask_pubdate_do + "#" + brushtask_pubdate,
+      brushtask_year: brushtask_year_do + "#" + brushtask_year
     };
 
     ajax_post("add_brushtask", params, function (ret) {
