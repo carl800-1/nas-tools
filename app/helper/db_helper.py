@@ -1835,18 +1835,28 @@ class DbHelper:
     @DbPersist(_db)
     def update_brushtask_state(self, state, tid=None):
         """
-        改变所有刷流任务的状态
+        改变刷流任务的状态
+
+        ⚠️ 状态是**三态**，不能压缩成两态（v5.2.1 修复）：
+            Y - 正常（下载新种 + 做种）
+            S - 停止下载新种（只做种保种）
+            N - 完全停止
+
+        原先写成 `"Y" if state == "Y" else "N"`，会把传进来的 S 静默改写成 N，
+        导致「停止下载新种」这个功能实际不存在（批量按钮和表单保存都受影响）。
+        现在原样保留 Y/S/N，只有非法值才回落到 N。
         """
+        new_state = state if state in ("Y", "S", "N") else "N"
         if tid:
             self._db.query(SITEBRUSHTASK).filter(SITEBRUSHTASK.ID == int(tid)).update(
                 {
-                    "STATE": "Y" if state == "Y" else "N"
+                    "STATE": new_state
                 }
             )
         else:
             self._db.query(SITEBRUSHTASK).update(
                 {
-                    "STATE": "Y" if state == "Y" else "N"
+                    "STATE": new_state
                 }
             )
 

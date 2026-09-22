@@ -2118,17 +2118,21 @@ class WebAction:
     def __update_brushtask_state(data):
         """
         批量暂停/开始刷流任务
+
+        state 为三态：Y-正常 / S-停止下载新种 / N-完全停止。
+        ⚠️ ids 为空表示「全部任务」，前端已加二次确认，此处仅做参数校验兜底。
         """
         try:
             state = data.get("state")
             task_ids = data.get("ids")
+            if state not in ("Y", "S", "N"):
+                return {"code": 1, "msg": "状态参数无效"}
             _brushtask = BrushTask()
-            if state is not None:
-                if task_ids:
-                    for tid in task_ids:
-                        _brushtask.update_brushtask_state(state=state, brushtask_id=tid)
-                else:
-                    _brushtask.update_brushtask_state(state=state)
+            if task_ids:
+                for tid in task_ids:
+                    _brushtask.update_brushtask_state(state=state, brushtask_id=tid)
+            else:
+                _brushtask.update_brushtask_state(state=state)
             return {"code": 0, "msg": ""}
         except Exception as e:
             ExceptionUtils.exception_traceback(e)

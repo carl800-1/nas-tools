@@ -78,7 +78,7 @@ class BrushTask(object):
                                 log.error(f"任务 {task.get('name')} 运行周期格式不正确：{str(err)}")
                     else:
                         log.error(f"任务 {task.get('name')} 运行周期格式不正确")
-            # 正常运行任务数
+            # 正常运行任务数（本次实际注册进调度器的任务数）
             running_task = len(self._scheduler.get_jobs())
             # 启动删种任务
             if running_task > 0:
@@ -89,7 +89,20 @@ class BrushTask(object):
                 self._scheduler.print_jobs()
                 self._scheduler.start()
 
-                log.info(f"{running_task} 个刷流服务正常启动")
+                # ⚠️ 文案说明（v5.2.1）：
+                # 这里打印的是「本次注册进调度器的任务数」，**不是**「总共几个服务在跑」。
+                # 每次 init_config() 都会打一条，所以短时间内多次操作会看到多条日志，
+                # 误以为服务被反复启动。故把总任务数与未运行数一并说清楚。
+                total_task = len(self._brush_tasks)
+                paused_task = total_task - running_task
+                if paused_task > 0:
+                    log.info(f"本次已启动 {running_task} 个刷流任务"
+                             f"（共 {total_task} 个，另有 {paused_task} 个处于停止状态）")
+                else:
+                    log.info(f"本次已启动 {running_task} 个刷流任务（共 {total_task} 个）")
+            else:
+                # 全部任务都处于停止状态：明确说明"没有启动任何任务"，避免误判
+                log.info(f"没有需要启动的刷流任务（共 {len(self._brush_tasks)} 个，均处于停止状态）")
 
     def load_brushtasks(self):
         """

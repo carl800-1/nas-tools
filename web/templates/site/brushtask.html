@@ -1004,6 +1004,21 @@
   // 批量暂停启动刷流任务
   function update_brushtask_state(state){
     let ids = select_GetSelectedVAL("burshtask");
+    // ⚠️ 未勾选任何任务时，后端会更新【全部】任务（ids 为空即全表操作）。
+    // 这里加一道确认，避免「只想改一个却把全部停了」的误伤。
+    if (!ids.length) {
+      let taskCount = {{ Count }};
+      let action = state === 'Y' ? '启动' : (state === 'S' ? '停止下载新种' : '停止');
+      show_confirm_modal("未勾选任何任务，将把全部 " + taskCount + " 个刷流任务设为「" + action + "」，是否继续？", function () {
+        hide_confirm_modal();
+        do_update_brushtask_state(state, ids);
+      });
+      return;
+    }
+    do_update_brushtask_state(state, ids);
+  }
+
+  function do_update_brushtask_state(state, ids){
     ajax_post("update_brushtask_state", {'state': state, ids:ids }, function (ret){
       window_history_refresh();
     });
