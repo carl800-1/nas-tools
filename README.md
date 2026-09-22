@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.2.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -452,6 +452,32 @@ pt:
 `【刷流】`，`peer_count:` / `threshold:` / `left:` / `right:` / `pubdate:` / `year:` /
 `title:` 等字段名一并改成中文，`seed_size not configuration` 也换成了完整中文说明；
 `H&R`、`FREE`、`2XFREE`、`RSS`、`Cookie` 等 PT 专业词按原样保留。
+
+#### 2.19 按种子自动判断媒体类型，自动归类到下载器分类（v6.0.0）
+
+**这是本项目第一次具备「不依赖 TMDB 的媒体类型判断」能力。** 以前判断类型只有一条路 ——
+查 TMDB（`__get_tmdb_type`），要求 API Key、要求联网，而且 TMDB 本身只认电影和电视剧，
+遇到软件、音乐、游戏、电子书、教程这类资源给不出结论；它返回的「未知」也不等于「其它」。
+更实际的问题是，这套体系只管 nas-tools 自己下载过的任务 —— 下载器里手工添加的、刷流下载的、
+以前就在的任务，一个都分不到类。
+
+现在新增了一套**纯本地、完全离线**的判定引擎（`app/utils/media_classifier.py`），
+按可靠性串行降级：**站点分类 / 下载器分类字段 → 非影视关键词黑名单 → 剧集特征
+（`SxxExx` / 第x季 / 第x集 / 全xx集 / 完结 / 综艺）→ 电影特征（年份）→ 文件清单二次确认**
+（最后一步可选，默认关闭）。结论只有三类：**电影 / 电视剧 / 其它**，动漫并入电视剧不单列。
+因为不联网、不调 API，可以对下载器里的**全量任务**周期性扫描，判定开销可忽略。
+
+配置入口就在「下载器设置 → 编辑下载器 → 下载目录设置」：每行末尾新增一列下拉
+**「自动分类」**，取值 `不启用`（默认）/ `自动` / `电影` / `电视剧` / `其它`。选 `自动` 表示
+只接收判定结果与该行「类型」一致的任务；直接选某一类则是固定接收（自定义）。分类名取该行的
+「分类标签」，留空才回落到判定结果本身。规则按界面从上到下**先命中先用**，所以可以把
+「电影」行放前面做精细化。所有行都选「不启用」就等于关闭功能，**不需要额外的总开关**。
+
+为保护数据做了三道防线：**建分类绝不带保存路径**（避免 qB 连带搬移任务文件）、
+**默认跳过开了「自动种子管理」的任务**（qB 改动这类任务的分类会连文件一起搬走，可能搬走正在
+做种的数据）、**挡空 ids**（避免 qB 把空 hashes 解释成「全部任务」而刷掉整个分类）。
+本功能仅对 qBittorrent 生效，Transmission 没有「分类」概念、只有 labels；另外分类名建议与
+qB 里现有分类对齐 —— 删种策略的「分类过滤」与下载设置的「分类隔离」都依赖这个字段。
 
 ### 3. 跳转与入口优化
 
@@ -1073,7 +1099,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.2.5   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1176,4 +1202,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-22 ｜ 当前版本 v5.2.5_
+_Last updated: 2026-09-23 ｜ 当前版本 v6.0.0_

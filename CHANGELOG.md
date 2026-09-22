@@ -1,3 +1,95 @@
+# v6.0.0 (2026-09-23)
+
+## 新功能：按种子自动判断媒体类型，自动归类到下载器分类
+
+这是一个大版本 —— 新增一套**纯本地、不联网的媒体类型判定引擎**，按判定结果把下载器里的
+任务自动归到「电影 / 电视剧 / 其它」分类。它与以往所有功能最大的不同是：
+**能覆盖 nas-tools 自己没下载过的任务。**
+
+### 现象（为什么要做这个）
+
+现有 `MediaType` 体系只覆盖「走 nas-tools 下载链路」的任务：下载时按类型匹配「下载目录设置」
+的行，把该行的 `label` 当分类写进去。可下载器里还有大量任务从来不走这条路 —— 手工添加的、
+刷流下载的、以前就在的、别的工具塞进去的。这些任务在下载器里没有分类，nas-tools 对它们
+也一无所知。
+
+更根本的空白是：**「其它」这一类在现有体系里根本不存在**。识别媒体类型的唯一入口是 TMDB
+（`__get_tmdb_type`），既要求 API Key 又要联网，且 TMDB 本身就只认电影/电视剧，遇到软件、
+音乐、游戏、电子书、教程这类资源给不出结论（它返回的是「未知」，不等于「其它」）。
+
+### 改法
+
+**1. 新增本地判定引擎 `app/utils/media_classifier.py`**
+
+`MediaClassifier.classify(title, files=None, category=None, extra_other_keywords=None)`
+→ `result.category / result.reason`。判定按可靠性**串行降级**，先命中先返回：
+
+| 顺序 | 信号 | 说明 |
+|---|---|---|
+| 1 | 站点分类 / 下载器分类字段 | 最可靠，直接采信 |
+| 2 | 非影视关键词黑名单 | 软件 / 游戏 / 音乐 / 电子书 / 教程 / 驱动 / 字幕… → 其它 |
+| 3 | 剧集特征 | `SxxExx` / 第x季 / 第x集 / 全xx集 / 完结 / 综艺 → 电视剧 |
+| 4 | 电影特征 | 有年份 → 电影 |
+| 5 | 文件清单（可选） | 标题无特征时，看任务内有没有多个带 `SxxExx` 的视频文件 |
+
+结论落成三类：`MOVIE / TV / OTHER`。**动漫并入「电视剧」**，不单列一类。
+
+**2. 配置入口放在「下载目录设置」，规则即开关**
+
+下载器设置 → 编辑下载器 → 下载目录设置，每行末尾新增一列下拉 **「自动分类」**：
+
+| 取值 | 行为 |
+|---|---|
+| `不启用`（默认） | 这一行不参与自动分类 |
+| `自动` | 只接收判定结果与该行「类型」一致的任务 |
+| `电影 / 电视剧 / 其它` | 固定接收该类任务（自定义） |
+
+分类名取该行的「分类标签」；留空则回落到判定结果本身。规则按界面从上到下**先命中先用**，
+所以可以把「电影」行放前面做精细化。所有行都选「不启用」就等于关闭功能，**不再需要额外总开关**。
+
+**3. qBittorrent 分类读写接口**
+
+`Qbittorrent` 新增 `get_categories()` / `create_category(name)` / `set_torrents_category(ids, category)`，
+分别走 `qbittorrentapi` 的 `torrent_categories.categories` / `torrents_create_category` / `torrents_set_category`。
+
+### 三道安全防线
+
+1. **建分类绝不带保存路径**。分类一旦绑了路径，qB 就会把任务文件搬过去 —— 有源码级断言锁着。
+2. **默认跳过开了「自动种子管理(auto_tmm)」的任务**。qB 改动这类任务的分类时会连文件一起搬到
+   该分类的保存路径下，可能搬走正在做种的数据。日志里会汇总提示跳过了几个；确认分类都没绑
+   保存路径、或本就希望交给 qB 按分类归位时，可把 `auto_category_skip_auto_tmm` 改为 `false`。
+3. **挡空 ids**。qB 的 `setCategory` 对空 hashes 的行为没有保证，万一被解释成「全部任务」，
+   会一次刷掉整个下载器的分类。
+
+### 需要留意
+
+- **分类名建议与 qB 里现有分类对齐。** 删种策略的「分类过滤」与下载设置的「分类隔离」
+  都读 `category` 字段，写入新分类会改变这些规则的匹配结果。
+- **Transmission 没有「分类」概念**，只有 labels，本功能仅对 qBittorrent 生效。
+- Web 保存回来的值是**字符串**，`bool("false")` 是 `True`，因此布尔开关统一走 `_cfg_bool()` 解析，
+  避免开关关不掉。
+
+### 涉及文件
+
+- `app/utils/media_classifier.py`（新增，275 行）
+- `app/downloader/downloader.py`：新增 `get_auto_category_rules()` / `auto_category_torrents()` / `_cfg_bool()`
+- `app/downloader/client/qbittorrent.py`：分类读写接口
+- `web/templates/setting/downloader.html`：目录设置新增「自动分类」列
+- `config/config.yaml`：`pt` 段新增 `auto_category_*` 兜底项（`scope` / `create` / `skip_auto_tmm` / `use_files` / `other_keywords`），默认值通常不用改
+
+### 验证
+
+- `auto_category_verify.py` **73/0**（含 5 组反向验证：规则覆盖 / 动漫映射 / 布尔解析 / auto_tmm 守卫 / 建分类不带 save_path）
+- `qb_category_api_verify.py` **23/0**（对**真实 `qbittorrentapi`** 核实三个方法名确实存在，再用假客户端驱动真实 `Qbittorrent` 类断言发出的参数）
+- `media_classifier_verify.py` **58/0**、`media_classifier_reverse_verify.py` 6 组破坏全部命中
+- 回归：`download_fallback_verify` 64/0、`tags_utils_verify` 29/0、`config_save_comment_verify` 15/0、装饰器结构 6/6、路由装饰器真实 eval 6/6、全量 `compileall` 通过
+
+## 版本号
+
+`v5.2.5` → `v6.0.0`
+
+---
+
 # v5.2.5 (2026-09-22)
 
 ## 修复：择优下载第 1 名失败就整部片子判死（48 条候选，只用掉 1 条）
