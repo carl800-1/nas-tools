@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v5.2.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v5.2.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -437,6 +437,21 @@ pt:
 现在改成：默认永远跟随最新；用户手动往上翻才暂停，此时按钮栏会出现
 **「回到底部」**，点一下或自己滚回底部即恢复跟随。打开弹窗、切换日志来源
 都会重新从最新开始跟随。
+
+#### 2.18 下载失败自动换下一个候选；刷流日志中文化（v5.2.5）
+
+**择优下载不再「一击定生死」。** 以前每个片名只保留排序最高的那一条，第 1 名
+添加下载失败（例如站点下载域名被网络阻断）就整部片子判死，排在后面、完全可用的
+候选一次都不会被尝试 —— 日志里会出现「候选 48 条」却「未下载到资源」这种自相矛盾
+的结果。现在同名候选会按同一套择优顺序挂成**回退备选**，第 1 名失败自动试下一个，
+直到成功。新配置项 `laboratory.search_retry_max` 控制上限（默认 20；填 `0` 关闭回退、
+恢复到老行为，填 `-1` 试完全部同名候选）；**中间候选失败只记一条日志**，只有全部
+候选都失败才发一次通知，不会产生几十条飞书消息。
+
+**刷流日志全中文化。** 日志正文里的 `【Brush】` / `【BRUSH】` 前缀共 57 处改为
+`【刷流】`，`peer_count:` / `threshold:` / `left:` / `right:` / `pubdate:` / `year:` /
+`title:` 等字段名一并改成中文，`seed_size not configuration` 也换成了完整中文说明；
+`H&R`、`FREE`、`2XFREE`、`RSS`、`Cookie` 等 PT 专业词按原样保留。
 
 ### 3. 跳转与入口优化
 
@@ -1058,7 +1073,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:5.2.4   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:5.2.5   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1161,4 +1176,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-22 ｜ 当前版本 v5.2.4_
+_Last updated: 2026-09-22 ｜ 当前版本 v5.2.5_

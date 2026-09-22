@@ -1,3 +1,139 @@
+# v5.2.5 (2026-09-22)
+
+## 修复：择优下载第 1 名失败就整部片子判死（48 条候选，只用掉 1 条）
+
+这一版有两件事：**下载失败后自动回退到下一个同名候选**（核心修复），
+以及**刷流日志全中文化**（把 `【Brush】` 之类英文前缀换掉）。
+
+### 现象
+
+搜到 48 条有效资源、择优也正常选中了第 1 名，但添加下载失败后直接输出
+「未下载到资源」——第 2 名到第 48 名一次都没被尝试。日志长这样：
+
+```
+择优下载：按「站点优先」排序，候选 48 条
+第 1 名 馒头 | 20684820380 | ... ← 选中
+择优下载选择：馒头 | Mayday 2026 2160p ...
+无法打开链接：https://fr1.halomt.com?...
+馒头 求救信号 (2026) 添加下载任务失败：无法打开链接：...
+求救信号 未下载到资源
+```
+
+### 根因
+
+`Torrent.get_download_list()` 做「按名称控重」时，把同名的其余候选**直接丢掉**，
+`download_list` 里只剩每个名称的第 1 名：
+
+```python
+if media_name not in can_download_list:   # ← 控重
+    can_download_list_item.append(t_item)
+```
+
+而电影路径是不接返回值的裸调用，失败后没有任何下一步：
+
+```python
+for item in download_list:
+    if item.type == MediaType.MOVIE:
+        __download(item)      # ← 失败就结束了
+```
+
+所以「第 1 名的下载域名被网络阻断」= 整部片子判死。
+**不是重试逻辑写错，是根本没有重试逻辑。**
+
+### 改法
+
+**1. 同名候选不再丢弃，按择优顺序挂成回退备选**
+
+`get_download_list()` 保留原来的控重结果（谁被选中不变），同时把同名的其他候选
+按同一套排序键挂在选中项的 `_fallback_list` 上。日志会直接告诉你还有多少条可退：
+
+```
+第 1 名 馒头 | 20684820380 | ... ← 选中（另有 47 个同名候选可回退）
+```
+
+**2. 中间候选静默失败，只在「全部失败」时通知一次**
+
+不能简单逐条重试 —— 48 个候选在站点不通时会产生 48 条飞书消息 + 48 次 webhook。
+所以 `download()` 新增 `notify_fail` 参数（默认 `True`，原有行为不变）：
+
+- 回退过程中的候选：只打一条 warn 日志，**不发事件、不发消息**
+- 所有候选都失败：统一发 1 条失败消息 + 1 次 `DownloadFail` 事件，文案里带上尝试次数
+
+```
+【Downloader】求救信号 (2026) 第 1/11 个候选添加失败：馒头 | Mayday 2026 ... —— 无法打开链接，继续尝试下一个候选
+【Downloader】求救信号 (2026) 前 1 个候选均失败，已回退到第 2 个候选添加成功：学校 | ...
+```
+
+失败汇总（仅当全部失败）：`添加下载任务失败：已尝试 21 个同名候选全部失败，最后一个失败原因：…`
+
+**3. 新增配置项 `laboratory.search_retry_max`（默认 20）**
+
+```yaml
+laboratory:
+  search_retry_max: 20   # 0=关闭回退 / 20=默认 / -1=试完所有同名候选
+```
+
+为什么不默认不限：站点不通时每个候选都要等一次超时，同名候选可能有几十条，
+全部试完会把单次搜索拖到数分钟。配置缺失或写入非法值一律回落默认 20，
+不会因为配置写错而悄悄关掉回退。
+
+**4. 顺带修正 TV 路径的判重口径**
+
+回退成功时实际下载的是**同名候选**，而 TV 路径原先按原始 item 判断「这一季集是否已下过」
+（`if item in return_items`），会导致回退成功后原始项在后续季集轮次里被再下一次。
+已改为按媒体名判重（`Torrent._media_name(item) in downloaded_names`）。
+
+### 顺带：刷流日志中文化
+
+刷流日志正文里的英文前缀 `【Brush】` / `【BRUSH】` 共 57 处，统一改为 `【刷流】`，
+并把日志里的英文字段名一并中文化：
+
+| 原 | 现 | 处数 |
+|---|---|---|
+| `【Brush】` / `【BRUSH】` | `【刷流】` | 57 |
+| `【刷流】刷流任务 xxx` | `【刷流】任务 xxx`（去掉重复读法） | 7 |
+| `seed_size not configuration` | `【刷流】任务 %s 未配置保种体积，不限制新增下载` | 1 |
+| `peer_count:` / `threshold:` | `做种人数:` / `阈值:` | 2 |
+| `left:` / `right:` | `下限:` / `上限:` | 1 |
+| `pubdate:` / `year:` | `发布时间:` / `年份:` | 6 |
+| `id: %s, title: %s` | `id: %s，标题: %s` | 1 |
+| `时间间隔：%f hour` | `时间间隔：%f 小时` | 1 |
+| `从下载器获取种子为 None` | `从下载器获取种子为空` | 1 |
+
+PT 专业词按原样保留：`H&R`、`FREE`、`2XFREE`、`RSS`、`Cookie`、`GB`、`Kb/s`。
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/utils/torrent.py` | 抽出 `_media_name()`；控重时把同名候选挂到 `_fallback_list`；候选清单日志标注可回退数 |
+| `app/downloader/downloader.py` | `download(notify_fail=...)` + 抽出失败通知；`batch_download` 回退循环；`downloaded_names` 判重；新增 `get_download_retry_max()` |
+| `config/config.yaml` | `laboratory.search_retry_max: 20`（含注释） |
+| `app/brushtask.py` | 刷流日志中文化（58 行） |
+
+### 验证
+
+新增 `.workbuddy/tests/download_fallback_verify.py`：**64 断言全通过**，
+覆盖 `_media_name`、`_fallback_list` 分组顺序、日志文案、配置解析（含非法值回落）、
+静默失败与默认通知不变、`batch_download` 七种回退场景（首个成功 / 第 2 个成功 / 全失败 /
+`retry_max=0` / `=2` / `=20` / `=-1`）、TV 判重源码断言。
+
+反向验证：把修复前的版本导出到另一目录跑同一套检查 → 20+ 项 FAIL；
+再把默认值改回 10 跑 → 精确 FAIL 3 项。证明这套检查确实有鉴别力。
+
+回归：`py_compile` 全量通过、`decorator_structure_check` 6/6、
+`web_main_import_verify` 6/6、`brushtask_state_verify` 26/0、
+`brushtask_scheduler_verify` 18/0、`mteam_dlv2_fix_verify` 34/0、
+`tags_utils_verify` 29/0、`tag_behavior_verify` 16/0、
+`tag_system_source_verify` 71/0、`transfer_ledger_verify` 25/0、
+`config_save_comment_verify` 15/0。
+
+## 版本号
+
+`v5.2.4` → `v5.2.5`
+
+---
+
 # v5.2.4 (2026-09-22)
 
 ## 修复：实时日志不自动滚到最新（零容差的判据，一旦不成立就永久失效）
