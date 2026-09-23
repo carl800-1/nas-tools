@@ -450,36 +450,10 @@
                     </div>
                     <div class="col-lg-4">
                         <div class="mb-3">
-                            <label class="form-label">同时下载任务数 <span class="form-help"
-                                                                           title="下载器中正在下载的任务数超过此值时不再添加下载"
-                                                                           data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_dlcount" class="form-control" placeholder="10">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
                             <label class="form-label">当前站点任务总数 <span class="form-help"
                                                                            title="当前站点任务总数超过此值时不再添加下载，为站点或刷流任务添加标签后生效"
                                                                            data-bs-toggle="tooltip">?</span></label>
                             <input type="text" id="brushtask_current_site_count" class="form-control" placeholder="10">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-label">包含 <span class="form-help"
-                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时才会下载"
-                                                                 data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_include" class="form-control"
-                                   placeholder="关键字或正则表达式">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-label">排除 <span class="form-help"
-                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时不会下载"
-                                                                 data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_exclude" class="form-control"
-                                   placeholder="关键字或正则表达式">
                         </div>
                     </div>
                     <div class="col-lg-4">
@@ -618,6 +592,24 @@
                                 <input type="text" id="brushtask_year" class="form-control" placeholder="如 2000"
                                        readonly/>
                             </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="mb-3">
+                            <label class="form-label">包含 <span class="form-help"
+                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时才会下载"
+                                                                 data-bs-toggle="tooltip">?</span></label>
+                            <input type="text" id="brushtask_include" class="form-control"
+                                   placeholder="关键字或正则表达式">
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="mb-3">
+                            <label class="form-label">排除 <span class="form-help"
+                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时不会下载"
+                                                                 data-bs-toggle="tooltip">?</span></label>
+                            <input type="text" id="brushtask_exclude" class="form-control"
+                                   placeholder="关键字或正则表达式">
                         </div>
                     </div>
                 </div>
@@ -780,30 +772,6 @@
                         </div>
                     </div>
                 </div>
-                <div class="hr-text hr-text-center hr-text-spaceless mt-1 mb-3">部分下载（拆包）规则</div>
-                <div class="row">
-          <div class="col-lg-4">
-            <div class="mb-3">
-              <label class="form-label">种子大小范围(GB) <span class="form-help" title="和下载比例成对出现，例如范围为0,10,100时，将种子大小范围分为三个区间，0-10,10-100,100-无穷大"
-                                                             data-bs-toggle="tooltip">?</span></label>
-              <input type="text" id="frac_before_range" class="form-control" placeholder="">
-            </div>
-          </div>
-          <div class="col-lg-4">
-            <div class="mb-3">
-              <label class="form-label">下载比例 <span class="form-help" title="为小于等于1的数，和范围成对出现，例如比例为1,0.5,0.25时，0-10GB下载比例为1，10-100GB下载比例0.5，100GB-无穷大下载比例0.25"
-                                                             data-bs-toggle="tooltip">?</span></label>
-                <input type="text" id="frac_before_percent" class="form-control" placeholder="">
-            </div>
-          </div>
-          <div class="col-lg-4">
-            <div class="mb-3">
-              <label class="form-label">计算比例后范围(GB) <span class="form-help" title="计算下载比例后的种子大小受此约束。例如计算后范围设置10-100GB，说明至少下载10GB，至多下载100GB"
-                                                             data-bs-toggle="tooltip">?</span></label>
-              <input type="text" id="frac_after_range" class="form-control" placeholder="">
-            </div>
-          </div>
-        </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
@@ -912,7 +880,6 @@
         } else {
           $("#brushtask_sendmessage").prop("checked", false);
         }
-        $("#brushtask_dlcount").val(ret.task.rss_rule.dlcount)
         $("#brushtask_current_site_count").val(ret.task.rss_rule.current_site_count)
         $("#brushtask_peercount").val(ret.task.rss_rule.peercount)
         $("#brushtask_include").val(ret.task.rss_rule.include);
@@ -974,12 +941,6 @@
         //发布年份（取不到时必须显式清空，否则会残留上一次编辑的值）
         let year_str = ret.task.rss_rule.year ? ret.task.rss_rule.year.split('#') : ['', ''];
         filter_item_change(year_str[0], 'brushtask_year', $('#brushtask_year_do_' + year_str[0]), year_str[1])
-        //种子大小范围
-        $("#frac_before_range").val(ret.task.fraction_rule.frac_before_range);
-        //下载比例
-        $("#frac_before_percent").val(ret.task.fraction_rule.frac_before_percent);
-        //计算比例后大小约束
-        $("#frac_after_range").val(ret.task.fraction_rule.frac_after_range);
         //清除上一次校验失败留下的红框（is-invalid），否则会残留到本次弹窗
         $("#modal-brushtask .is-invalid").removeClass("is-invalid");
         //弹窗
@@ -1145,14 +1106,6 @@
     let brushtask_include = $("#brushtask_include").val();
     //排除
     let brushtask_exclude = $("#brushtask_exclude").val();
-    //同时下载数
-    let brushtask_dlcount = $("#brushtask_dlcount").val();
-    if (brushtask_dlcount && isNaN(brushtask_dlcount)) {
-      $("#brushtask_dlcount").addClass("is-invalid");
-      return;
-    } else {
-      $("#brushtask_dlcount").removeClass("is-invalid");
-    }
     //当前站点任务总数
     let brushtask_current_site_count = $("#brushtask_current_site_count").val();
     if (brushtask_current_site_count && isNaN(brushtask_current_site_count)) {
@@ -1292,73 +1245,6 @@
       $("#brushtask_iatime").removeClass("is-invalid");
     }
 
-    //部分下载前范围
-    let frac_before_range = $("#frac_before_range").val();
-    let range_split_num = 0
-    if (frac_before_range) {
-      range_split_num = frac_before_range.split(',').length;
-    }
-    // 范围要从小到大
-    let before_range_array = frac_before_range.split(',');
-    for(let i=0;i<before_range_array.length -1;i++){
-      if(parseFloat(before_range_array[i])>=parseFloat(before_range_array[i+1])){
-        $("#frac_before_range").addClass("is-invalid");
-        return;
-      }else{
-        $("#frac_before_range").removeClass("is-invalid");
-      }
-    }
-
-
-    //部分下载前比例
-    let frac_before_percent = $("#frac_before_percent").val();
-    let percent_split_num = 0
-    if (frac_before_percent) {
-      percent_split_num = frac_before_percent.split(',').length;
-    }
-
-    // 成对出现
-    if(range_split_num != percent_split_num){
-      $("#frac_before_range").addClass("is-invalid");
-      $("#frac_before_percent").addClass("is-invalid");
-      return;
-    }else{
-      $("#frac_before_range").removeClass("is-invalid");
-      $("#frac_before_percent").removeClass("is-invalid");
-    }
-
-
-    // 比例每个数字不超过1
-    let percent_array = frac_before_percent.split(',');
-    for(let i=0;i<percent_array.length;i++){
-      if(parseFloat(percent_array[i])>1){
-        $("#frac_before_percent").addClass("is-invalid");
-        return;
-      }else{
-        $("#frac_before_percent").removeClass("is-invalid");
-      }
-    }
-
-    //部分下载后范围
-    let frac_after_range = $("#frac_after_range").val();
-    if (frac_after_range && !/\d+,\d+/.test(frac_after_range)) {
-      $("#frac_after_range").addClass("is-invalid");
-      return;
-    } else {
-      $("#frac_after_range").removeClass("is-invalid");
-    }
-
-    // 范围要从小到大
-    let after_range_array = frac_after_range.split(',');
-    for(let i=0;i<after_range_array.length -1;i++){
-      if(parseFloat(after_range_array[i])>=parseFloat(after_range_array[i+1])){
-        $("#frac_after_range").addClass("is-invalid");
-        return;
-      }else{
-        $("#frac_after_range").removeClass("is-invalid");
-      }
-    }
-
     // 参数
     const params = {
       brushtask_id: brushtask_id,
@@ -1381,7 +1267,6 @@
       brushtask_torrent_size: brushtask_torrent_size_do + "#" + brushtask_torrent_size,
       brushtask_include: brushtask_include,
       brushtask_exclude: brushtask_exclude,
-      brushtask_dlcount: brushtask_dlcount,
       brushtask_current_site_count: brushtask_current_site_count,
       brushtask_peercount: brushtask_peercount_do + "#" + brushtask_peercount,
       brushtask_seedtime: brushtask_seedtime_do + "#" + brushtask_seedtime,
@@ -1390,9 +1275,6 @@
       brushtask_dltime: brushtask_dltime_do + "#" + brushtask_dltime,
       brushtask_avg_upspeed: brushtask_avg_upspeed_do + "#" + brushtask_avg_upspeed,
       brushtask_iatime: brushtask_iatime_do + "#" + brushtask_iatime,
-      frac_before_range: frac_before_range,
-      frac_before_percent: frac_before_percent,
-      frac_after_range: frac_after_range,
       brushtask_pubdate: brushtask_pubdate_do + "#" + brushtask_pubdate,
       brushtask_year: brushtask_year_do + "#" + brushtask_year
     };
