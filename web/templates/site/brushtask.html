@@ -181,6 +181,15 @@
                             </div>
                         </div>
                         <div class="datagrid-item">
+                            <div class="datagrid-title">剩余时间</div>
+                            <div class="datagrid-content">
+                                <span class="brush-remain"
+                                      data-remain="{{ Task.remain_seconds if Task.remain_seconds is not none else '' }}"
+                                      title="按「任务时长」倒计时，到点自动停止下载新种"
+                                >{{ Task.remain_text }}</span>
+                            </div>
+                        </div>
+                        <div class="datagrid-item">
                             <div class="datagrid-title">下载器</div>
                             <div class="datagrid-content">{{ Task.downloader_name or "" }}</div>
                         </div>
@@ -259,26 +268,6 @@
                                 <span class="badge bg-orange">停止下载新种</span>
                                 {% else %}
                                 <span class="badge bg-red">已停用</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                        <div class="datagrid-item">
-                            <div class="datagrid-title">上限上传速度</div>
-                            <div class="datagrid-content">
-                                {% if Task.up_limit %}
-                                {{ Task.up_limit }} KB/s
-                                {% else %}
-                                {{ '未限制' }}
-                                {% endif %}
-                            </div>
-                        </div>
-                        <div class="datagrid-item">
-                            <div class="datagrid-title">上限下载速度</div>
-                            <div class="datagrid-content">
-                                {% if Task.dl_limit %}
-                                {{ Task.dl_limit }} KB/s
-                                {% else %}
-                                {{ '未限制' }}
                                 {% endif %}
                             </div>
                         </div>
@@ -380,18 +369,11 @@
                     </div>
                     <div class="col-lg-4">
                         <div class="mb-3">
-                            <label class="form-label">上限上传速度（KB/S） <span class="form-help"
-                                                                               title="若下载器的上传速度在此速度之上时，停止添加"
-                                                                               data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_up_limit" class="form-control" placeholder="">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-label">上限下载速度（KB/S） <span class="form-help"
-                                                                               title="若下载器的下载速度在此速度之上时，停止添加"
-                                                                               data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_dl_limit" class="form-control" placeholder="">
+                            <label class="form-label">任务时长（小时） <span class="form-help"
+                                                                                title="任务启动后按此时长倒计时，到点自动停止下载新种（已在跑的种子不动，交给删种规则收敛）。支持小数，如 0.5 / 2 / 24；留空 = 不限时"
+                                                                                data-bs-toggle="tooltip">?</span></label>
+                            <input type="text" id="brushtask_duration" class="form-control"
+                                   placeholder="留空为不限时" autocomplete="off">
                         </div>
                     </div>
                 </div>
@@ -512,22 +494,6 @@
                                                                  data-bs-toggle="tooltip">?</span></label>
                             <input type="text" id="brushtask_exclude" class="form-control"
                                    placeholder="关键字或正则表达式">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-label">上传限速（KB/S） <span class="form-help"
-                                                                           title="限制添加下载后的上传速度"
-                                                                           data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_upspeed" class="form-control" placeholder="">
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-label">下载限速（KB/S） <span class="form-help"
-                                                                           title="限制添加下载后的下载速度"
-                                                                           data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_downspeed" class="form-control" placeholder="">
                         </div>
                     </div>
                     <div class="col-lg-4">
@@ -894,8 +860,12 @@
       }
       $("#brushtask_modal_title").text("新建任务");
       $("#brushtask_id").val("");
+      //清除上一次校验失败留下的红框（is-invalid），否则会残留到本次弹窗
+      $("#modal-brushtask .is-invalid").removeClass("is-invalid");
       //发布年份（新建时必须显式清空，否则会残留上一次编辑的值）
       filter_item_change('', 'brushtask_year', $('#brushtask_year_do_'));
+      //任务时长（同理：不清空会残留上一次编辑的值）
+      $("#brushtask_duration").val("");
       $("#modal-brushtask").modal('show');
     });
   }
@@ -959,8 +929,7 @@
         $("#brushtask_include").val(ret.task.rss_rule.include);
         $("#brushtask_exclude").val(ret.task.rss_rule.exclude);
         $("#brushtask_label").val(ret.task.label);
-        $("#brushtask_up_limit").val(ret.task.up_limit);
-        $("#brushtask_dl_limit").val(ret.task.dl_limit);
+        $("#brushtask_duration").val(ret.task.duration);
         $("#brushtask_savepath").val(ret.task.savepath);
         //种子大小
         if (ret.task.rss_rule.size) {
@@ -1016,16 +985,14 @@
         //发布年份（取不到时必须显式清空，否则会残留上一次编辑的值）
         let year_str = ret.task.rss_rule.year ? ret.task.rss_rule.year.split('#') : ['', ''];
         filter_item_change(year_str[0], 'brushtask_year', $('#brushtask_year_do_' + year_str[0]), year_str[1])
-        //上传限速
-        $("#brushtask_upspeed").val(ret.task.rss_rule.upspeed);
-        //下载限速
-        $("#brushtask_downspeed").val(ret.task.rss_rule.downspeed);
         //种子大小范围
         $("#frac_before_range").val(ret.task.fraction_rule.frac_before_range);
         //下载比例
         $("#frac_before_percent").val(ret.task.fraction_rule.frac_before_percent);
         //计算比例后大小约束
         $("#frac_after_range").val(ret.task.fraction_rule.frac_after_range);
+        //清除上一次校验失败留下的红框（is-invalid），否则会残留到本次弹窗
+        $("#modal-brushtask .is-invalid").removeClass("is-invalid");
         //弹窗
         $("#modal-brushtask").modal('show');
       }
@@ -1149,8 +1116,17 @@
     }
     let brushtask_rssurl = $("#brushtask_rssurl").val();
     let brushtask_label = $("#brushtask_label").val();
-    let brushtask_up_limit = $("#brushtask_up_limit").val();
-    let brushtask_dl_limit = $("#brushtask_dl_limit").val();
+    //任务时长（小时）：留空 = 不限时；填了必须是 0.1~720 的数字
+    let brushtask_duration = ($("#brushtask_duration").val() || "").trim();
+    if (brushtask_duration) {
+      let duration_num = Number(brushtask_duration);
+      if (!isFinite(duration_num) || duration_num < 0.1 || duration_num > 720) {
+        $("#brushtask_duration").addClass("is-invalid");
+        show_fail_modal("「任务时长」需在 0.1 ~ 720 小时之间（支持小数，如 0.5），留空为不限时。");
+        return;
+      }
+    }
+    $("#brushtask_duration").removeClass("is-invalid");
     let brushtask_savepath = $("#brushtask_savepath").val();
     let brushtask_state = $("#brushtask_state").val();
     let brushtask_transfer = $("#brushtask_transfer").prop('checked');
@@ -1194,22 +1170,6 @@
       return;
     } else {
       $("#brushtask_current_site_count").removeClass("is-invalid");
-    }
-    //上传限速
-    let brushtask_upspeed = $("#brushtask_upspeed").val();
-    if (brushtask_upspeed && isNaN(brushtask_upspeed)) {
-      $("#brushtask_upspeed").addClass("is-invalid");
-      return;
-    } else {
-      $("#brushtask_upspeed").removeClass("is-invalid");
-    }
-    //下载限速
-    let brushtask_downspeed = $("#brushtask_downspeed").val();
-    if (brushtask_downspeed && isNaN(brushtask_downspeed)) {
-      $("#brushtask_downspeed").addClass("is-invalid");
-      return;
-    } else {
-      $("#brushtask_downspeed").removeClass("is-invalid");
     }
     //发布时间
     let brushtask_pubdate_do = $("#brushtask_pubdate_do").val();
@@ -1419,8 +1379,7 @@
       brushtask_downloader: brushtask_downloader,
       brushtask_totalsize: brushtask_totalsize,
       brushtask_label: brushtask_label,
-      brushtask_up_limit: brushtask_up_limit,
-      brushtask_dl_limit: brushtask_dl_limit,
+      brushtask_duration: brushtask_duration,
       brushtask_savepath: brushtask_savepath,
       brushtask_state: brushtask_state,
       brushtask_transfer: brushtask_transfer,
@@ -1441,8 +1400,6 @@
       brushtask_dltime: brushtask_dltime_do + "#" + brushtask_dltime,
       brushtask_avg_upspeed: brushtask_avg_upspeed_do + "#" + brushtask_avg_upspeed,
       brushtask_iatime: brushtask_iatime_do + "#" + brushtask_iatime,
-      brushtask_upspeed: brushtask_upspeed,
-      brushtask_downspeed: brushtask_downspeed,
       frac_before_range: frac_before_range,
       frac_before_percent: frac_before_percent,
       frac_after_range: frac_after_range,
@@ -1461,6 +1418,41 @@
     $("#brushtask_site").change(function () {
       brushtask_site_change($(this).val());
     });
+    // 「剩余时间」本地每秒递减 —— 不请求后端，页面停留期间也能看到倒计时走动。
+    // ⚠️ 本页是 AJAX 注入的 SPA 片段（见技能 nastool-web-spa-fragment）：
+    // 每次进入都会重新执行这段脚本，必须先清掉上一次的定时器，
+    // 否则定时器越积越多，同一个秒针被减多次，倒计时会肉眼可见地跑快。
+    if (window.__brush_remain_timer) {
+      clearInterval(window.__brush_remain_timer);
+    }
+    window.__brush_remain_timer = setInterval(function () {
+      $(".brush-remain").each(function () {
+        let raw = $(this).attr("data-remain");
+        if (raw === undefined || raw === "") {
+          return;
+        }
+        let left = parseInt(raw, 10) - 1;
+        if (isNaN(left)) {
+          return;
+        }
+        $(this).attr("data-remain", left);
+        if (left <= 0) {
+          $(this).text("即将停止");
+        } else {
+          let hh = Math.floor(left / 3600);
+          let mm = Math.floor((left % 3600) / 60);
+          if (hh > 0 && mm > 0) {
+            $(this).text(hh + "小时" + mm + "分");
+          } else if (hh > 0) {
+            $(this).text(hh + "小时");
+          } else if (mm > 0) {
+            $(this).text(mm + "分钟");
+          } else {
+            $(this).text("不足1分");
+          }
+        }
+      });
+    }, 1000);
   });
 
   //立即运行任务

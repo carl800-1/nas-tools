@@ -18,7 +18,7 @@ from flask_login import logout_user, current_user
 from werkzeug.security import generate_password_hash
 
 import log
-from app.brushtask import BrushTask
+from app.brushtask import BrushTask, MAX_TASK_DURATION, MIN_TASK_DURATION, normalize_task_duration
 from app.conf import SystemConfig, ModuleConf
 from app.downloader import Downloader
 from app.filetransfer import FileTransfer
@@ -2007,8 +2007,14 @@ class WebAction:
         brushtask_state = data.get("brushtask_state")
         brushtask_rssurl = data.get("brushtask_rssurl")
         brushtask_label = data.get("brushtask_label")
-        brushtask_up_limit = data.get("brushtask_up_limit")
-        brushtask_dl_limit = data.get("brushtask_dl_limit")
+        brushtask_duration = data.get("brushtask_duration")
+        # 「任务时长」（小时）：留空 = 不限时；填了就必须在 [0.1, 720] 之间。
+        # 前端已经校验过一遍，这里再兜一层 —— 开放 API 也会走这条路径。
+        if str(brushtask_duration or "").strip() \
+                and normalize_task_duration(brushtask_duration) is None:
+            return {"code": 1, "msg": "任务时长需在 %g ~ %g 小时之间"
+                                      "（支持小数如 0.5，留空为不限时）"
+                                      % (MIN_TASK_DURATION, MAX_TASK_DURATION)}
         brushtask_savepath = data.get("brushtask_savepath")
         brushtask_transfer = 'Y' if data.get("brushtask_transfer") else 'N'
         brushtask_free_limit_speed = 'Y' if data.get("brushtask_free_limit_speed") else 'N'
@@ -2031,8 +2037,6 @@ class WebAction:
         brushtask_iatime = data.get("brushtask_iatime")
         brushtask_pubdate = data.get("brushtask_pubdate")
         brushtask_year = data.get("brushtask_year")
-        brushtask_upspeed = data.get("brushtask_upspeed")
-        brushtask_downspeed = data.get("brushtask_downspeed")
         frac_before_range = data.get("frac_before_range")
         frac_before_percent = data.get("frac_before_percent")
         frac_after_range = data.get("frac_after_range")
@@ -2047,9 +2051,7 @@ class WebAction:
             "current_site_count": brushtask_current_site_count,
             "peercount": brushtask_peercount,
             "pubdate": brushtask_pubdate,
-            "year": brushtask_year,
-            "upspeed": brushtask_upspeed,
-            "downspeed": brushtask_downspeed
+            "year": brushtask_year
         }
         # 删除规则
         remove_rule = {
@@ -2076,8 +2078,7 @@ class WebAction:
             "downloader": brushtask_downloader,
             "seed_size": brushtask_totalsize,
             "label": brushtask_label,
-            "up_limit": brushtask_up_limit,
-            "dl_limit": brushtask_dl_limit,
+            "duration": brushtask_duration,
             "savepath": brushtask_savepath,
             "transfer": brushtask_transfer,
             "brushtask_free_limit_speed": brushtask_free_limit_speed,
@@ -2558,12 +2559,6 @@ class WebAction:
                 rule_htmls.append(
                     '<span class="badge badge-outline text-blue me-1 mb-1" title="发布年份">发布年份: %s %s</span>'
                     % (year_filter_string.get(years[0], ""), years[1].replace(",", "-") if years[1] else ""))
-        if rules.get("upspeed"):
-            rule_htmls.append('<span class="badge badge-outline text-blue me-1 mb-1" title="上传限速">上传限速: %sB/s</span>'
-                              % StringUtils.str_filesize(int(rules.get("upspeed")) * 1024))
-        if rules.get("downspeed"):
-            rule_htmls.append('<span class="badge badge-outline text-blue me-1 mb-1" title="下载限速">下载限速: %sB/s</span>'
-                              % StringUtils.str_filesize(int(rules.get("downspeed")) * 1024))
         if rules.get("include"):
             rule_htmls.append(
                 '<span class="badge badge-outline text-green me-1 mb-1 text-wrap text-start" title="包含规则">包含: %s</span>'

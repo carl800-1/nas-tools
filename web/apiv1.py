@@ -1737,8 +1737,8 @@ class BrushTaskUpdate(ClientResource):
     parser.add_argument('brushtask_year', type=str,
                         help='发布年份（大于/小于/介于，格式 gt#2000 / lt#2020 / bw#2000,2020；gt/lt 为严格比较、不含该年）',
                         location='form')
-    parser.add_argument('brushtask_upspeed', type=int, help='上传限速（KB/S）', location='form')
-    parser.add_argument('brushtask_downspeed', type=int, help='下载限速（KB/S）', location='form')
+    parser.add_argument('brushtask_duration', type=str,
+                        help='任务时长（小时，支持小数，0.1~720；留空为不限时）', location='form')
 
     @brushtask.doc(parser=parser)
     def post(self):

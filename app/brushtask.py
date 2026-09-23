@@ -1,3 +1,4 @@
+import math
 import re
 import sys
 import time
@@ -18,7 +19,58 @@ from app.utils import StringUtils, ExceptionUtils
 from app.utils.commons import singleton
 from app.utils.tags import Tags
 from app.utils.types import BrushDeleteType
-from config import BRUSH_REMOVE_TORRENTS_INTERVAL, Config
+from config import BRUSH_REMOVE_TORRENTS_INTERVAL, BRUSH_TASK_DURATION_CHECK_INTERVAL, Config
+
+
+# 「任务时长」的取值范围（小时）：0.1 小时 = 6 分钟，720 小时 = 30 天。
+# 前端按同一口径校验，后端再兜一层 —— 异常值一律按「不限时」处理，
+# 宁可不限时，也不要因为一个脏值把用户的刷流任务提前停掉。
+MIN_TASK_DURATION = 0.1
+MAX_TASK_DURATION = 720.0
+
+
+def normalize_task_duration(value):
+    """
+    归一「任务时长」（小时），返回 float 或 None。
+
+    「未启用」的判据只有这一条：去掉首尾空白后为空 / 不是数字 /
+    不在 [MIN_TASK_DURATION, MAX_TASK_DURATION] 区间内 —— 一律返回 None。
+    None 的语义是「不限时」：不写 START_TIME，也不参与倒计时与自动停止。
+    """
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        hours = float(text)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(hours):
+        # nan / inf 要显式挡掉：float("nan") 与任何数比较都是 False，
+        # 只靠区间判断会放它过去，随后 int(round(nan)) 会直接抛异常。
+        return None
+    if hours < MIN_TASK_DURATION or hours > MAX_TASK_DURATION:
+        return None
+    return hours
+
+
+def format_remain_time(seconds):
+    """
+    把剩余秒数格式化成「x小时y分」。None → 空串；非正数 → 「不足1分」。
+    """
+    if seconds is None:
+        return ""
+    seconds = int(seconds)
+    if seconds <= 0:
+        return "不足1分"
+    hours, rem = divmod(seconds, 3600)
+    minutes = rem // 60
+    if hours and minutes:
+        return "%d小时%d分" % (hours, minutes)
+    if hours:
+        return "%d小时" % hours
+    if minutes:
+        return "%d分钟" % minutes
+    return "不足1分"
 
 
 @singleton
@@ -85,6 +137,10 @@ class BrushTask(object):
                 self._scheduler.add_job(func=self.remove_tasks_torrents,
                                         trigger='interval',
                                         seconds=BRUSH_REMOVE_TORRENTS_INTERVAL)
+                # 「任务时长」到点自动停止：独立短周期任务（见 check_task_duration）
+                self._scheduler.add_job(func=self.check_task_duration,
+                                        trigger='interval',
+                                        seconds=BRUSH_TASK_DURATION_CHECK_INTERVAL)
                 # 启动
                 self._scheduler.print_jobs()
                 self._scheduler.start()
@@ -121,7 +177,7 @@ class BrushTask(object):
                 site_url = ""
             downloader_info = self.downloader.get_downloader_conf(task.DOWNLOADER)
             total_size = round(int(self.dbhelper.get_brushtask_totalsize(task.ID)) / (1024 ** 3), 1)
-            self._brush_tasks[str(task.ID)] = {
+            task_info = {
                 "id": task.ID,
                 "name": task.NAME,
                 "site": site_info.get("name"),
@@ -130,8 +186,8 @@ class BrushTask(object):
                 "label": task.LABEL,
                 # 标签列表：用于界面常驻展示（用户填写的标签，程序不追加任何默认标签）
                 "label_list": Tags.split(task.LABEL),
-                "up_limit": task.UP_LIMIT,
-                "dl_limit": task.DL_LIMIT,
+                "duration": task.TASK_DURATION,
+                "start_time": task.START_TIME,
                 "savepath": task.SAVEPATH,
                 "state": task.STATE,
                 "downloader": task.DOWNLOADER,
@@ -157,6 +213,10 @@ class BrushTask(object):
                 "lst_mod_date": task.LST_MOD_DATE,
                 "site_url": site_url
             }
+            # 「剩余时间」派生字段：在服务端算好，模板直接展示，不在模板里做时间运算
+            task_info["remain_seconds"] = self.__remain_seconds(task_info)
+            task_info["remain_text"] = self.__describe_remain_time(task_info)
+            self._brush_tasks[str(task.ID)] = task_info
 
     def get_brushtask_info(self, taskid=None):
         """
@@ -302,7 +362,6 @@ class BrushTask(object):
                 # 开始下载
                 log.debug("【刷流】%s 符合条件，开始下载..." % torrent_name)
                 if self.__download_torrent(taskinfo=taskinfo,
-                                           rss_rule=rss_rule,
                                            fraction_rule=fraction_rule,
                                            site_info=site_info,
                                            title=torrent_name,
@@ -674,24 +733,9 @@ class BrushTask(object):
         """
         if not taskinfo:
             return False
-        up_limit_speed = taskinfo.get("up_limit") or None
-        dl_limit_speed = taskinfo.get("dl_limit") or None
         downloader_id = taskinfo.get("downloader")
         downloader_name = taskinfo.get("downloader_name")
         task_name = taskinfo.get("name")
-
-        # 检查下载速度上限、上传速度上限
-        if (up_limit_speed and str(up_limit_speed).isdigit()) or (dl_limit_speed and str(dl_limit_speed).isdigit()):
-            downloader = self.downloader.get_downloader(downloader_id=downloader_id)
-            client_speed = downloader.get_client_speed()
-            if client_speed and up_limit_speed and str(up_limit_speed).isdigit():
-                if float(client_speed.get('up_speed')) / 1024 >= float(up_limit_speed):
-                    log.warn("【刷流】任务 %s 所选下载器 %s 目前上传速度 %s Kb/s，不再新增下载"
-                             % (task_name, downloader_name, round(float(client_speed.get('up_speed')) / 1024, 4)))
-            if client_speed and dl_limit_speed and str(dl_limit_speed).isdigit():
-                if float(client_speed.get('dl_speed')) / 1024 >= float(dl_limit_speed):
-                    log.warn("【刷流】任务 %s 所选下载器 %s 目前下载速度 %s Kb/s，不再新增下载"
-                             % (task_name, downloader_name, round(float(client_speed.get('dl_speed')) / 1024, 4)))
 
         # 检查正在下载的任务数
         if dlcount:
@@ -743,7 +787,6 @@ class BrushTask(object):
 
     def __download_torrent(self,
                            taskinfo,
-                           rss_rule,
                            fraction_rule,
                            site_info,
                            title,
@@ -754,7 +797,6 @@ class BrushTask(object):
         """
         添加下载任务，更新任务数据
         :param taskinfo: 任务信息
-        :param rss_rule: rss规则
         :param fraction_rule: 部分下载规则
         :param site_info: 站点信息
         :param title: 种子名称
@@ -771,8 +813,6 @@ class BrushTask(object):
         taskname = taskinfo.get("name")
         sendmessage = taskinfo.get("sendmessage")
         downloader_id = taskinfo.get("downloader")
-        download_limit = rss_rule.get("downspeed")
-        upload_limit = rss_rule.get("upspeed")
         download_dir = taskinfo.get("savepath")
         brushtask_free_limit_speed = taskinfo.get("brushtask_free_limit_speed")
         brushtask_free_ddl_delete = taskinfo.get("brushtask_free_ddl_delete")
@@ -802,8 +842,6 @@ class BrushTask(object):
             downloader_id=downloader_id,
             download_dir=download_dir,
             download_setting="-2",
-            download_limit=download_limit,
-            upload_limit=upload_limit,
             skip_size_check=(True if fraction_rule_exits else False)
         )
 
@@ -1224,6 +1262,93 @@ class BrushTask(object):
             "tags": tags if tags else ""
         }
 
+    @staticmethod
+    def __parse_start_time(text):
+        """
+        解析「任务时长」的计时起点，解析不出返回 None（老数据 / 格式异常）。
+        """
+        text = str(text or "").strip()
+        if not text:
+            return None
+        for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(text, pattern)
+            except ValueError:
+                continue
+        return None
+
+    def __remain_seconds(self, taskinfo):
+        """
+        「任务时长」的剩余秒数。返回 None 表示「无需倒计时」——
+        既包括未配置时长（不限时），也包括任务当前不在 Y（未运行）。
+        """
+        if not isinstance(taskinfo, dict):
+            return None
+        duration = normalize_task_duration(taskinfo.get("duration"))
+        if duration is None or taskinfo.get("state") != "Y":
+            return None
+        start_time = self.__parse_start_time(taskinfo.get("start_time"))
+        if not start_time:
+            return None
+        left = duration * 3600 - (datetime.now() - start_time).total_seconds()
+        return max(0, int(round(left)))
+
+    def __describe_remain_time(self, taskinfo):
+        """
+        任务列表「剩余时间」列的文案：不限时 / 未运行 / 剩余 x 小时 y 分。
+        """
+        if not isinstance(taskinfo, dict):
+            return ""
+        duration = normalize_task_duration(taskinfo.get("duration"))
+        if duration is None:
+            return "不限时"
+        if taskinfo.get("state") != "Y":
+            return "未运行"
+        left = self.__remain_seconds(taskinfo)
+        if left is None:
+            # 配了时长、也在运行，却算不出起点（老任务编辑后仍然是 Y）：
+            # 按「刚开始计时」展示，保存后就会补上真实起点
+            left = int(round(duration * 3600))
+        return "即将停止" if left <= 0 else format_remain_time(left)
+
+    def check_task_duration(self):
+        """
+        「任务时长」到点自动停止，由定时服务按 BRUSH_TASK_DURATION_CHECK_INTERVAL 调用。
+
+        到时后只做两件事：状态置为 N（完全停止）+ 清空计时起点。
+        「已在跑的种子」完全不动 —— 与既定口径「只停止新增下载」一致：
+        state 一变，check_task_rss() 开头的 `state != 'Y'` 分支就会拦住后续新增，
+        存量种子交给既有的「删种规则」自然收敛。
+
+        ⚠️ 这里**不能**调 self.init_config()：它会在 job 内部 shutdown 掉正在
+        运行本方法的调度器。所以只改 DB + 内存态，不重启服务。
+        """
+        for taskid, task in list(self._brush_tasks.items()):
+            if task.get("state") != "Y":
+                continue
+            duration = normalize_task_duration(task.get("duration"))
+            if duration is None:
+                continue
+            left = self.__remain_seconds(task)
+            if left is None or left > 0:
+                continue
+            task_name = task.get("name")
+            log.info("【刷流】任务 %s 已运行满 %s 小时，按「任务时长」自动停止下载新种"
+                     % (task_name, "%g" % duration))
+            self.dbhelper.update_brushtask_state(state="N", tid=taskid)
+            task["state"] = "N"
+            task["start_time"] = ""
+            task["remain_seconds"] = None
+            task["remain_text"] = self.__describe_remain_time(task)
+            if task.get("sendmessage"):
+                try:
+                    self.message.send_brushtask_remove_message(
+                        title="【刷流任务 %s 时长已到】" % task_name,
+                        text="任务已按设定的「任务时长」自动停止下载新种。\n"
+                             "任务时长：%s 小时\n" % ("%g" % duration))
+                except Exception as err:
+                    ExceptionUtils.exception_traceback(err)
+
     def stop_service(self):
         """
         停止服务
@@ -1241,6 +1366,15 @@ class BrushTask(object):
         """
         新增刷种任务
         """
+        # 「任务时长」的计时起点：只在任务处于「正常」状态时才有意义。
+        # · 停用/停止下载新种 → 清空，下次启动从头开始算；
+        # · 已在运行的任务改个名字再保存 → 保留原起点，不把倒计时清零。
+        old = self._brush_tasks.get(str(brushtask_id)) or {}
+        if str(item.get("state") or "") != "Y":
+            item["start_time"] = ""
+        else:
+            item["start_time"] = old.get("start_time") or \
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ret = self.dbhelper.update_brushtask(brushtask_id, item)
         self.init_config()
         return ret

@@ -39,6 +39,10 @@ RSS_CHECK_INTERVAL = 300
 RSS_REFRESH_TMDB_INTERVAL = 6
 # 刷流删除的检查时间间隔
 BRUSH_REMOVE_TORRENTS_INTERVAL = 300
+# 「任务时长」到点自动停止的检查粒度（秒）。
+# 任务时长最短 0.1 小时 = 6 分钟，60 秒粒度带来的误差可接受；
+# 若挂到 BRUSH_REMOVE_TORRENTS_INTERVAL（300 秒）上，短任务会迟停最多 5 分钟。
+BRUSH_TASK_DURATION_CHECK_INTERVAL = 60
 # 定时清除未识别的缓存时间间隔（小时）
 META_DELETE_UNKNOWN_INTERVAL = 12
 # 定时刷新壁纸的间隔（小时）

@@ -375,8 +375,11 @@ class SITEBRUSHTASK(Base):
     SEED_SIZE = Column(Text)
     INTEVAL = Column(Text)
     LABEL = Column(Text)
-    UP_LIMIT = Column(Text)
-    DL_LIMIT = Column(Text)
+    # 「任务时长」：单位小时，支持小数（如 0.5 / 2 / 24）。空 = 不限时。
+    TASK_DURATION = Column(Text)
+    # 「任务时长」的计时起点（%Y-%m-%d %H:%M:%S）：状态变为 Y（正常）时写入、
+    # 非 Y 时清空。两者一起算出剩余时间，见 app/brushtask.py。
+    START_TIME = Column(Text)
     SAVEPATH = Column(Text)
     DOWNLOADER = Column(Text)
     TRANSFER = Column(Text)

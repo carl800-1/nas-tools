@@ -1784,8 +1784,8 @@ class DbHelper:
                 INTEVAL=item.get('interval'),
                 DOWNLOADER=item.get('downloader'),
                 LABEL=item.get('label'),
-                UP_LIMIT=item.get('up_limit'),
-                DL_LIMIT=item.get('dl_limit'),
+                TASK_DURATION=item.get('duration'),
+                START_TIME=item.get('start_time'),
                 SAVEPATH=item.get('savepath'),
                 TRANSFER=item.get('transfer'),
                 BRUSHTASK_FREE_LIMIT_SPEED=item.get('brushtask_free_limit_speed'),
@@ -1812,8 +1812,8 @@ class DbHelper:
                     "INTEVAL": item.get('interval'),
                     "DOWNLOADER": item.get('downloader'),
                     "LABEL": item.get('label'),
-                    "UP_LIMIT": item.get('up_limit'),
-                    "DL_LIMIT": item.get('dl_limit'),
+                    "TASK_DURATION": item.get('duration'),
+                    "START_TIME": item.get('start_time'),
                     "SAVEPATH": item.get('savepath'),
                     "TRANSFER": item.get('transfer'),
                     "BRUSHTASK_FREE_LIMIT_SPEED": item.get('brushtask_free_limit_speed'),
@@ -1866,6 +1866,8 @@ class DbHelper:
         """
         改变刷流任务的状态
 
+        v6.0.3 起本方法还负责维护「任务时长」的计时起点 START_TIME。
+
         ⚠️ 状态是**三态**，不能压缩成两态（v5.2.1 修复）：
             Y - 正常（下载新种 + 做种）
             S - 停止下载新种（只做种保种）
@@ -1876,17 +1878,19 @@ class DbHelper:
         现在原样保留 Y/S/N，只有非法值才回落到 N。
         """
         new_state = state if state in ("Y", "S", "N") else "N"
+        # 「任务时长」的计时起点随状态一起维护（v6.0.3）：
+        # 变为 Y（正常）时重新计时，其余状态清空 —— 下次启动从头开始算。
+        start_time = time.strftime('%Y-%m-%d %H:%M:%S',
+                                   time.localtime(time.time())) \
+            if new_state == "Y" else ""
+        values = {"STATE": new_state, "START_TIME": start_time}
         if tid:
             self._db.query(SITEBRUSHTASK).filter(SITEBRUSHTASK.ID == int(tid)).update(
-                {
-                    "STATE": new_state
-                }
+                values
             )
         else:
             self._db.query(SITEBRUSHTASK).update(
-                {
-                    "STATE": new_state
-                }
+                values
             )
 
     @DbPersist(_db)
