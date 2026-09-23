@@ -21,7 +21,7 @@ from app.utils import Torrent, StringUtils, SystemUtils, ExceptionUtils, NumberU
 from app.utils.commons import singleton
 from app.utils.media_classifier import MediaClassifier, MediaCategory
 from app.utils.tags import Tags
-from app.utils.types import MediaType, DownloaderType, SearchType, RmtMode, EventType, SystemConfigKey
+from app.utils.types import MediaType, DownloaderType, SearchType, RmtMode, EventType, SystemConfigKey, DIR_CATEGORY_AUTO
 from config import Config, PT_TAG, RMT_MEDIAEXT, PT_TRANSFER_INTERVAL
 
 lock = Lock()
@@ -57,18 +57,26 @@ def _cfg_bool(value, default=False):
     return str(value).strip().lower() in ("1", "true", "yes", "on", "是", "开")
 
 
-# 「下载目录设置」里「自动分类」列的取值
-#   空串      = 不启用（该行不参与自动分类）
-#   「自动」  = 判定出的类型与本行「类型」一致时命中（「类型」为「全部」时任意类型都命中）
-#   其余三个  = 固定接收该类型的任务，不看判定结果
-AUTO_CATEGORY_AUTO = "自动"
-AUTO_CATEGORY_FIXED = ("电影", "电视剧", "其它")
-# 「下载目录设置」里「类型」列的取值 → 分类判定结果。动漫按产品需求并入电视剧
+# 「下载目录设置」里「分类标签」列的取值（v6.0.2 起由原先独立的「分类标签」+
+# 「自动分类」两列合并成这一列，控件是一个下拉 + 一个输入框）：
+#   空串      = 不启用（该行既不参与自动分类扫描，下载时也不写分类名）
+#   「自动」  = 自动判定：参与自动分类扫描，分类名由系统推导（电影 / 电视剧 / 其它）；
+#               下载新任务时同样按媒体类型推导分类名
+#   其它非空  = 自定义：分类名就是该值，**不参与自动分类扫描**，只用于下载新任务时归类
+# 「未启用」的判据只有一条：取值去掉首尾空白后为空 —— 界面回显、提交保存、后端读取
+# 三处共用 normalize_dir_category()，保证判定一致。
+# 「自动判定」参与扫描时，「类型」列的取值 → 可命中的判定类别。动漫按产品需求并入电视剧
 AUTO_CATEGORY_TYPE_MAP = {
     "电影": "电影",
     "电视剧": "电视剧",
     "动漫": "电视剧",
     "全部": None,
+}
+# 媒体类型（MediaType 的取值）→ 分类名，口径与 AUTO_CATEGORY_TYPE_MAP 保持一致
+CATEGORY_MEDIA_TYPE_MAP = {
+    "电影": "电影",
+    "电视剧": "电视剧",
+    "动漫": "电视剧",
 }
 
 
@@ -115,45 +123,36 @@ def get_auto_category_rules(download_dir):
     ================  ==========================================
     ``type``          「类型」：全部 / 电影 / 电视剧 / 动漫
     ``category``      「二级分类」
-    ``label``         「分类标签，仅QB有效」—— 就是 qB 的分类名
+    ``label``         合并前旧「分类标签」列的值，仅用于兼容老数据
     ``save_path``     「下载保存目录」
     ``container_path``「NAStool访问目录」
-    ``auto_category`` 「自动分类」（本次新增）
+    ``auto_category`` 「分类标签」列（v6.0.2 起合并了原「分类标签」与「自动分类」）
     ================  ==========================================
 
-    「自动分类」列取值：
-
-    * 空 —— 不参与自动分类
-    * ``自动`` —— 判定类型与本行「类型」一致时命中；「类型」为「全部」则任意类型都命中
-    * ``电影`` / ``电视剧`` / ``其它`` —— 固定接收该类型的任务，不看判定结果
+    取值语义与「未启用」的判据见 :func:`normalize_dir_category`。这里**只取
+    「自动判定」的行**：「自定义」只写分类名、不参与扫描，「不启用」直接跳过 ——
+    因此「一行都不选自动判定」就等于关闭该功能。
 
     规则**按界面上的先后顺序**返回，先命中先用，用户可以把更具体的规则排前面。
+    规则不带分类名：分类名恒为判定结果本身。
 
     :param download_dir: 下载器配置里的 download_dir（JSON 文本或已是列表）
-    :return: [{"types": <可命中的类别集合或 None 表示任意>, "label": <分类名>}, ...]
+    :return: [{"types": <可命中的类别集合或 None 表示任意>}, ...]
     """
     rules = []
     for attr in _load_download_dir(download_dir):
         if not isinstance(attr, dict):
             continue
-        target = str(attr.get("auto_category") or "").strip()
-        if not target:
+        mode, _ = normalize_dir_category(attr)
+        # 只有「自动判定」参与扫描：「自定义」只写分类名、「不启用」什么都不做
+        if mode != "auto":
             continue
-        # 分类名优先用本行的「分类标签」；留空则用分类目标本身（电影/电视剧/其它）。
-        # 「自动」这一档的分类名允许为空 —— 此时在匹配阶段用判定结果兜底。
-        label = str(attr.get("label") or "").strip()
-        if target == AUTO_CATEGORY_AUTO:
-            rule_type = str(attr.get("type") or "").strip() or "全部"
-            if rule_type not in AUTO_CATEGORY_TYPE_MAP:
-                # 「类型」值异常（手工改过 DB / 旧数据）→ 当作「全部」，宁可多归类也不错停
-                rule_type = "全部"
-            match_type = AUTO_CATEGORY_TYPE_MAP[rule_type]
-            rules.append({
-                "types": {match_type} if match_type else None,
-                "label": label,
-            })
-        elif target in AUTO_CATEGORY_FIXED:
-            rules.append({"types": {target}, "label": label or target})
+        rule_type = str(attr.get("type") or "").strip() or "全部"
+        if rule_type not in AUTO_CATEGORY_TYPE_MAP:
+            # 「类型」值异常（手工改过 DB / 旧数据）→ 当作「全部」，宁可多归类也不错停
+            rule_type = "全部"
+        match_type = AUTO_CATEGORY_TYPE_MAP[rule_type]
+        rules.append({"types": {match_type} if match_type else None})
     return rules
 
 
@@ -183,6 +182,67 @@ def get_download_retry_max():
     if value < -1:
         return DEFAULT_DOWNLOAD_RETRY_MAX
     return value
+
+
+def normalize_dir_category(attr):
+    """
+    归一「下载目录设置」里「分类标签」列（v6.0.2 起合并了原「自动分类」列）
+
+    返回 ``(mode, name)``：
+
+    ==========  ================================================================
+    ``off``     不启用 —— 该行不参与自动分类，下载时也不写分类名
+    ``auto``    自动判定 —— 参与自动分类扫描；``name`` 恒为空串（名字由系统推导）
+    ``custom``  自定义 —— ``name`` 为自定义的 qB 分类名，**不参与自动分类扫描**
+    ==========  ================================================================
+
+    **「未启用」的判据只有这一条**：``auto_category`` 去掉首尾空白后为空。
+    界面回显、保存提交、后端读取三处都用本函数判定，因此结果必然一致。
+
+    兼容既有数据（v6.0.2 之前是两个独立字段，DB 里是两个键）：
+
+    * ``auto_category`` 为空、``label`` 非空 —— 老配置里「只填了分类标签、没启用自动
+      分类」的行，归一成 ``custom``：下载时仍归入该分类名，且不参与扫描 —— 与升级前
+      逐字一致（旧版 ``auto_category`` 为空同样不参与扫描）。
+    * ``auto_category`` 为旧的固定档取值（``电影`` / ``电视剧`` / ``其它``）—— 这几个
+      字符串在新模型下就是普通的自定义分类名，行为变为「不参与扫描」。旧档的语义已被
+      「类型」列 +「自动判定」完全覆盖（两者命中的类别集合相同）。
+    * ``auto_category`` 为 ``自动`` 时，旧版可能同时填了 ``label`` 当分类名；合并后
+      「自动判定」的分类名恒为判定结果，不再读 ``label``。
+
+    :param attr: 下载目录设置里的一行（dict）
+    :return: (mode, name)
+    """
+    if not isinstance(attr, dict):
+        return "off", ""
+    target = str(attr.get("auto_category") or "").strip()
+    if not target:
+        # 老数据兜底：合并前「分类标签」单独存在 label 键里
+        legacy = str(attr.get("label") or "").strip()
+        return ("custom", legacy) if legacy else ("off", "")
+    if target == DIR_CATEGORY_AUTO:
+        return "auto", ""
+    return "custom", target
+
+
+def resolve_dir_category(attr, media_type=None):
+    """
+    解析一行下载目录配置最终的 qB 分类名（下载时归类 / 建分类用）
+
+    「自定义」直接返回填的值；「自动判定」按媒体类型推导（动漫并入电视剧）；
+    「不启用」返回 None。媒体类型未知时「自动判定」返回 None —— 宁可不写分类名，
+    也不写一个猜出来的名字。
+
+    :param attr: 下载目录设置里的一行（dict）
+    :param media_type: 媒体类型（``MediaType`` 的取值，如 ``"电影"``）
+    :return: 分类名；None 表示这一行不产生分类名
+    """
+    mode, name = normalize_dir_category(attr)
+    if mode == "custom":
+        return name or None
+    if mode == "auto":
+        return CATEGORY_MEDIA_TYPE_MAP.get(str(media_type or "").strip())
+    return None
 
 
 def _load_download_dir(raw):
@@ -887,8 +947,8 @@ class Downloader:
         下载的、从未走过 nastool 识别链路的任务，这些是识别链路覆盖不到的部分。
 
         规则来源是**下载器自己的「下载目录设置」**（见 :func:`get_auto_category_rules`）：
-        每行末尾的「自动分类」下拉决定这一行接不接收、接收哪一类，命中的行用它的
-        「分类标签」作为分类名。所以「配了规则就生效、全设不启用就等于关闭」。
+        「分类标签」列选「自动判定」的行才参与扫描，命中的任务归入判定结果对应的分类名。
+        所以「配了规则就生效、一行都不选自动判定就等于关闭」。
 
         只处理 qBittorrent：Transmission 没有「分类」这个概念（只有 labels），
         而 qB 的分类自带保存路径，两边语义无法简单对齐 —— 强行适配只会得到
@@ -1802,7 +1862,10 @@ class Downloader:
                     continue
                 if attr.get("category") and attr.get("category") != media.category:
                     continue
-                if not attr.get("save_path") and not attr.get("label"):
+                # 「分类标签」列解析出的分类名：「自定义」就是填的值，「自动判定」
+                # 按媒体类型推导。两者都没有、又没有保存目录时，这一行没有可用信息
+                dir_category = resolve_dir_category(attr, media.type.value)
+                if not attr.get("save_path") and not dir_category:
                     continue
                 # 刷流的部分下载功能需要跳过目录检查，因为种子文件大小是动态确定的
                 if not skip_size_check:
@@ -1818,7 +1881,7 @@ class Downloader:
                         continue
                 return {
                     "path": attr.get("save_path"),
-                    "category": attr.get("label"),
+                    "category": dir_category,
                     "container_path": attr.get("container_path")
                 }
         return {"path": None, "category": None}

@@ -10,7 +10,7 @@ import qbittorrentapi
 from app.downloader.client._base import _IDownloadClient
 from app.utils import ExceptionUtils, StringUtils
 from app.utils.tags import Tags
-from app.utils.types import DownloaderType
+from app.utils.types import DownloaderType, DIR_CATEGORY_AUTO
 
 
 class Qbittorrent(_IDownloadClient):
@@ -115,9 +115,13 @@ class Qbittorrent(_IDownloadClient):
         categories = self.__get_qb_category()
         # 更新下载器中分类设置
         for dir_item in self.download_dir:
-            label = dir_item.get("label")
+            # 「分类标签」列（v6.0.2 起合并了原「自动分类」列）：「自定义」档的值就是
+            # 分类名；「自动判定」档没有静态分类名（运行期按判定结果生成、由自动分类
+            # 自己创建），这里跳过。老数据的分类名可能还在 label 键里，一并兜底。
+            label = str(dir_item.get("auto_category") or "").strip() \
+                or str(dir_item.get("label") or "").strip()
             save_path = dir_item.get("save_path")
-            if not label or not save_path:
+            if not label or label == DIR_CATEGORY_AUTO or not save_path:
                 continue
             # 查询分类是否存在
             category_item = categories.get(label)

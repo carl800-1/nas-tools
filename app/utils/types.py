@@ -12,6 +12,12 @@ class MediaType(Enum):
     UNKNOWN = '未知'
 
 
+# 「下载目录设置」里「分类标签」列的「自动判定」档取值。
+# v6.0.2 起该列合并了原先独立的「分类标签」与「自动分类」两列，
+# 取值语义见 app/downloader/downloader.py 的 normalize_dir_category()。
+DIR_CATEGORY_AUTO = "自动"
+
+
 class DownloaderType(Enum):
     QB = 'Qbittorrent'
     TR = 'Transmission'

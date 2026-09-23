@@ -49,9 +49,14 @@
   .tooltip-inner li { margin-bottom: .15rem; }
   .tooltip-inner li:last-child { margin-bottom: 0; }
 
-  /* 「自动分类」启用时高亮，避免配了却看不出来 */
+  /* 选「自动判定」时高亮，避免配了却看不出来（「自定义」不参与扫描，不高亮） */
   .dl-auto-select.dl-auto-enabled { border-color: var(--tblr-primary, #2383e2); font-weight: 600;
     box-shadow: 0 0 0 1px var(--tblr-primary, #2383e2) inset; }
+
+  /* 「分类标签」列：模式下拉 + 仅「自定义」时出现的分类名输入框，两者占同一格 */
+  .dl-cat-row { display: flex; align-items: center; gap: .4rem; }
+  .dl-cat-row .dl-auto-select { flex: 0 0 7.5rem; }
+  .dl-cat-row .dl-cat-name { flex: 1 1 auto; min-width: 0; }
 
   .dl-dir-del { display: inline-flex; align-items: center; justify-content: center;
     flex: 0 0 auto; width: 2rem; height: 2rem; border-radius: 50%;
@@ -496,17 +501,42 @@
     } else {
       name_obj.removeClass("is-invalid");
     }
+    // 「分类标签」的「自定义」名不能撞上「自动判定」的保留值：合并后两者共用同一个键
+    // （"自动" 表示模式、其它字符串表示分类名），填「自动」会被后端读成自动判定 ——
+    // 这一行就静默开始参与扫描。与其让人对着日志困惑，不如在这里直接拦下。
+    let cat_conflict = null;
+    $("[id^='dirdiv_']").each(function () {
+      let suffix = $(this).attr("id").replace("dirdiv_", "");
+      if ($(`#dir_auto_${suffix}`).val() === "自动") {
+        return;
+      }
+      if (($(`#path_label_${suffix}`).val() || "").trim() === "自动") {
+        cat_conflict = suffix;
+        return false;
+      }
+    });
+    if (cat_conflict !== null) {
+      $(`#path_label_${cat_conflict}`).addClass("is-invalid");
+      show_fail_modal("「分类标签」选「自定义」时，名称不能填「自动」——"
+        + "它是「自动判定」的保留值，请换一个名字。");
+      return;
+    }
     // 下载目录设置
     let download_dir = [];
     $("[id^='dirdiv_']").each(function () {
       let suffix = $(this).attr('id').replace("dirdiv_", "");
+      // 「分类标签」列：下拉 + 输入框合并写进一个键（v6.0.2）
+      //   自动判定 -> "自动"；自定义 -> 输入框的值，空串即「不启用」（不写有效值）
+      // label 置空：合并后它的值已由 auto_category 承载，且回显时已归一过
+      let cat_mode = $(`#dir_auto_${suffix}`).val();
+      let cat_name = cat_mode === "自动" ? "" : ($(`#path_label_${suffix}`).val() || "").trim();
       download_dir.push({
         save_path: $(`#save_path_${suffix}`).val(),
         type: $(`#dir_type_${suffix}`).val(),
         category: $(`#dir_subtype_${suffix}`).val(),
         container_path: $(`#container_path_${suffix}`).val(),
-        label: $(`#path_label_${suffix}`).val(),
-        auto_category: $(`#dir_auto_${suffix}`).val()
+        label: "",
+        auto_category: cat_mode === "自动" ? "自动" : cat_name
       });
     });
     const params = {
@@ -574,6 +604,20 @@
     list.empty();
   }
 
+  // 把 DB 里的（兼容字段）归一成界面需要的 [模式, 分类名]
+  // 与后端 normalize_dir_category 同一套规则：取值去空白后为空 = 不启用
+  function normalize_dir_category(label, auto_category) {
+    let target = (auto_category || "").trim();
+    if (!target) {
+      let legacy = (label || "").trim();
+      return legacy ? ["自定义", legacy] : ["自定义", ""];
+    }
+    if (target === "自动") {
+      return ["自动", ""];
+    }
+    return ["自定义", target];
+  }
+
   //添加下载目录
   function add_downloaddir(dir_type, dir_subtype, save_path, container_path, label, auto_category) {
     let html = $("#div_downloader_downloaddir_template").text();
@@ -594,12 +638,10 @@
     if (container_path) {
       $(`#container_path_${level}`).val(container_path);
     }
-    if (label) {
-      $(`#path_label_${level}`).val(label);
-    }
-    if (auto_category) {
-      $(`#dir_auto_${level}`).val(auto_category);
-    }
+    // 「分类标签」列：合并后的两个旧键归一回来再回显
+    let dir_category = normalize_dir_category(label, auto_category);
+    $(`#dir_auto_${level}`).val(dir_category[0]);
+    $(`#path_label_${level}`).val(dir_category[1]);
     refresh_dir_auto_state(level);
     refresh_dir_count();
     CURRENT_DIRDIV_LEVEL = CURRENT_DIRDIV_LEVEL + 1;
@@ -621,14 +663,17 @@
     $("#dl_dir_count").text($("[id^='dirdiv_']").length);
   }
 
-  // 刷新某一行「自动分类」的视觉状态：启用时整行高亮，避免配了却看不出来
+  // 刷新某一行「分类标签」的状态：整行高亮 + 分类名输入框的显隐
+  //   自动判定 = 参与扫描 → 高亮，分类名由系统推导，输入框收起
+  //   自定义   = 不参与扫描 → 不高亮，让用户填分类名（留空即不启用）
   function refresh_dir_auto_state(level) {
     let obj = $(`#dir_auto_${level}`);
     if (!obj.length) {
       return;
     }
-    let enabled = !!obj.val();
+    let enabled = obj.val() === "自动";
     obj.toggleClass("dl-auto-enabled", enabled);
+    $(`#path_label_${level}`).toggle(!enabled);
     $(`#dirdiv_${level}`).toggleClass("dl-dir-card-active", enabled);
     refresh_auto_category_hint();
   }
@@ -662,7 +707,8 @@
     let rows = 0;
     $("[id^='dirdiv_']").each(function () {
       let suffix = $(this).attr("id").replace("dirdiv_", "");
-      if ($(`#dir_auto_${suffix}`).val()) {
+      // 只有「自动判定」真正参与扫描；「自定义」不参与，不计数
+      if ($(`#dir_auto_${suffix}`).val() === "自动") {
         rows++;
       }
     });
@@ -828,23 +874,17 @@
           <option value="" selected>全部</option>
         </select>
       </div>
-      <div class="col-12 col-md-6 col-lg-3">
-        <label class="dl-dir-label" for="path_label_{DIRDIV_LEVEL}">分类标签<span class="dl-dir-label-note">QB</span><span
+      <div class="col-12 col-lg-6">
+        <label class="dl-dir-label" for="dir_auto_{DIRDIV_LEVEL}">分类标签<span class="dl-dir-label-note">QB</span><span
                 class="form-help" data-bs-toggle="tooltip" data-bs-html="true"
-                data-bs-original-title="qBittorrent 的分类名，仅 QB 有效。<br>下载新任务时会归入该分类；「自动分类」也用它作为目标分类名，留空则回落到判定结果（电影 / 电视剧 / 其它）">?</span></label>
-        <input type="text" value="" id="path_label_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="QB 分类名" autocomplete="off">
-      </div>
-      <div class="col-12 col-md-6 col-lg-3">
-        <label class="dl-dir-label" for="dir_auto_{DIRDIV_LEVEL}">自动分类<span class="form-help" data-bs-toggle="tooltip"
-                data-bs-html="true"
-                data-bs-original-title="按种子名称判定媒体类型后，把命中本行的任务写入左侧的「分类标签」作为 qBittorrent 分类。<br>· <b>自动判定</b>：判定结果与本行「类型」一致时命中（本行类型为「全部」则任意类型都归入）<br>· <b>固定类别</b>：本行固定接收该类，不看判定结果<br>· <b>不启用</b>：本行不参与；所有行都不启用即等于关闭该功能<br>仅 qBittorrent 有效">?</span></label>
-        <select class="form-select form-select-sm dl-auto-select" id="dir_auto_{DIRDIV_LEVEL}" onchange="refresh_dir_auto_state('{DIRDIV_LEVEL}')">
-          <option value="" selected>不启用</option>
-          <option value="自动">自动判定</option>
-          <option value="电影">固定：电影</option>
-          <option value="电视剧">固定：电视剧</option>
-          <option value="其它">固定：其它</option>
-        </select>
+                data-bs-original-title="qBittorrent 的分类名，仅 QB 有效。<br>· <b>自动判定</b>：参与自动分类扫描 —— 按种子名称判定「电影 / 电视剧 / 其它」，判定结果与本行「类型」一致的任务归入该分类（本行类型为「全部」则任意类型都归入）；下载新任务时也按媒体类型推导分类名<br>· <b>自定义</b>：填写固定分类名（不能填「自动」，那是「自动判定」的保留值），<b>不参与自动分类扫描</b>，只在下载新任务时归入该分类<br>· <b>输入留空</b>：这一行不启用 —— 既不参与扫描，下载时也不写分类名">?</span></label>
+        <div class="dl-cat-row">
+          <select class="form-select form-select-sm dl-auto-select" id="dir_auto_{DIRDIV_LEVEL}" onchange="refresh_dir_auto_state('{DIRDIV_LEVEL}')">
+            <option value="自动">自动判定</option>
+            <option value="自定义" selected>自定义</option>
+          </select>
+          <input type="text" value="" id="path_label_{DIRDIV_LEVEL}" class="form-control form-control-sm dl-cat-name" placeholder="qB 分类名" autocomplete="off">
+        </div>
       </div>
       <div class="col-12 col-lg-6">
         <label class="dl-dir-label" for="save_path_{DIRDIV_LEVEL}">下载保存目录或 ID<span class="form-help" data-bs-toggle="tooltip"
