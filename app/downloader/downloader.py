@@ -31,6 +31,13 @@ client_lock = Lock()
 # 目录同步每处理一个文件都要判定一次，不能每次都去问下载器。
 BRUSH_SKIP_CACHE_INTERVAL = 60
 
+# 上面那份缓存的「未命中兜底重查」间隔（秒）。
+# 种子刚下载完成的那一刻，缓存里可能还没有它（清单最长 60 秒才刷新一次），
+# 若此时目录同步正好处理它，就会漏判成「需要整理」。所以路径判定未命中时，
+# 允许用这个更短的间隔再确认一次 —— 命中走 60 秒缓存（零额外开销），
+# 只有「疑似要整理」的文件才可能触发重查，且有间隔限流，不会拖垮目录同步。
+BRUSH_SKIP_RECHECK_INTERVAL = 5
+
 # 添加下载失败后，默认最多再回退尝试几个同名候选（laboratory.search_retry_max）
 DEFAULT_DOWNLOAD_RETRY_MAX = 20
 
@@ -1110,7 +1117,7 @@ class Downloader:
                 names.append(str(name))
         return names or None
 
-    def get_brush_skip_map(self, force=False):
+    def get_brush_skip_map(self, force=False, min_interval=None):
         """
         获取「所属刷流任务已关闭『转移到媒体库』」的种子清单
 
@@ -1120,10 +1127,13 @@ class Downloader:
         要这些种子的本机路径（复用 get_transfer_task 的保存路径换算，避免重复实现）。
 
         :param force: 忽略缓存强制刷新
+        :param min_interval: 自定义缓存时长，不传则用 BRUSH_SKIP_CACHE_INTERVAL。
+            路径判定未命中时会传一个更短的值做兜底重查（见 is_brush_skip_path）
         :return: {下载器ID(str): {种子hash: 本机路径}}
         """
         now = time.time()
-        if not force and now - self.__brush_skip_time < BRUSH_SKIP_CACHE_INTERVAL:
+        interval = BRUSH_SKIP_CACHE_INTERVAL if min_interval is None else min_interval
+        if not force and now - self.__brush_skip_time < interval:
             return self._brush_skip_map
         skip_map = {}
         try:
@@ -1157,6 +1167,21 @@ class Downloader:
             return False
         return torrent_id in (self.get_brush_skip_map().get(str(downloader_id)) or {})
 
+    def __match_brush_skip(self, target, min_interval=None):
+        """
+        在清单里按路径前缀查 target 是否命中（target 需已归一化）
+
+        :param min_interval: 透传给 get_brush_skip_map 的缓存时长
+        """
+        for items in self.get_brush_skip_map(min_interval=min_interval).values():
+            for skip_path in items.values():
+                if not skip_path:
+                    continue
+                skip_norm = os.path.normpath(skip_path).replace("\\", "/").rstrip("/")
+                if target == skip_norm or target.startswith(skip_norm + "/"):
+                    return True
+        return False
+
     def is_brush_skip_path(self, path):
         """
         判断某个文件/目录是否属于「已关闭『转移到媒体库』」的刷流任务（按路径前缀判断）
@@ -1166,14 +1191,12 @@ class Downloader:
         if not path:
             return False
         target = os.path.normpath(path).replace("\\", "/").rstrip("/")
-        for items in self.get_brush_skip_map().values():
-            for skip_path in items.values():
-                if not skip_path:
-                    continue
-                skip_norm = os.path.normpath(skip_path).replace("\\", "/").rstrip("/")
-                if target == skip_norm or target.startswith(skip_norm + "/"):
-                    return True
-        return False
+        if self.__match_brush_skip(target):
+            return True
+        # 未命中：可能只是清单还没刷新（种子刚下完）→ 用短间隔兜底再确认一次，
+        # 避免「下载目录 == 目录同步源目录」时把刚完成的刷流文件误整理入库。
+        # 间隔内仍是直接读缓存，不会重复问库与下载器。
+        return self.__match_brush_skip(target, min_interval=BRUSH_SKIP_RECHECK_INTERVAL)
 
     def get_torrents(self, downloader_id=None, ids=None, tag=None):
         """

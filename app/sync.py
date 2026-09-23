@@ -252,6 +252,9 @@ class Sync(object):
                 if not rename:
                     if '.!qB' in event_path:
                         log.info(f"【Sync】{event_path} 还未下载完毕，不进行同步")
+                    # 刷流任务关闭了「转移到媒体库」的，不转移
+                    elif self.__is_brush_untransfer(event_path):
+                        log.info("【Sync】%s 所属刷流任务已关闭「转移到媒体库」，跳过同步" % event_path)
                     else:
                         self.__link(event_path, mon_path, target_path, sync_mode)
                 # 识别转移
@@ -417,6 +420,9 @@ class Sync(object):
                 for link_file in PathUtils.get_dir_files(mon_path):
                     if '.!qB' in link_file:
                         log.info(f"【Sync】{link_file} 还未下载完毕，不进行同步")
+                    # 刷流任务关闭了「转移到媒体库」的，不转移
+                    elif self.__is_brush_untransfer(link_file):
+                        log.info("【Sync】%s 所属刷流任务已关闭「转移到媒体库」，跳过同步" % link_file)
                     else:
                         self.__link(link_file, mon_path, target_path, sync_mode)
             else:
