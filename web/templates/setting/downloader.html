@@ -1,6 +1,94 @@
 {% import 'macro/svg.html' as SVG %}
 {% import 'macro/form.html' as FORM %}
-{% import 'macro/oops.html' as OOPS %}
+{# 本页样式：类名统一 dl- 前缀，避免与其它页面冲突；颜色一律走 Tabler 变量以兼容 theme-dark #}
+<style>
+  /* ---------- 分区标题：小标题 + 细线，把弹窗表单切成几个语义块 ---------- */
+  .dl-section { display: flex; align-items: center; gap: .6rem; margin: 1.4rem 0 .8rem; }
+  .dl-section-title { font-size: .8125rem; font-weight: 600; letter-spacing: .02em; color: var(--tblr-muted, #6c757d); white-space: nowrap; }
+  .dl-section::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--tblr-border-color, #e6e7e9); }
+
+  /* ---------- 下载目录设置：折叠标题做成整行可点 ---------- */
+  .dl-details > summary { display: flex; align-items: center; gap: .5rem; list-style: none;
+    padding: .5rem .65rem; border-radius: var(--tblr-border-radius, 5px); cursor: pointer;
+    transition: background-color .15s ease; }
+  .dl-details > summary::-webkit-details-marker { display: none; }
+  .dl-details > summary:hover { background: var(--tblr-active-bg, rgba(35, 131, 226, .06)); }
+  .dl-details > summary::before { content: "\25B8"; font-size: .75rem; line-height: 1;
+    color: var(--tblr-muted, #6c757d); transition: transform .18s ease; }
+  .dl-details[open] > summary::before { transform: rotate(90deg); }
+  .dl-details-title { font-size: .9375rem; font-weight: 600; color: var(--tblr-body-color, #1d273b); }
+  .dl-dir-count { font-size: .6875rem; font-weight: 600; }
+  .dl-dir-body { padding-top: .35rem; }
+  .dl-dir-list { display: flex; flex-direction: column; gap: .6rem; }
+
+  /* ---------- 每一条下载目录规则 ---------- */
+  .dl-dir-card { display: flex; align-items: center; gap: .5rem; padding: .7rem .8rem;
+    border: 1px solid var(--tblr-border-color, #e6e7e9); border-radius: var(--tblr-border-radius, 5px);
+    background: var(--tblr-bg-surface, #fff);
+    transition: border-color .15s ease, background-color .15s ease; }
+  body:not(.theme-dark) .dl-dir-card { background: #fbfcfd; }
+  .dl-dir-card:hover { border-color: rgba(35, 131, 226, .45); }
+  .dl-dir-card.dl-dir-card-active { border-color: var(--tblr-primary, #2383e2); background: rgba(35, 131, 226, .045); }
+  .dl-dir-fields { flex: 1 1 auto; min-width: 0; }
+  /* 用 flex 而非 block：行内说明「?」才不会被 nowrap + overflow 裁掉 */
+  .dl-dir-label { display: flex; align-items: center; gap: .25rem; margin-bottom: .2rem;
+    font-size: .75rem; line-height: 1.25; color: var(--tblr-muted, #6c757d); }
+  .dl-dir-label > .form-help { flex: 0 0 auto; }
+  .dl-dir-label-note { padding: 0 .25rem; font-size: .6875rem; border-radius: 3px;
+    background: rgba(0, 0, 0, .06); }
+  .theme-dark .dl-dir-label-note { background: rgba(255, 255, 255, .12); }
+
+  /* ---------- 说明「?」与 tooltip ---------- */
+  /* Tabler 暗色主题没有覆盖 --tblr-gray-100，.form-help 会留下近白底 + 浅灰字，对比过低 */
+  #modal-downloader .form-help { color: var(--tblr-muted, #6c757d); background: rgba(0, 0, 0, .06); }
+  .theme-dark #modal-downloader .form-help { color: #adb5bd; background: rgba(255, 255, 255, .14); }
+  /* 说明文字偏长，默认 200px 会被压成很窄的一长条，这里放宽并左对齐 */
+  .tooltip-inner { max-width: 26rem; text-align: left; }
+  /* 说明里的条目表（原来铺在界面上的提示条，现在只出现在 tooltip 内） */
+  .tooltip-inner ul { margin: .3rem 0 0; padding-left: 1.05rem; }
+  .tooltip-inner li { margin-bottom: .15rem; }
+  .tooltip-inner li:last-child { margin-bottom: 0; }
+
+  /* 「自动分类」启用时高亮，避免配了却看不出来 */
+  .dl-auto-select.dl-auto-enabled { border-color: var(--tblr-primary, #2383e2); font-weight: 600;
+    box-shadow: 0 0 0 1px var(--tblr-primary, #2383e2) inset; }
+
+  .dl-dir-del { display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; width: 2rem; height: 2rem; border-radius: 50%;
+    color: var(--tblr-muted, #6c757d); transition: color .15s ease, background-color .15s ease; }
+  .dl-dir-del:hover { color: var(--tblr-red, #d63939); background: rgba(214, 57, 57, .1); }
+  .dl-dir-del svg { width: 1.25rem; height: 1.25rem; }
+
+  /* ---------- 增加目录：虚线整行按钮 ---------- */
+  .dl-add-dir { display: flex; align-items: center; justify-content: center; gap: .4rem;
+    width: 100%; margin-top: .6rem; padding: .5rem; font-size: .8125rem; text-decoration: none;
+    color: var(--tblr-primary, #2383e2); border: 1px dashed var(--tblr-border-color, #e6e7e9);
+    border-radius: var(--tblr-border-radius, 5px); transition: .15s ease; }
+  .dl-add-dir:hover { color: var(--tblr-primary, #2383e2); border-style: solid;
+    border-color: var(--tblr-primary, #2383e2); background: rgba(35, 131, 226, .06); }
+  .dl-add-dir svg { width: 1.05rem; height: 1.05rem; }
+
+  /* ---------- 说明角标：内容收进小角标，hover / 点击才展开 ----------
+     刻意不使用「红底大段说明文字」——那种写法既占版面又难与正文区分；
+     这里用与「?」同款的小圆角标，颜色只做轻微提示（蓝=说明 / 琥珀=注意），不用红色。 */
+  .dl-note-tip { display: inline-flex; align-items: center; justify-content: center;
+    width: 1.125rem; height: 1.125rem; margin-left: .2rem; font-size: .75rem;
+    font-weight: var(--tblr-font-weight-bold, 600); line-height: 1;
+    color: var(--tblr-muted, #6c757d); background: rgba(0, 0, 0, .06);
+    border: 1px solid transparent; border-radius: 100rem; cursor: pointer;
+    user-select: none; vertical-align: -.125em; }
+  .dl-note-tip-info { color: #1c6fd0; background: rgba(35, 131, 226, .13);
+    border-color: rgba(35, 131, 226, .32); }
+  .dl-note-tip-warn { color: #9a5b06; background: rgba(217, 119, 6, .15);
+    border-color: rgba(217, 119, 6, .4); }
+  .theme-dark .dl-note-tip { background: rgba(255, 255, 255, .14); }
+  .theme-dark .dl-note-tip-info { color: #8dc4f4; background: rgba(35, 131, 226, .24);
+    border-color: rgba(35, 131, 226, .5); }
+  .theme-dark .dl-note-tip-warn { color: #e8bd6b; background: rgba(217, 119, 6, .26);
+    border-color: rgba(217, 119, 6, .55); }
+  .dl-tip-code { padding: 0 .25rem; border-radius: 3px; background: rgba(0, 0, 0, .08); }
+  .theme-dark .dl-tip-code { background: rgba(255, 255, 255, .14); }
+</style>
 <div class="container-xl">
   <!-- Page title -->
   <div class="page-header d-print-none">
@@ -108,6 +196,7 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
+        <div class="dl-section mt-0"><span class="dl-section-title">基本信息</span></div>
         <div class="row" id="div_downloader_normal">
           <div class="col-lg-9">
             <div class="mb-3">
@@ -155,11 +244,13 @@
           {% endif %}
           {% endfor %}
         </div>
+        <div class="dl-section"><span class="dl-section-title">连接设置</span></div>
         {% for Id, Attr in DownloaderConf.items() %}
         <div id="div_downloader_config_{{ Id }}">
           {{ FORM.gen_form_empty_elements(Attr.config) }}
         </div>
         {% endfor %}
+        <div class="dl-section"><span class="dl-section-title">下载行为</span></div>
         <div class="row" id="div_downloader_transfer">
           <div class="col-lg">
             <div class="mb-3">
@@ -201,14 +292,20 @@
             </div>
           </div>
         </div>
-        <details class="mb-3">
-          <summary class="summary required">下载目录设置
-          <span class="form-help" title="根据类型及二级分类自动选择下载目录，按优先级从前往后依次匹配，直到找到符合条件及空间要求的目录下载；二级分类从基础设置->二级分类策略的配置中读取，如未配置二级分类则无法配置下载目录二级分类"
-                data-bs-toggle="tooltip">?</span>
+        <details class="dl-details mb-3 mt-2" open>
+          <summary class="summary required">
+            <span class="dl-details-title">下载目录设置</span>
+            <span class="badge bg-blue-lt dl-dir-count" id="dl_dir_count" title="当前规则条数">0</span>
+            <span class="dl-note-tip d-none" id="dl_auto_note" role="button" tabindex="0"
+                  aria-label="查看说明">!</span>
+            <span class="form-help" title="根据类型及二级分类自动选择下载目录，按优先级从前往后依次匹配，直到找到符合条件及空间要求的目录下载；二级分类从基础设置->二级分类策略的配置中读取，如未配置二级分类则无法配置下载目录二级分类"
+                  data-bs-toggle="tooltip">?</span>
           </summary>
-          <div class="row mt-2" id="div_downloader_downloaddir"></div>
-          <div class="ms-2 mt-2">
-            <a href="javascript:add_downloaddir()" class="btn-icon" title="增加目录">{{ SVG.folder_plus() }}</a>
+          <div class="dl-dir-body">
+            <div class="dl-dir-list" id="div_downloader_downloaddir"></div>
+            <a href="javascript:add_downloaddir()" class="dl-add-dir" title="增加一条下载目录规则">
+              {{ SVG.folder_plus() }}增加目录
+            </a>
           </div>
         </details>
       </div>
@@ -260,7 +357,7 @@
     $("#downloader_match_path").val("0");
     $("#downloader_rmt_mode").val("{{ SyncMod }}");
     CURRENT_DIRDIV_LEVEL = 0;
-    $("#div_downloader_downloaddir").empty();
+    clear_dir_list();
     add_downloaddir();
     $("#test_downloader_btn").text("测试").attr("disabled", false);
     $("#delete_downloader_client_btn").hide();
@@ -306,10 +403,12 @@
         $("#test_message_client_btn").text("测试").attr("disabled", false);
         let download_dirs = detail.download_dir
         CURRENT_DIRDIV_LEVEL = 0;
-        $("#div_downloader_downloaddir").empty();
+        clear_dir_list();
         for (let download_dir of download_dirs) {
           add_downloaddir(download_dir.type, download_dir.category, download_dir.save_path, download_dir.container_path, download_dir.label, download_dir.auto_category);
         }
+        refresh_dir_count();
+        refresh_auto_category_hint();
         $("#delete_downloader_client_btn").show();
         $("#modal-downloader").modal("show");
       }
@@ -449,38 +548,165 @@
   }
 
   var CURRENT_DIRDIV_LEVEL = 0;
+  // 页面装载时的 fresh_tooltip() 只扫一次，动态追加的行不在其中，须自己初始化
+  function init_dyn_tooltip(scope) {
+    scope.find('[data-bs-toggle="tooltip"]').each(function () {
+      if (!bootstrap.Tooltip.getInstance(this)) {
+        new bootstrap.Tooltip(this);
+      }
+    });
+  }
+
+  // 父元素被移除时自动产生的 tooltip 不会一起消失（tip 节点挂在父元素旁边），须显式释放
+  function dispose_dyn_tooltip(scope) {
+    scope.find('[data-bs-toggle="tooltip"]').each(function () {
+      let tip = bootstrap.Tooltip.getInstance(this);
+      if (tip) {
+        tip.dispose();
+      }
+    });
+  }
+
+  // 清空规则列表（重建前先释放 tooltip，避免残留游离节点）
+  function clear_dir_list() {
+    let list = $("#div_downloader_downloaddir");
+    dispose_dyn_tooltip(list);
+    list.empty();
+  }
+
   //添加下载目录
   function add_downloaddir(dir_type, dir_subtype, save_path, container_path, label, auto_category) {
     let html = $("#div_downloader_downloaddir_template").text();
     $("#div_downloader_downloaddir").append(html.replaceAll('{DIRDIV_LEVEL}', CURRENT_DIRDIV_LEVEL));
-    $(`#container_path_${CURRENT_DIRDIV_LEVEL}`).attr("onclick", "openFileBrowser(this,$(this).val(),'',true,false);");
+    let level = CURRENT_DIRDIV_LEVEL;
+    init_dyn_tooltip($(`#dirdiv_${level}`));
+    $(`#container_path_${level}`).attr("onclick", "openFileBrowser(this,$(this).val(),'',true,false);");
     if (dir_type) {
-      $(`#dir_type_${CURRENT_DIRDIV_LEVEL}`).val(dir_type);
-      get_categories(CURRENT_DIRDIV_LEVEL.toString())
+      $(`#dir_type_${level}`).val(dir_type);
+      get_categories(level.toString())
     }
     if (dir_subtype) {
-      $(`#dir_subtype_${CURRENT_DIRDIV_LEVEL}`).val(dir_subtype);
+      $(`#dir_subtype_${level}`).val(dir_subtype);
     }
     if (save_path) {
-      $(`#save_path_${CURRENT_DIRDIV_LEVEL}`).val(save_path);
+      $(`#save_path_${level}`).val(save_path);
     }
     if (container_path) {
-      $(`#container_path_${CURRENT_DIRDIV_LEVEL}`).val(container_path);
+      $(`#container_path_${level}`).val(container_path);
     }
     if (label) {
-      $(`#path_label_${CURRENT_DIRDIV_LEVEL}`).val(label);
+      $(`#path_label_${level}`).val(label);
     }
     if (auto_category) {
-      $(`#dir_auto_${CURRENT_DIRDIV_LEVEL}`).val(auto_category);
+      $(`#dir_auto_${level}`).val(auto_category);
     }
+    refresh_dir_auto_state(level);
+    refresh_dir_count();
     CURRENT_DIRDIV_LEVEL = CURRENT_DIRDIV_LEVEL + 1;
   }
 
   //删除下载目录
   function del_downloaddir(id) {
     if (id) {
-      $(`#dirdiv_${id}`).remove();
+      let card = $(`#dirdiv_${id}`);
+      dispose_dyn_tooltip(card);
+      card.remove();
+      refresh_dir_count();
+      refresh_auto_category_hint();
     }
+  }
+
+  // 刷新折叠标题上的规则条数
+  function refresh_dir_count() {
+    $("#dl_dir_count").text($("[id^='dirdiv_']").length);
+  }
+
+  // 刷新某一行「自动分类」的视觉状态：启用时整行高亮，避免配了却看不出来
+  function refresh_dir_auto_state(level) {
+    let obj = $(`#dir_auto_${level}`);
+    if (!obj.length) {
+      return;
+    }
+    let enabled = !!obj.val();
+    obj.toggleClass("dl-auto-enabled", enabled);
+    $(`#dirdiv_${level}`).toggleClass("dl-dir-card-active", enabled);
+    refresh_auto_category_hint();
+  }
+
+  // 角标的说明气泡：内容随「下载器类型 + 种子管理模式 + 已配置行数」变化，
+  // 因此每次刷新都 dispose + 重建，最稳且不依赖 setContent 的版本差异。
+  function set_note_tip(el, html) {
+    let old = bootstrap.Tooltip.getInstance(el);
+    if (old) {
+      old.dispose();
+    }
+    if (!html) {
+      return;
+    }
+    new bootstrap.Tooltip(el, {
+      html: true,
+      trigger: "hover focus click",
+      container: "body",
+      title: html
+    });
+  }
+
+  // 「自动分类」与「种子管理模式」的联动说明。
+  // 纯前端展示，不改变任何后端行为 —— 目的是让人不必靠读日志才发现「配了却没生效」。
+  // 说明内容全部收进一个小角标（hover / 点击展开），界面上不再铺大段彩色文字。
+  function refresh_auto_category_hint() {
+    let note = $("#dl_auto_note");
+    if (!note.length) {
+      return;
+    }
+    let rows = 0;
+    $("[id^='dirdiv_']").each(function () {
+      let suffix = $(this).attr("id").replace("dirdiv_", "");
+      if ($(`#dir_auto_${suffix}`).val()) {
+        rows++;
+      }
+    });
+    if (!rows) {
+      note.addClass("d-none").removeClass("dl-note-tip-info dl-note-tip-warn").text("!");
+      set_note_tip(note[0], "");
+      return;
+    }
+    let type = $("input:radio[name=downloader_type]:checked").val();
+    let mode = $("#qbittorrent_torrent_management").val();
+    let cls = "dl-note-tip-info";
+    let glyph = "i";
+    let html = "";
+    if (type !== "qbittorrent") {
+      cls = "dl-note-tip-warn";
+      glyph = "!";
+      html = "<b>自动分类只对 qBittorrent 生效</b>（已配置 " + rows + " 行）"
+        + "<ul><li>Transmission 没有「分类」这个概念（只有标签），当前下载器类型不是 "
+        + "qBittorrent，这几行规则不会被读取，也不会报错。</li></ul>";
+    } else if (mode === "auto") {
+      cls = "dl-note-tip-warn";
+      glyph = "!";
+      html = "<b>「种子管理模式的自动」与「自动分类」会互相影响</b>（已配置 " + rows + " 行）"
+        + "<ul>"
+        + "<li>自动模式下 NAStool 下发的任务都会带上「自动种子管理」标记，而自动分类默认<b>跳过</b>"
+        + "这类任务（避免 qB 搬移文件）—— 因此这些任务不会被重新分类，"
+        + "实际能力只对<b>刷流 / 手工添加 / 历史任务</b>生效。</li>"
+        + "<li>自动模式会给每个分类<b>绑定保存路径</b>，一旦把 "
+        + "<span class='dl-tip-code'>pt.auto_category_skip_auto_tmm</span> 改成 false，"
+        + "写分类会连带<b>搬移任务文件</b>，可能搬走正在做种的数据。</li>"
+        + "<li><b>建议</b>：保持现状，把它当作「给非 NAStool 下发的任务补分类」；"
+        + "或把「种子管理模式」改为<b>手动</b>，两者互不干扰。</li>"
+        + "</ul>";
+    } else if (mode === "manual") {
+      html = "<b>与「种子管理模式」互不冲突</b>（已配置 " + rows + " 行）"
+        + "<ul><li>当前种子管理模式为<b>手动</b>：NAStool 不会改动下载器里的分类与保存路径，"
+        + "自动分类只在运行期给任务写分类名 —— 两者各管一段，不会互相干扰。</li></ul>";
+    } else {
+      html = "<b>未指定种子管理模式</b>（已配置 " + rows + " 行）"
+        + "<ul><li>「默认」表示沿用 qB 自身的设置。若 qB 里开启了「自动种子管理」，"
+        + "分类会被绑定保存路径、新任务会带上自动管理标记，上面第一条说明同样适用。</li></ul>";
+    }
+    note.removeClass("d-none dl-note-tip-info dl-note-tip-warn").addClass(cls).text(glyph);
+    set_note_tip(note[0], html);
   }
 
   //获取二级分类
@@ -517,6 +743,24 @@
     show_downloader_type(this.value);
   });
 
+  // 种子管理模式会决定「自动分类」的实际效果，变化时同步刷新提示
+  $("#qbittorrent_torrent_management").change(function () {
+    refresh_auto_category_hint();
+  });
+
+  // 说明角标位于 <summary> 内：点它会连带把整段折叠/展开，这里拦掉冒泡，
+  // 让它只用于弹出说明（Bootstrap 的 click 触发绑在同一元素上，不受影响）。
+  $("#dl_auto_note").on("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  // 弹窗真正显示后再刷一次（details 折叠时算出的行数同样有效）
+  $("#modal-downloader").on("shown.bs.modal", function () {
+    refresh_dir_count();
+    refresh_auto_category_hint();
+  });
+
   // 下载器类型类型
   function show_downloader_type(type) {
     switch (type) {
@@ -537,6 +781,8 @@
       default:
         break;
     }
+    // 类型会决定「自动分类」是否可用，切换时同步刷新提示
+    refresh_auto_category_hint();
   }
 
   // 设置默认下载器
@@ -562,50 +808,58 @@
 
 </script>
 <script id="div_downloader_downloaddir_template" type="text/html">
-<div class="row mt-2" id="dirdiv_{DIRDIV_LEVEL}">
-  <div class="col-lg-12">
-    <div class="row">
-      <div class="col-12 col-lg mb-1">
-        <select class="form-select" name="dir_type" id="dir_type_{DIRDIV_LEVEL}" onchange="get_categories($(this).attr('id').replace('dir_type_', ''))">
+<div class="dl-dir-card" id="dirdiv_{DIRDIV_LEVEL}">
+  <div class="dl-dir-fields">
+    <div class="row g-2">
+      <div class="col-12 col-md-6 col-lg-3">
+        <label class="dl-dir-label" for="dir_type_{DIRDIV_LEVEL}">类型<span class="form-help" data-bs-toggle="tooltip"
+               data-bs-original-title="按媒体类型匹配：全部 / 电影 / 电视剧 / 动漫。自动分类时「动漫」按电视剧处理">?</span></label>
+        <select class="form-select form-select-sm" name="dir_type" id="dir_type_{DIRDIV_LEVEL}" onchange="get_categories($(this).attr('id').replace('dir_type_', ''))">
           <option value="" selected>全部</option>
           <option value="电影">电影</option>
           <option value="电视剧">电视剧</option>
           <option value="动漫">动漫</option>
         </select>
       </div>
-      <div class="col-12 col-lg mb-1">
-        <select class="form-select" name="dir_subtype" id="dir_subtype_{DIRDIV_LEVEL}">
+      <div class="col-12 col-md-6 col-lg-3">
+        <label class="dl-dir-label" for="dir_subtype_{DIRDIV_LEVEL}">二级分类<span class="form-help" data-bs-toggle="tooltip"
+               data-bs-original-title="媒体库二级分类，取值来自「基础设置 → 二级分类策略」">?</span></label>
+        <select class="form-select form-select-sm" name="dir_subtype" id="dir_subtype_{DIRDIV_LEVEL}">
           <option value="" selected>全部</option>
         </select>
       </div>
-      <div class="col-12 col-lg mb-1">
-        <input type="text" value="" id="path_label_{DIRDIV_LEVEL}" class="form-control" placeholder="分类标签，仅QB有效" autocomplete="off">
+      <div class="col-12 col-md-6 col-lg-3">
+        <label class="dl-dir-label" for="path_label_{DIRDIV_LEVEL}">分类标签<span class="dl-dir-label-note">QB</span><span
+                class="form-help" data-bs-toggle="tooltip" data-bs-html="true"
+                data-bs-original-title="qBittorrent 的分类名，仅 QB 有效。<br>下载新任务时会归入该分类；「自动分类」也用它作为目标分类名，留空则回落到判定结果（电影 / 电视剧 / 其它）">?</span></label>
+        <input type="text" value="" id="path_label_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="QB 分类名" autocomplete="off">
       </div>
-      <div class="col-12 col-lg mb-1">
-        <select class="form-select" id="dir_auto_{DIRDIV_LEVEL}"
-                title="自动分类：程序按种子名称判定「电影/电视剧/其它」后，把命中的这一行的「分类标签」写成 qBittorrent 分类。选「自动」= 判定类型与本行「类型」一致时命中（本行类型为「全部」则任意类型都收）；选固定类别 = 本行固定接收该类，不看判定结果；选「不启用」= 本行不参与。全部行都选「不启用」即等于关闭本功能。仅 qBittorrent 支持（Transmission 没有分类概念）。">
-          <option value="" selected>不启用自动分类</option>
-          <option value="自动">自动</option>
+      <div class="col-12 col-md-6 col-lg-3">
+        <label class="dl-dir-label" for="dir_auto_{DIRDIV_LEVEL}">自动分类<span class="form-help" data-bs-toggle="tooltip"
+                data-bs-html="true"
+                data-bs-original-title="按种子名称判定媒体类型后，把命中本行的任务写入左侧的「分类标签」作为 qBittorrent 分类。<br>· <b>自动判定</b>：判定结果与本行「类型」一致时命中（本行类型为「全部」则任意类型都归入）<br>· <b>固定类别</b>：本行固定接收该类，不看判定结果<br>· <b>不启用</b>：本行不参与；所有行都不启用即等于关闭该功能<br>仅 qBittorrent 有效">?</span></label>
+        <select class="form-select form-select-sm dl-auto-select" id="dir_auto_{DIRDIV_LEVEL}" onchange="refresh_dir_auto_state('{DIRDIV_LEVEL}')">
+          <option value="" selected>不启用</option>
+          <option value="自动">自动判定</option>
           <option value="电影">固定：电影</option>
           <option value="电视剧">固定：电视剧</option>
           <option value="其它">固定：其它</option>
         </select>
       </div>
-    </div>
-    <div class="row">
-      <div class="col-12 col-lg mb-1">
-        <input type="text" value="" id="save_path_{DIRDIV_LEVEL}" class="form-control" placeholder="下载保存目录或ID" autocomplete="off">
+      <div class="col-12 col-lg-6">
+        <label class="dl-dir-label" for="save_path_{DIRDIV_LEVEL}">下载保存目录或 ID<span class="form-help" data-bs-toggle="tooltip"
+               data-bs-original-title="下载器侧的保存目录（在 qB 里就是分类的保存路径）">?</span></label>
+        <input type="text" value="" id="save_path_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="下载保存目录或 ID" autocomplete="off">
       </div>
-      <div class="col-12 col-lg mb-1">
-        <input type="text" value="" id="container_path_{DIRDIV_LEVEL}" class="form-control" placeholder="NAStool访问目录" autocomplete="off">
-      </div>
-      <div class="col-12 col-lg mb-1 align-self-center" style="text-align: center">
-        <a href="javascript:del_downloaddir('{DIRDIV_LEVEL}')" class="btn-icon text-red" title="删除目录">
-        {{ SVG.circle_minus() }}
-        </a>
+      <div class="col-12 col-lg-6">
+        <label class="dl-dir-label" for="container_path_{DIRDIV_LEVEL}">NAStool 访问目录<span class="form-help" data-bs-toggle="tooltip"
+               data-bs-original-title="NAStool 容器内看到的同一目录路径，点击可打开文件浏览器选择">?</span></label>
+        <input type="text" value="" id="container_path_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="点击选择目录" autocomplete="off">
       </div>
     </div>
   </div>
+  <a href="javascript:del_downloaddir('{DIRDIV_LEVEL}')" class="dl-dir-del" title="删除这条规则">
+    {{ SVG.circle_minus() }}
+  </a>
 </div>
-
 </script>
