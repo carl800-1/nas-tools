@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -584,6 +584,31 @@ qB 里现有分类对齐 —— 删种策略的「分类过滤」与下载设置
 
 ⚠️ 语义变化：「删除媒体库文件」不再是「单条重做」的入口；单条重做请用「**重新识别**」
 （走手动整理，不走目录同步，本来就不受去重标记约束）。
+
+#### 2.25 刷流任务弹窗精简，「转移到媒体库」开关补齐（v6.0.5）
+
+刷流任务的新建/编辑弹窗只留真正要配的项：**去掉 RSS 地址输入框**（保存目录占满整行）、
+**去掉「同时下载任务数」与「部分下载（拆包）规则」**、「包含 / 排除」移到选种规则末尾、
+4 个开关排成一排（窄屏自动换行）。
+
+- RSS 改为隐藏域，**提交、回填、新建清空三处接线不变** —— 老任务里已填的自定义 RSS
+  不会被静默清空，语义仍是「留空则用站点配置的 RSS」。
+- 「同时下载任务数」与「部分下载规则」**前端不再提交**，保存后落库为空：
+  **未重新保存的老任务仍按旧值运行**（卡片会继续显示「同时下载: N」徽标），
+  重新保存一次后即不再限制同时下载数、不再走拆包下载。
+- 后端字段与开放 API **一行未动**，想恢复把字段加回界面即可。
+
+同时修掉刷流「**转移到媒体库**」开关的两处缺口：
+
+1. **不勾「识别重命名」时开关失效** —— 「只转移不识别（`__link`）」的两个入口
+   （`file_change_handler` / `transfer_sync`）原本没有刷流守卫，关了开关照样会被
+   link 进媒体库；现在都补上了。
+2. **种子刚完成时可能被误整理** —— 刷流跳过清单有 60 秒缓存，而路径判定只查一次；
+   现在**未命中**时会用 5 秒短间隔兜底重查一次（命中仍走 60 秒缓存，零额外开销，
+   且有间隔限流，不会拖垮目录同步）。
+
+「同目录不误伤」的前提没有变：排除范围是**逐种子内容路径**，同目录下的普通下载
+照常整理，目录本身也不被排除。
 
 ### 3. 跳转与入口优化
 
@@ -1205,7 +1230,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.4   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.5   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1308,4 +1333,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-23 ｜ 当前版本 v6.0.4_
+_Last updated: 2026-09-24 ｜ 当前版本 v6.0.5_
