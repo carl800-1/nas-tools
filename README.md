@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -478,6 +478,22 @@ pt:
 做种的数据）、**挡空 ids**（避免 qB 把空 hashes 解释成「全部任务」而刷掉整个分类）。
 本功能仅对 qBittorrent 生效，Transmission 没有「分类」概念、只有 labels；另外分类名建议与
 qB 里现有分类对齐 —— 删种策略的「分类过滤」与下载设置的「分类隔离」都依赖这个字段。
+#### 2.20 下载器设置界面重做：分区、卡片与统一的问号说明（v6.0.1）
+
+「编辑下载器」弹窗做了一次纯界面改版，**没有改任何后端行为**，表单提交的字段一个字没变，
+所以升级后老配置照旧可用。改动集中在「看得清、找得到」：
+
+- **表单分区**：基本信息 / 连接设置 / 下载行为 / 下载目录设置 四块各带标题；
+- **下载目录行卡片化**：每行先给一排列小标题（类型 / 二级分类 / 分类标签 / 自动分类 /
+  下载保存目录或 ID / NAStool 访问目录）再给控件，不再靠占位文字猜；配了「自动分类」的
+  行整体高亮；折叠标题右侧显示**规则条数徽标**；
+- **说明统一成 `?` 气泡**：所有字段说明由「鼠标停在输入框上」的原生气泡改为统一的
+  `?` 图标 + tooltip，支持多行、宽度放宽，长说明不再被压成一条细线；
+- **红底提示条改为小角标**：「种子管理模式」与「自动分类」的相互影响不再常驻占版面，
+  收进标题行的角标里 —— 蓝底 `i` 为一般说明、琥珀 `!` 为需要注意，悬停或点击展开。
+
+需要注意的一点：下载目录行是运行期动态插入的，页面装载时的 tooltip 初始化扫不到新节点，
+因此这段逻辑额外做了插入后初始化、删除前销毁。
 
 ### 3. 跳转与入口优化
 
@@ -1099,7 +1115,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.0   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.1   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1202,4 +1218,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-23 ｜ 当前版本 v6.0.0_
+_Last updated: 2026-09-23 ｜ 当前版本 v6.0.1_
