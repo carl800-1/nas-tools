@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -564,6 +564,26 @@ qB 里现有分类对齐 —— 删种策略的「分类过滤」与下载设置
   紧凑控件（`-sm`）只保留更小的内边距，文本字号与 `.form-select` 对齐；
 - 折叠箭头由 `▸`（U+25B8，Unicode 里的**小**三角）换成 `▶`（U+25B6 实心三角），
   字号改为跟随折叠标题 —— 符号与标题永远一样大，标题字号以后再调箭头自动跟随。
+
+#### 2.24 修复：删掉媒体库里的目录后又被拷回来（v6.0.4）
+
+「媒体整理 → 历史」里删掉媒体库文件（只删目的端）之后，下一轮目录同步会把它当成
+从没整理过的新文件，重新识别、重建目录，**把刚删掉的整份拷回媒体库**。
+
+原因是「删文件」顺手清掉了去重标记。识别重命名模式下靠 `TRANSFER_BLACKLIST` 判断
+「整理过没有」，而删除入口在判断删除范围**之前**就无条件清了标记 —— 三个口径都会执行。
+
+- **「只删媒体库文件」现在保留标记**（源文件还在，它确实整理过了）；
+  「只删源文件 / 两者都删」才清（源文件都没了，标记没有意义）。
+- **「清空记录」只清看板上的转移历史**，不再重置去重状态。
+- **「目的文件已存在且大小一致」时补记标记** —— 这类文件以前永远入不了账，
+  每轮扫描都重新识别 + 重复告警，不会自愈。大小不一致时不记，保留洗版机会。
+
+想强制让整个媒体库重新整理一遍，用「**清理转移缓存**」（`/tbl`）—— 它仍然整表清空，
+是唯一的重置入口。**升级不需要数据迁移**，现有标记原样生效，不会触发全量重拷。
+
+⚠️ 语义变化：「删除媒体库文件」不再是「单条重做」的入口；单条重做请用「**重新识别**」
+（走手动整理，不走目录同步，本来就不受去重标记约束）。
 
 ### 3. 跳转与入口优化
 
@@ -1185,7 +1205,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.4   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1288,4 +1308,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-23 ｜ 当前版本 v6.0.3_
+_Last updated: 2026-09-23 ｜ 当前版本 v6.0.4_
