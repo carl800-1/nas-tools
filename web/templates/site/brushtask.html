@@ -378,17 +378,11 @@
                     </div>
                 </div>
                 <div class="row">
-                    <div class="col-lg-8">
+                    <div class="col-lg-12">
                         <div class="mb-3">
-                            <label class="form-label">RSS地址 <span class="form-help"
-                                                                    title="刷流优先使用此处填入的站点RSS，若为空则使用站点配置RSS地址"
-                                                                    data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_rssurl" class="form-control"
-                                   placeholder="站点RSS订阅URL，若为空则使用站点配置RSS地址">
-                        </div>
-                    </div>
-                    <div class="col-lg">
-                        <div class="mb-3">
+                            <!-- RSS地址不再在界面上维护：留空即使用站点配置里的RSS地址。
+                                 编辑任务时用隐藏域把原值原样带回，避免「编辑一次就把站点级自定义RSS弄丢」。 -->
+                            <input type="hidden" id="brushtask_rssurl">
                             <label class="form-label">保存目录 <span class="form-help"
                                                                      title="为该刷新任务设置独立的保存目录，将会覆盖下载器中的目录设置，如果下载器为Qbittorrent还需要在NAStool下载器设置中关闭种子自动管理功能"
                                                                      data-bs-toggle="tooltip">?</span></label>
@@ -397,46 +391,38 @@
                         </div>
                     </div>
                 </div>
-                <div class="row">
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="brushtask_sendmessage">
-                                <span class="form-check-label">消息推送 <span class="form-help"
-                                                                              title="开启后会将当前任务的情况进行推送"
+                <div class="d-flex flex-wrap align-items-center">
+                    <div class="me-4 mb-3 flex-shrink-0">
+                        <label class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="brushtask_sendmessage">
+                            <span class="form-check-label">消息推送 <span class="form-help"
+                                                                          title="开启后会将当前任务的情况进行推送"
+                                                                          data-bs-toggle="tooltip">?</span></span>
+                        </label>
+                    </div>
+                    <div class="me-4 mb-3 flex-shrink-0">
+                        <label class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="brushtask_transfer">
+                            <span class="form-check-label">转移到媒体库 <span class="form-help"
+                                                                              title="开启后刷流的下载会被识别重命名并整理到媒体库；关闭则只做种、不整理（下载器监控与目录同步的识别转移都会跳过它）"
                                                                               data-bs-toggle="tooltip">?</span></span>
-                            </label>
-                        </div>
+                        </label>
                     </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="brushtask_transfer">
-                                <span class="form-check-label">转移到媒体库 <span class="form-help"
-                                                                                  title="开启后刷流的下载会被识别重命名并整理到媒体库；关闭则只做种、不整理（下载器监控与目录同步的识别转移都会跳过它）"
-                                                                                  data-bs-toggle="tooltip">?</span></span>
-                            </label>
-                        </div>
+                    <div class="me-4 mb-3 flex-shrink-0">
+                        <label class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="brushtask_free_limit_speed">
+                            <span class="form-check-label">限免到期下载限速 <span class="form-help"
+                                                              title="开启后，限免到期后下载速度降为1B/s，防止流量偷跑。测试站点有限，请观察后开启。"
+                                                              data-bs-toggle="tooltip">?</span></span>
+                        </label>
                     </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="brushtask_free_limit_speed">
-                                <span class="form-check-label">限免到期下载限速 <span class="form-help"
-                                                                  title="开启后，限免到期后下载速度降为1B/s，防止流量偷跑。测试站点有限，请观察后开启。"
-                                                                  data-bs-toggle="tooltip">?</span></span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="col-lg-4">
-                        <div class="mb-3">
-                            <label class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="brushtask_free_ddl_delete">
-                                <span class="form-check-label">限免到期删种 <span class="form-help"
-                                                                  title="开启后，限免到期后删种，优先级高于限免到期下载限速"
-                                                                  data-bs-toggle="tooltip">?</span></span>
-                            </label>
-                        </div>
+                    <div class="me-4 mb-3 flex-shrink-0">
+                        <label class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="brushtask_free_ddl_delete">
+                            <span class="form-check-label">限免到期删种 <span class="form-help"
+                                                              title="开启后，限免到期后删种，优先级高于限免到期下载限速"
+                                                              data-bs-toggle="tooltip">?</span></span>
+                        </label>
                     </div>
                 </div>
                 <div class="hr-text hr-text-center hr-text-spaceless mt-1 mb-3">选种规则（与）</div>
@@ -866,6 +852,9 @@
       filter_item_change('', 'brushtask_year', $('#brushtask_year_do_'));
       //任务时长（同理：不清空会残留上一次编辑的值）
       $("#brushtask_duration").val("");
+      //RSS地址已不在界面上维护（改为隐藏域），新建时必须清空，
+      //否则会静默沿用上一个任务的RSS；留空即回落到站点配置的RSS地址
+      $("#brushtask_rssurl").val("");
       $("#modal-brushtask").modal('show');
     });
   }
@@ -1114,6 +1103,7 @@
       $("#brushtask_totalsize").addClass("is-invalid");
       return;
     }
+    //RSS地址：界面上不再暴露，读取隐藏域原值（编辑时由 brushtask_detail 回填，新建时为空）
     let brushtask_rssurl = $("#brushtask_rssurl").val();
     let brushtask_label = $("#brushtask_label").val();
     //任务时长（小时）：留空 = 不限时；填了必须是 0.1~720 的数字
