@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -609,6 +609,14 @@ qB 里现有分类对齐 —— 删种策略的「分类过滤」与下载设置
 
 「同目录不误伤」的前提没有变：排除范围是**逐种子内容路径**，同目录下的普通下载
 照常整理，目录本身也不被排除。
+
+#### 2.26 刷流弹窗版式收紧（v6.0.6）
+
+v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col-lg-4`，约占内容宽 32%），
+不再独占整行；4 个开关间距从 `me-4` 压缩到 `me-2`（省 48px），确保一排放得下。
+
+- 仅动 `web/templates/site/brushtask.html`，RSS 隐藏域、各字段接线、4 个开关 id 契约均未变。
+- 配套预览脚本新增 **720px 窄档硬断言**，保证真实浏览器（渲染比 800px 预览更紧）下也不折行。
 
 ### 3. 跳转与入口优化
 
@@ -1230,7 +1238,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.5   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.6   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1333,4 +1341,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-24 ｜ 当前版本 v6.0.5_
+_Last updated: 2026-09-24 ｜ 当前版本 v6.0.6_
