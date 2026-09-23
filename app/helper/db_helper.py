@@ -238,9 +238,13 @@ class DbHelper:
     def truncate_transfer_history_list(self):
         """
         清空所有转移历史记录
+
+        只清用户可见的转移历史（TRANSFER_HISTORY）。「已整理过」的去重标记
+        （TRANSFER_BLACKLIST）不在清理范围内：清空看板上的记录，不等于要让媒体库里
+        的文件被重新整理一遍，否则下一次目录同步会把整个媒体库再拷一次。
+        需要显式重置去重状态请用「清理转移缓存」（truncate_transfer_blacklist）。
         """
-        return self._db.query(TRANSFERHISTORY).delete() and \
-        self._db.query(TRANSFERBLACKLIST).delete()
+        return self._db.query(TRANSFERHISTORY).delete()
 
     def get_transfer_unknown_paths(self):
         """
@@ -434,9 +438,14 @@ class DbHelper:
     def delete_transfer_blacklist(self, path):
         """
         删除黑名单记录
+
+        两张表的写入（insert_transfer_blacklist / insert_sync_history）与查询都会先做
+        os.path.normpath，删除这里也必须用同一个归一化后的值，否则在 Windows 上
+        （normpath 会把 / 换成 \\）永远匹配不到记录，表现为「删了但没删掉」。
         """
-        self._db.query(TRANSFERBLACKLIST).filter(TRANSFERBLACKLIST.PATH == str(path)).delete()
-        self._db.query(SYNCHISTORY).filter(SYNCHISTORY.PATH == str(path)).delete()
+        path = os.path.normpath(path)
+        self._db.query(TRANSFERBLACKLIST).filter(TRANSFERBLACKLIST.PATH == path).delete()
+        self._db.query(SYNCHISTORY).filter(SYNCHISTORY.PATH == path).delete()
 
     @DbPersist(_db)
     def truncate_transfer_blacklist(self):

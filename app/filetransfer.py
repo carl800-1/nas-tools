@@ -774,7 +774,13 @@ class FileTransfer:
                                     continue
                                 handler_flag = True
                             else:
+                                # 目的文件已存在且大小一致：确认就是这个文件已经整理过了，
+                                # 补记为「已整理过」。否则目录同步每一轮全量扫描都会把它当成
+                                # 新文件重新识别一遍、并重复告警。大小不一致时不登记，
+                                # 保留洗版（新文件更大时覆盖）的机会。
                                 log.warn("【Rmt】文件 %s 已存在" % ret_file_path)
+                                if media.size == orgin_file_size:
+                                    self.dbhelper.insert_transfer_blacklist(file_item)
                                 failed_count += 1
                                 continue
                         else:

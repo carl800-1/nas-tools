@@ -970,8 +970,13 @@ class WebAction:
                     "tmdbid": transinfo.TMDBID,
                     "season_episode": transinfo.SEASON_EPISODE
                 }
-                # 删除该识别记录对应的转移记录
-                _filetransfer.delete_transfer_blacklist("%s/%s" % (source_path, source_filename))
+                # 删除该识别记录对应的转移记录。
+                # 只在源文件同样被删除时才清「已整理过」标记：源文件已不存在，标记没有
+                # 意义，清掉后同名的新文件可以重新整理；而「仅删除媒体库文件」(del_dest)
+                # 必须保留标记，否则源文件仍在，下一轮目录同步会把它当成新文件重新整理，
+                # 把媒体库里刚删掉的那份又拷回来。需要显式重置去重用「清理转移缓存」。
+                if flag in ["del_source", "del_all"]:
+                    _filetransfer.delete_transfer_blacklist("%s/%s" % (source_path, source_filename))
                 dest = transinfo.DEST
                 dest_path = transinfo.DEST_PATH
                 dest_filename = transinfo.DEST_FILENAME
