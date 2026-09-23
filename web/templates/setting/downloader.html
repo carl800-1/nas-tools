@@ -2,9 +2,43 @@
 {% import 'macro/form.html' as FORM %}
 {# 本页样式：类名统一 dl- 前缀，避免与其它页面冲突；颜色一律走 Tabler 变量以兼容 theme-dark #}
 <style>
+  /* ---------- 统一字体令牌：本弹窗内字号 / 字重 / 颜色 / 行高 / 字间距的唯一出处 ----------
+     这页原先有两套字：分区标题 13px 灰，而「下载目录设置」块自成一套（标题 15px 深色、
+     卡片标签 12px 灰色），与同页面「监控 / 转移方式 / 标签隔离 / 目录隔离」的表单标签不一致。
+     下面把三类文本的令牌集中定义一次，取值一律引用 Tabler 变量；其余规则只引用令牌。 */
+  #modal-downloader {
+    --dl-font-family: var(--tblr-body-font-family, var(--tblr-font-sans-serif));
+    /* 标题：与「基本信息 / 连接设置 / 下载行为」分区标题同源 */
+    --dl-title-size: .8125rem;
+    --dl-title-weight: var(--tblr-font-weight-bold, 600);
+    --dl-title-color: var(--tblr-muted, #6c757d);
+    --dl-title-spacing: .02em;
+    /* 正文 / 标签 / 数值文本：与 .form-label、.form-select、.form-control 同源 */
+    --dl-text-size: var(--tblr-body-font-size, .875rem);
+    --dl-text-weight: var(--tblr-body-font-weight, 400);
+    --dl-text-color: var(--tblr-body-color, #1d273b);
+    --dl-text-line-height: var(--tblr-body-line-height, 1.4285714286);
+    /* 组件型小角标（「QB」标签 / 条数计数）：字号自成一路，也只在这里定义一次 */
+    --dl-chip-size: .6875rem;
+    --dl-chip-weight: var(--tblr-font-weight-bold, 600);
+    /* 说明角标内的字形（! / ?）：非文字，自成一路 —— 它落在 14px 的卡片标签旁，
+       不参与折叠标题行的缩放。引用处一律带 .75rem 兜底：var() 取不到值时 font-size
+       会整条失效并回落成继承值（14px），符号会莫名变大 */
+    --dl-glyph-size: .75rem;
+  }
+
   /* ---------- 分区标题：小标题 + 细线，把弹窗表单切成几个语义块 ---------- */
   .dl-section { display: flex; align-items: center; gap: .6rem; margin: 1.4rem 0 .8rem; }
-  .dl-section-title { font-size: .8125rem; font-weight: 600; letter-spacing: .02em; color: var(--tblr-muted, #6c757d); white-space: nowrap; }
+  /* 折叠标题与分区标题共用同一条规则，两处不会再各自漂移 */
+  .dl-section-title, .dl-details-title {
+    font-family: var(--dl-font-family);
+    font-size: var(--dl-title-size);
+    font-weight: var(--dl-title-weight);
+    line-height: var(--dl-text-line-height);
+    letter-spacing: var(--dl-title-spacing);
+    color: var(--dl-title-color);
+    white-space: nowrap;
+  }
   .dl-section::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--tblr-border-color, #e6e7e9); }
 
   /* ---------- 下载目录设置：折叠标题做成整行可点 ---------- */
@@ -13,11 +47,14 @@
     transition: background-color .15s ease; }
   .dl-details > summary::-webkit-details-marker { display: none; }
   .dl-details > summary:hover { background: var(--tblr-active-bg, rgba(35, 131, 226, .06)); }
-  .dl-details > summary::before { content: "\25B8"; font-size: .75rem; line-height: 1;
+  /* 折叠箭头：实心三角 U+25B6 ▶。原来的 U+25B8 ▸ 是 Unicode 里的「小三角」
+     （BLACK RIGHT-POINTING *SMALL* TRIANGLE），同字号下明显更小更细；
+     这里的字号被刻意锁在 --dl-title-size（符号与折叠标题永远一样大），
+     所以想让箭头更醒目只能换字形。标题字号以后再调，箭头自动跟随 */
+  .dl-details > summary::before { content: "\25B6"; font-size: var(--dl-title-size, .8125rem); line-height: 1;
     color: var(--tblr-muted, #6c757d); transition: transform .18s ease; }
   .dl-details[open] > summary::before { transform: rotate(90deg); }
-  .dl-details-title { font-size: .9375rem; font-weight: 600; color: var(--tblr-body-color, #1d273b); }
-  .dl-dir-count { font-size: .6875rem; font-weight: 600; }
+  .dl-dir-count { font-size: var(--dl-chip-size); font-weight: var(--dl-chip-weight); }
   .dl-dir-body { padding-top: .35rem; }
   .dl-dir-list { display: flex; flex-direction: column; gap: .6rem; }
 
@@ -31,10 +68,12 @@
   .dl-dir-card.dl-dir-card-active { border-color: var(--tblr-primary, #2383e2); background: rgba(35, 131, 226, .045); }
   .dl-dir-fields { flex: 1 1 auto; min-width: 0; }
   /* 用 flex 而非 block：行内说明「?」才不会被 nowrap + overflow 裁掉 */
+  /* 字号 / 字重 / 颜色 / 行高不在这里声明：标签在模板上直接挂 Tabler 的 .form-label，
+     与「监控 / 转移方式 / 标签隔离 / 目录隔离」逐项同源；本类只负责布局。 */
   .dl-dir-label { display: flex; align-items: center; gap: .25rem; margin-bottom: .2rem;
-    font-size: .75rem; line-height: 1.25; color: var(--tblr-muted, #6c757d); }
+    font-family: var(--dl-font-family); }
   .dl-dir-label > .form-help { flex: 0 0 auto; }
-  .dl-dir-label-note { padding: 0 .25rem; font-size: .6875rem; border-radius: 3px;
+  .dl-dir-label-note { padding: 0 .25rem; font-size: var(--dl-chip-size); border-radius: 3px;
     background: rgba(0, 0, 0, .06); }
   .theme-dark .dl-dir-label-note { background: rgba(255, 255, 255, .12); }
 
@@ -58,6 +97,17 @@
   .dl-cat-row .dl-auto-select { flex: 0 0 7.5rem; }
   .dl-cat-row .dl-cat-name { flex: 1 1 auto; min-width: 0; }
 
+  /* 紧凑控件（-sm）只保留更小的内边距，文本字号 / 字重 / 行高回到与 .form-select、
+     .form-control 一致 —— 否则这一块的数值文本会比「监控」等处小两号 */
+  .dl-dir-card .form-select-sm,
+  .dl-dir-card .form-control-sm {
+    font-family: var(--dl-font-family);
+    font-size: var(--dl-text-size);
+    font-weight: var(--dl-text-weight);
+    line-height: var(--dl-text-line-height);
+    color: var(--dl-text-color);
+  }
+
   .dl-dir-del { display: inline-flex; align-items: center; justify-content: center;
     flex: 0 0 auto; width: 2rem; height: 2rem; border-radius: 50%;
     color: var(--tblr-muted, #6c757d); transition: color .15s ease, background-color .15s ease; }
@@ -66,7 +116,9 @@
 
   /* ---------- 增加目录：虚线整行按钮 ---------- */
   .dl-add-dir { display: flex; align-items: center; justify-content: center; gap: .4rem;
-    width: 100%; margin-top: .6rem; padding: .5rem; font-size: .8125rem; text-decoration: none;
+    width: 100%; margin-top: .6rem; padding: .5rem; font-family: var(--dl-font-family);
+    font-size: var(--dl-text-size); font-weight: var(--dl-text-weight);
+    line-height: var(--dl-text-line-height); text-decoration: none;
     color: var(--tblr-primary, #2383e2); border: 1px dashed var(--tblr-border-color, #e6e7e9);
     border-radius: var(--tblr-border-radius, 5px); transition: .15s ease; }
   .dl-add-dir:hover { color: var(--tblr-primary, #2383e2); border-style: solid;
@@ -77,7 +129,7 @@
      刻意不使用「红底大段说明文字」——那种写法既占版面又难与正文区分；
      这里用与「?」同款的小圆角标，颜色只做轻微提示（蓝=说明 / 琥珀=注意），不用红色。 */
   .dl-note-tip { display: inline-flex; align-items: center; justify-content: center;
-    width: 1.125rem; height: 1.125rem; margin-left: .2rem; font-size: .75rem;
+    width: 1.125rem; height: 1.125rem; margin-left: .2rem; font-size: var(--dl-glyph-size, .75rem);
     font-weight: var(--tblr-font-weight-bold, 600); line-height: 1;
     color: var(--tblr-muted, #6c757d); background: rgba(0, 0, 0, .06);
     border: 1px solid transparent; border-radius: 100rem; cursor: pointer;
@@ -858,7 +910,7 @@
   <div class="dl-dir-fields">
     <div class="row g-2">
       <div class="col-12 col-md-6 col-lg-3">
-        <label class="dl-dir-label" for="dir_type_{DIRDIV_LEVEL}">类型<span class="form-help" data-bs-toggle="tooltip"
+        <label class="form-label dl-dir-label" for="dir_type_{DIRDIV_LEVEL}">类型<span class="form-help" data-bs-toggle="tooltip"
                data-bs-original-title="按媒体类型匹配：全部 / 电影 / 电视剧 / 动漫。自动分类时「动漫」按电视剧处理">?</span></label>
         <select class="form-select form-select-sm" name="dir_type" id="dir_type_{DIRDIV_LEVEL}" onchange="get_categories($(this).attr('id').replace('dir_type_', ''))">
           <option value="" selected>全部</option>
@@ -868,14 +920,14 @@
         </select>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
-        <label class="dl-dir-label" for="dir_subtype_{DIRDIV_LEVEL}">二级分类<span class="form-help" data-bs-toggle="tooltip"
+        <label class="form-label dl-dir-label" for="dir_subtype_{DIRDIV_LEVEL}">二级分类<span class="form-help" data-bs-toggle="tooltip"
                data-bs-original-title="媒体库二级分类，取值来自「基础设置 → 二级分类策略」">?</span></label>
         <select class="form-select form-select-sm" name="dir_subtype" id="dir_subtype_{DIRDIV_LEVEL}">
           <option value="" selected>全部</option>
         </select>
       </div>
       <div class="col-12 col-lg-6">
-        <label class="dl-dir-label" for="dir_auto_{DIRDIV_LEVEL}">分类标签<span class="dl-dir-label-note">QB</span><span
+        <label class="form-label dl-dir-label" for="dir_auto_{DIRDIV_LEVEL}">分类标签<span class="dl-dir-label-note">QB</span><span
                 class="form-help" data-bs-toggle="tooltip" data-bs-html="true"
                 data-bs-original-title="qBittorrent 的分类名，仅 QB 有效。<br>· <b>自动判定</b>：参与自动分类扫描 —— 按种子名称判定「电影 / 电视剧 / 其它」，判定结果与本行「类型」一致的任务归入该分类（本行类型为「全部」则任意类型都归入）；下载新任务时也按媒体类型推导分类名<br>· <b>自定义</b>：填写固定分类名（不能填「自动」，那是「自动判定」的保留值），<b>不参与自动分类扫描</b>，只在下载新任务时归入该分类<br>· <b>输入留空</b>：这一行不启用 —— 既不参与扫描，下载时也不写分类名">?</span></label>
         <div class="dl-cat-row">
@@ -887,12 +939,12 @@
         </div>
       </div>
       <div class="col-12 col-lg-6">
-        <label class="dl-dir-label" for="save_path_{DIRDIV_LEVEL}">下载保存目录或 ID<span class="form-help" data-bs-toggle="tooltip"
+        <label class="form-label dl-dir-label" for="save_path_{DIRDIV_LEVEL}">下载保存目录或 ID<span class="form-help" data-bs-toggle="tooltip"
                data-bs-original-title="下载器侧的保存目录（在 qB 里就是分类的保存路径）">?</span></label>
         <input type="text" value="" id="save_path_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="下载保存目录或 ID" autocomplete="off">
       </div>
       <div class="col-12 col-lg-6">
-        <label class="dl-dir-label" for="container_path_{DIRDIV_LEVEL}">NAStool 访问目录<span class="form-help" data-bs-toggle="tooltip"
+        <label class="form-label dl-dir-label" for="container_path_{DIRDIV_LEVEL}">NAStool 访问目录<span class="form-help" data-bs-toggle="tooltip"
                data-bs-original-title="NAStool 容器内看到的同一目录路径，点击可打开文件浏览器选择">?</span></label>
         <input type="text" value="" id="container_path_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="点击选择目录" autocomplete="off">
       </div>
