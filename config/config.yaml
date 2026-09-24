@@ -348,3 +348,11 @@ laboratory:
   simplify_library_notification: false
   # 《使用Cloudflare Worker搭建Telegram Bot Api 代理》https://www.yuque.com/u21363723/nt6hcz/whq99ankmn87arcq?singleDoc
   telegram_domain: https://api.telegram.org
+# 【目录清理】：删除指定根目录下总大小小于等于阈值的子文件夹（服务 → 目录清理）
+#   留空则每次在界面里填写；threshold_mb 为大小阈值，单位 MB（1MB = 1024×1024 字节）
+#   仅处理根目录的子文件夹；根目录本身与根目录下的散落文件不受影响
+clean_dirs:
+  # 根目录（留空则界面上手动填写）
+  root_path: ''
+  # 大小阈值（MB），子文件夹总大小 <= 该值时会被清理
+  threshold_mb: 10

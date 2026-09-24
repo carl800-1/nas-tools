@@ -2192,6 +2192,43 @@ class SyncRun(ApiResource):
         return WebAction().api_action(cmd='sch', data={"item": "sync"})
 
 
+@system.route('/clean_dirs/scan')
+class SystemCleanDirsScan(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('root_path', type=str, help='根目录', location='form', required=True)
+    parser.add_argument('threshold_mb', type=float, help='大小阈值(MB)，小于等于该值的子文件夹将被清理',
+                        location='form', required=True)
+    parser.add_argument('follow_links', type=str, help='是否跟随符号链接（true/false）', location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        目录清理预览：列出将被删除的子文件夹清单，不执行删除（密钥认证）
+        """
+        return WebAction().api_action(cmd='clean_dirs_scan', data=self.parser.parse_args())
+
+
+@system.route('/clean_dirs/run')
+class SystemCleanDirsRun(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('root_path', type=str, help='根目录', location='form', required=True)
+    parser.add_argument('threshold_mb', type=float, help='大小阈值(MB)，小于等于该值的子文件夹将被清理',
+                        location='form', required=True)
+    parser.add_argument('follow_links', type=str, help='是否跟随符号链接（true/false）', location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        目录清理：删除扫描命中的子文件夹（密钥认证，不可撤销）
+        """
+        args = self.parser.parse_args()
+        # 表单传来的字符串转 bool
+        fl = args.get("follow_links")
+        if isinstance(fl, str):
+            args["follow_links"] = fl.strip().lower() in ("true", "1", "yes", "on")
+        return WebAction().api_action(cmd='clean_dirs_run', data=args)
+
+
 @sync.route('/file/hardlinks')
 class SystemFileHardlinks(ClientResource):
     parser = reqparse.RequestParser()

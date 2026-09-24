@@ -1,3 +1,44 @@
+# v6.0.7 (2026-09-24)
+
+## 新增：目录清理（服务 → 目录清理）
+
+批量删除指定根目录下总大小不超过阈值（MB）的子文件夹，用于清理下载目录里残留的
+失败任务 / 样本小目录。
+
+### 新增文件
+
+| 文件 | 说明 |
+|---|---|
+| `app/helper/clean_helper.py` | `CleanHelper`：核心服务（扫描 / 删除 / 结果摘要），无 UI 依赖 |
+| `tests/test_clean_helper.py` | 31 项单元测试（阈值边界、嵌套、空目录、dry-run、符号链接、异常容忍等） |
+
+### 改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `web/backend/pro_user.py` | `SERVICE_CONF` 新增 `clean_dirs` 卡片（服务菜单入口） |
+| `web/action.py` | 注册 `clean_dirs_scan`（预览）/ `clean_dirs_run`（执行）两个 action |
+| `web/templates/service.html` | 新增 `modal-clean-dirs` 弹窗：填参数 → 预览清单 → 二次确认 → 执行 |
+| `web/main.py` | `service()` 路由传入配置默认值（`CleanDefaultRoot` / `CleanDefaultThreshold`） |
+| `web/apiv1.py` | 新增 REST 接口 `/system/clean_dirs/scan` 与 `/system/clean_dirs/run` |
+| `config/config.yaml` | 新增 `clean_dirs` 段（`root_path` / `threshold_mb`） |
+| `README.md` | 新增 §2.27 说明 |
+
+### 行为口径
+
+- **判据**：子文件夹总大小 **≤ 阈值** 即命中；大小等于阈值也删。
+- **单位**：1MB = 1024×1024 字节；空文件夹计为 0。
+- **范围**：仅根目录的一级子文件夹；根目录本身与根目录下散落文件不受影响。
+- **删除方式**：`shutil.rmtree` 递归删除整个文件夹。
+- **dry-run**：预览模式只返回清单与预计释放空间，不落盘。
+- **容错**：权限不足 / 文件占用 / 符号链接等记录日志并跳过，不中断；符号链接默认不跟随。
+- **参数校验**：阈值非法（空 / 非数字 / nan / inf / 负数）回落为 0，避免误删有内容目录。
+
+### 测试
+
+`python -m unittest tests.test_clean_helper` → **31 项通过**（2 项依赖系统 symlink 权限的
+用例在无权限环境下自动跳过，其逻辑另由 mock 版用例覆盖）。
+
 # v6.0.6 (2026-09-24)
 
 ## 修复：刷流弹窗版式收紧（保存目录上移 + 开关间距压缩）

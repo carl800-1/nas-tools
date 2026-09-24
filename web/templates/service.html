@@ -188,6 +188,55 @@
     </div>
   </div>
 </div>
+<div class="modal modal-blur fade" id="modal-clean-dirs" tabindex="-1" role="dialog" aria-hidden="true"
+  data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">目录清理</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <div class="col-lg-8">
+            <div class="mb-3">
+              <label class="form-label required">根目录 <span class="form-help"
+                  title="只扫描该目录下的子文件夹；根目录本身与根目录下的散落文件不受影响"
+                  data-bs-toggle="tooltip">?</span></label>
+              <input type="text" id="clean_dirs_root" class="form-control filetree-folders-only"
+                     value="{{ CleanDefaultRoot or '' }}" placeholder="如 /media/downloads">
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="mb-3">
+              <label class="form-label required">大小阈值 (MB) <span class="form-help"
+                  title="总大小小于等于该值的子文件夹将被清理；1MB = 1024×1024 字节，空文件夹计为 0"
+                  data-bs-toggle="tooltip">?</span></label>
+              <input type="number" min="0" step="0.1" id="clean_dirs_threshold" class="form-control"
+                     value="{{ CleanDefaultThreshold if CleanDefaultThreshold is not none else 10 }}"
+                     placeholder="10">
+            </div>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="clean_dirs_follow_links">
+            <span class="form-check-label">跟随符号链接 <span class="form-help"
+                title="默认关闭：符号链接（目录与文件）一律跳过，不计入大小也不删除"
+                data-bs-toggle="tooltip">?</span></span>
+          </label>
+        </div>
+        <hr>
+        <div id="clean_dirs_result" class="text-muted">请先点击「预览」查看待删除清单。</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
+        <button id="clean_dirs_scan_btn" class="btn btn-primary">预览</button>
+        <button id="clean_dirs_run_btn" class="btn btn-danger" disabled>执行删除</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal modal-blur fade" id="modal-backup" tabindex="-1" role="dialog" aria-hidden="true"
   data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
@@ -342,6 +391,9 @@
         $('#modal-backup').modal('show');
         init_backup_modal();
         break;
+      case "clean_dirs":
+        show_clean_dirs_modal();
+        break;
       case "sync":
         $('#modal-service-sync').modal('show');
         break;
@@ -360,6 +412,151 @@
       show_success_modal(`${name} 服务启动成功，正在后台运行`);
     });
   }
+
+  // ---------------- 目录清理 ----------------
+
+  // 打开目录清理弹窗
+  function show_clean_dirs_modal() {
+    clean_dirs_reset(true);
+    $('#modal-clean-dirs').modal('show');
+  }
+
+  // 读取表单参数
+  function clean_dirs_params() {
+    return {
+      "root_path": $("#clean_dirs_root").val().trim(),
+      "threshold_mb": $("#clean_dirs_threshold").val(),
+      "follow_links": $("#clean_dirs_follow_links").is(":checked")
+    };
+  }
+
+  // 重置结果区
+  // clearForm: 是否同时清空输入（首次打开时不覆盖用户已填的内容）
+  function clean_dirs_reset(clearForm) {
+    $("#clean_dirs_result").addClass("text-muted").html("请先点击「预览」查看待删除清单。");
+    $("#clean_dirs_run_btn").prop("disabled", true);
+    if (clearForm) {
+      $("#clean_dirs_root").removeClass("is-invalid");
+      $("#clean_dirs_threshold").removeClass("is-invalid");
+    }
+  }
+
+  // 校验参数，非法则标红并返回 false
+  function clean_dirs_validate() {
+    let ok = true;
+    let root = $("#clean_dirs_root").val().trim();
+    if (!root) {
+      $("#clean_dirs_root").addClass("is-invalid");
+      ok = false;
+    } else {
+      $("#clean_dirs_root").removeClass("is-invalid");
+    }
+    let threshold = $("#clean_dirs_threshold").val();
+    if (threshold === "" || isNaN(Number(threshold)) || Number(threshold) < 0) {
+      $("#clean_dirs_threshold").addClass("is-invalid");
+      ok = false;
+    } else {
+      $("#clean_dirs_threshold").removeClass("is-invalid");
+    }
+    return ok;
+  }
+
+  // 渲染扫描结果表格
+  function clean_dirs_render(result, isPreview) {
+    let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：`
+      + `共扫描 <strong>${result.total_dirs}</strong> 个子文件夹，`
+      + `命中 <strong>${result.matched.length}</strong> 个，`
+      + `阈值 <strong>${result.threshold_mb}</strong> MB`
+      + (isPreview
+          ? `，预计可释放 <strong>${(result.total_free_bytes / 1048576).toFixed(2)}</strong> MB`
+          : `，已删除 <strong>${result.deleted_count || 0}</strong> 个，`
+            + `实际释放 <strong>${((result.deleted_bytes || 0) / 1048576).toFixed(2)}</strong> MB`)
+      + `</div>`;
+
+    if (isPreview && result.matched.length > 0) {
+      html += `<div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+        <table class="table table-vcenter card-table table-hover table-striped">
+          <thead><tr><th>目录</th><th class="w-1">大小</th></tr></thead><tbody>`;
+      for (let item of result.matched) {
+        html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
+          + `${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    } else if (isPreview) {
+      html += `<div class="text-muted">没有符合条件的子文件夹，无需清理。</div>`;
+    } else if (result.deleted && result.deleted.length > 0) {
+      html += `<div class="table-responsive" style="max-height:240px;overflow-y:auto;">
+        <table class="table table-vcenter card-table table-hover table-striped">
+          <thead><tr><th>已删除目录</th><th class="w-1">大小</th></tr></thead><tbody>`;
+      for (let item of result.deleted) {
+        html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
+          + `${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    // 失败项单独提示，不阻断
+    if (result.failed && result.failed.length > 0) {
+      html += `<div class="text-danger mt-2">失败 ${result.failed.length} 个：`;
+      html += result.failed.map(f => `<div class="text-truncate" title="${f.path}">${f.path}（${f.reason}）</div>`).join("");
+      html += `</div>`;
+    }
+    // 被跳过的条目（权限/符号链接等）
+    if (result.skipped && result.skipped.length > 0) {
+      html += `<div class="text-muted mt-2">已跳过 ${result.skipped.length} 项（权限不足 / 符号链接 / 非普通文件），详见运行日志。</div>`;
+    }
+
+    $("#clean_dirs_result").removeClass("text-muted").html(html);
+  }
+
+  // 预览
+  $("#clean_dirs_scan_btn").unbind("click").click(function () {
+    if (!clean_dirs_validate()) {
+      return;
+    }
+    let btn = $(this);
+    btn.text("扫描中...").attr("disabled", true);
+    ajax_post("clean_dirs_scan", clean_dirs_params(), function (ret) {
+      btn.text("预览").removeAttr("disabled");
+      if (ret.code !== 0) {
+        $("#clean_dirs_result").addClass("text-muted").html(ret.msg || "扫描失败");
+        $("#clean_dirs_run_btn").prop("disabled", true);
+        return;
+      }
+      let result = ret.data || {};
+      clean_dirs_render(result, true);
+      // 有命中才允许执行
+      $("#clean_dirs_run_btn").prop("disabled", !(result.matched && result.matched.length > 0));
+    });
+  });
+
+  // 执行删除（二次确认）
+  $("#clean_dirs_run_btn").unbind("click").click(function () {
+    if (!clean_dirs_validate()) {
+      return;
+    }
+    let params = clean_dirs_params();
+    show_confirm_modal(
+      `即将删除「${params.root_path}」下总大小不超过 ${params.threshold_mb} MB 的全部子文件夹，`
+      + `删除后不可恢复，是否确认？`,
+      function () {
+        hide_confirm_modal();
+        let btn = $("#clean_dirs_run_btn");
+        btn.text("删除中...").attr("disabled", true);
+        ajax_post("clean_dirs_run", params, function (ret) {
+          btn.text("执行删除");
+          if (ret.code !== 0) {
+            show_fail_modal(ret.msg || "删除失败");
+            btn.removeAttr("disabled");
+            return;
+          }
+          clean_dirs_render(ret.data || {}, false);
+          show_success_modal(ret.msg || "清理完成");
+          btn.prop("disabled", true);
+        });
+      }
+    );
+  });
 
   // 名称测试
   $("#nametest_btn").unbind("click").click(function () {

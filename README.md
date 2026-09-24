@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -617,6 +617,22 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 - 仅动 `web/templates/site/brushtask.html`，RSS 隐藏域、各字段接线、4 个开关 id 契约均未变。
 - 配套预览脚本新增 **720px 窄档硬断言**，保证真实浏览器（渲染比 800px 预览更紧）下也不折行。
+
+#### 2.27 目录清理：批量删除过小的子文件夹（服务 → 目录清理）
+
+下载目录里常常残留一堆「下载失败 / 只有几 KB 样本」的小文件夹。**服务 → 目录清理**
+可以一次把它们找出来删掉：
+
+- 填「**根目录**」与「**大小阈值 (MB)**」，点「**预览**」先看清单（含每个目录的大小与
+  预计释放空间），确认无误再点「**执行删除**」——**先看后删，不会盲删**。
+- **判据**：子文件夹总大小 **≤ 阈值** 即命中；大小按递归累加内部所有文件计算，
+  **1MB = 1024×1024 字节**，空文件夹记为 0。
+- **只动一级子文件夹**：根目录本身、以及根目录下散落的文件都不受影响；深层子目录
+  不单独列为待删项（它属于其父目录的体积）。
+- **安全护栏**：符号链接（目录与文件）默认跳过，既不计入大小也不删除；权限不足、
+  文件被占用等异常**记日志后跳过，不中断整体流程**，失败项会在结果区单独列出。
+- 根目录与阈值都可在 `config/config.yaml` 的 `clean_dirs` 段预置（留空则每次在界面上填）；
+  阈值填非法值时会回落为 0（只清空文件夹），避免误删有内容的目录。
 
 ### 3. 跳转与入口优化
 
@@ -1238,7 +1254,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.6   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.7   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1341,4 +1357,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-24 ｜ 当前版本 v6.0.6_
+_Last updated: 2026-09-24 ｜ 当前版本 v6.0.7_

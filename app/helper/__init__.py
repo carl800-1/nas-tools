@@ -15,3 +15,4 @@ from .redis_helper import RedisHelper
 from .rss_helper import RssHelper
 from .plugin_helper import PluginHelper
 from .backup_helper import BackupHelper
+from .clean_helper import CleanHelper

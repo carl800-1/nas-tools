@@ -25,7 +25,7 @@ from app.filetransfer import FileTransfer
 from app.filter import Filter
 from app.helper import DbHelper, ProgressHelper, ThreadHelper, \
     MetaHelper, DisplayHelper, WordsHelper
-from app.helper import RssHelper, PluginHelper, BackupHelper
+from app.helper import RssHelper, PluginHelper, BackupHelper, CleanHelper
 from app.helper.openai_helper import OpenAiHelper
 from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
@@ -275,6 +275,8 @@ class WebAction:
             "get_system_processes": self.get_system_processes,
             "run_plugin_method": self.run_plugin_method,
             "get_library_resume": self.__get_resume,
+            "clean_dirs_scan": self.__clean_dirs_scan,
+            "clean_dirs_run": self.__clean_dirs_run,
         }
         # 远程命令响应
         self._commands = {
@@ -2693,6 +2695,59 @@ class WebAction:
         num = data.get("num") or 12
         # 实测，plex 似乎无法按照数目返回，此处手动切片
         return { "code": 0, "list": MediaServer().get_resume(num)[0:num] }
+
+    @staticmethod
+    def __clean_dirs_scan(data):
+        """
+        目录清理：预览模式，扫描指定根目录下总大小 <= 阈值(MB) 的子文件夹，不删除任何内容。
+        :param data: {root_path, threshold_mb, follow_links}
+        """
+        root_path = data.get("root_path")
+        threshold_mb = data.get("threshold_mb")
+        follow_links = bool(data.get("follow_links"))
+        # 未传参则回落到配置文件中的默认值
+        if root_path is None or threshold_mb is None or threshold_mb == "":
+            default_conf = CleanHelper.get_default_config()
+            if root_path is None:
+                root_path = default_conf.get("root_path")
+            if threshold_mb is None or threshold_mb == "":
+                threshold_mb = default_conf.get("threshold_mb")
+        result = CleanHelper().clean(root_path=root_path,
+                                     threshold_mb=threshold_mb,
+                                     dry_run=True,
+                                     follow_links=follow_links)
+        if result.get("error"):
+            return {"code": -1, "msg": result["error"]}
+        return {"code": 0,
+                "msg": CleanHelper.format_result_message(result),
+                "data": result}
+
+    @staticmethod
+    def __clean_dirs_run(data):
+        """
+        目录清理：执行模式，删除扫描命中的文件夹（不可撤销）。
+        :param data: {root_path, threshold_mb, follow_links}
+        """
+        root_path = data.get("root_path")
+        threshold_mb = data.get("threshold_mb")
+        follow_links = bool(data.get("follow_links"))
+        if root_path is None or threshold_mb is None or threshold_mb == "":
+            default_conf = CleanHelper.get_default_config()
+            if root_path is None:
+                root_path = default_conf.get("root_path")
+            if threshold_mb is None or threshold_mb == "":
+                threshold_mb = default_conf.get("threshold_mb")
+        if not root_path:
+            return {"code": -1, "msg": "未指定根目录"}
+        result = CleanHelper().clean(root_path=root_path,
+                                     threshold_mb=threshold_mb,
+                                     dry_run=False,
+                                     follow_links=follow_links)
+        if result.get("error"):
+            return {"code": -1, "msg": result["error"]}
+        return {"code": 0,
+                "msg": CleanHelper.format_result_message(result),
+                "data": result}
 
     @staticmethod
     def __start_mediasync(data):
