@@ -3,6 +3,70 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.0.9 (2026-09-29) — 媒体库同步「响应速度」优化 + 界面精简
+
+## 症状
+
+1. **点了没反应**：点首页「媒体库」打开同步弹窗后，界面要停留一小会儿才弹出来；
+2. **进度条长时间不动**：点「开始同步」后，进度条会长时间停在「正在获取 XXX 数据...」；
+3. **同步整体偏慢**：条目多时整个流程耗时明显。
+
+## 根因（前端 2 处 + 后端 2 处）
+
+| # | 位置 | 问题 | 后果 |
+|---|---|---|---|
+| 1 | `index.html::show_mediasync_modal` | 弹窗在**两次串行 ajax**（`refresh_process` → `mediasync_state`）都返回后才 `modal('show')` | 服务器稍慢就「点了没反应」 |
+| 2 | `index.html::start_media_sync` | 用 `setTimeout(..., 1000)` 延迟 1 秒才建立进度流 | 点「开始同步」后 1 秒内界面无任何反馈 |
+| 3 | `media_server.py` | `items = list(self.get_items(lib_id) or [])` —— `get_items` 是生成器且**每条都要单独请求详情接口**，`list()` 必须等全部抓完才返回 | 进度条在整个媒体库抓完前纹丝不动 |
+| 4 | `media_db.py` | 每条目一次 `commit()` | SQLite 每次 commit 都是一次 fsync，NAS 上尤其慢 |
+
+## 改动文件
+
+### `web/templates/index.html`
+
+- `show_mediasync_modal`：**先 `modal('show')`**（带「正在获取同步状态...」占位），再异步取状态；
+- `start_media_sync`：去掉 1 秒 `setTimeout`，改为**立即建立进度流**并显示「正在启动同步...」；
+- SSE `onmessage`：仅在 `ret.text` 非空时覆盖文案，避免瞬时空值抹掉占位提示；
+- 移除「全选 / 全不选」两个按钮与「不勾选任何库时…」提示行（保留「已选 N / M」计数与未勾选时的二次确认）。
+
+### `app/mediaserver/media_server.py`
+
+- 去掉 `list()` 预物化，改为 `for item in (self.get_items(lib_id) or []):` **边取边处理**，收一条就更新进度；
+- 引入 `BATCH_SIZE = 50` 的写入缓冲，每批落盘后刷新一次进度，每个库收尾与全局结束各做一次兜底 flush；
+- 条目级 `except` 中的 `ExceptionUtils` / `log` 调用再包一层 try/except，避免「异常处理器自身报错」逃逸出去中断整库循环。
+
+### `app/db/media_db.py`
+
+- 新增 `insert_batch(server_type, rows)`：一批一个事务，返回**实际写入条数**（跳过 `None` 条目）；
+- 批内**每条用 `session.begin_nested()`（savepoint）隔离**：单条失败只回滚自己，其余照常入库 —— 否则「一条坏数据拖垮整批」会比旧版逐条提交更糟；
+- `insert()` 保留（向后兼容）；新增 `import log`。
+
+## 测试
+
+| 脚本 | 覆盖 | 结果 |
+|---|---|---|
+| `_verify_speed_ui_609.py` | 源码断言 + 界面精简 + 即时响应 + AST 结构 | 27 / 27 |
+| `_verify_insert_batch_609.py` | **真实 SQLite**：批量写入 / 去重 / 空值 / savepoint 隔离 / 缓存清理 / 类型收敛 | 14 / 14 |
+| `_verify_mediasync_v608.py`（回归） | v6.0.8 五根因 + 端到端（桩已同步支持 `insert_batch`） | 51 / 51 |
+| `_verify_mediasync_clients_v608.py`（回归） | emby 客户端失败路径 / 容器下钻 / 混合库 | 37 / 37 |
+| `_verify_media_db_v608.py`（回归） | 类型收敛 / 缓存键 / 缓存隔离 | 28 / 28 |
+
+另：`python -m compileall app web config.py version.py` 通过。
+
+## 兼容性
+
+- 数据库表结构、配置项均未变，无需迁移；
+- `insert()` 保留，旧调用点不受影响；
+- 批量提交不改变最终入库结果（去重语义、类型收敛、缓存清理均与逐条一致，已有真实 SQLite 用例覆盖）。
+
+## 踩过的坑
+
+- **批量事务会把「单条失败」放大成「整批丢失」**：旧版逐条 `commit` 时坏数据只影响自己，改成一批一提交后必须补 savepoint，否则退步。测试用「不可 JSON 序列化的 seasoninfo」成功复现。
+- **异常处理器自己也可能抛异常**：`log.error(...)` / `ExceptionUtils.exception_traceback(...)` 若失败，会逃出内层 `except` 被外层捕获 → 触发 `rollback()` → 整批回滚。⇒ 异常处理路径必须自身兜底。
+- **`core.autocrlf=true` 下 `git status` 会对 LF 工作树报 `LF will be replaced by CRLF`**：只影响下次 checkout 的工作树显示，**不影响仓库存储**（本仓远端存储为 LF，`README.md` 除外，为 CRLF）。
+
+---
+
 # v6.0.8 (2026-09-29) — 我的媒体库同步全面修复
 
 ## 症状

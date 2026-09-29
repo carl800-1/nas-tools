@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.9** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -655,6 +655,26 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 > 排查同类问题时可先看容器日志里有没有「媒体库同步异常终止」或「同步条目 xxx 出错，跳过」这两行。
 
+#### 2.29 媒体库同步「响应速度」优化
+
+**问题**：点首页「媒体库」打开同步弹窗要停顿一下才出现；点「开始同步」后进度条长时间停在「正在获取 XXX 数据...」不动，看起来像卡死；条目多时同步整体偏慢。
+
+**原因**（前端 2 处 + 后端 2 处）：
+
+1. 弹窗要等**两次请求**都返回才显示；
+2. 「开始同步」后故意延迟 **1 秒**才建立进度流；
+3. 后端把媒体库条目列表**一次性全抓完**（每条都要单独请求详情接口）才开始处理，所以进度条在整库抓完前纹丝不动；
+4. 入库是**一条一提交**，机械硬盘 / NAS 上每秒只能写几条。
+
+**修复后**：
+
+- 点「媒体库」**立刻弹出**，状态稍后填充；点「开始同步」即刻开始刷新进度；
+- 进度条**边取边推进**，实时可见；
+- 入库改为**攒批提交**，同步明显变快；单条数据有问题时**只跳过那一条**，不会连带丢失整批；
+- 媒体库列表移除「全选 / 全不选」按钮与提示文字，排版更干净（「已选 N / M」计数保留）。
+
+> 若同步个别条目失败，日志会有「同步条目 xxx 出错，跳过」，不影响其余条目入库。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1275,7 +1295,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.8   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.9   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1378,4 +1398,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-29 ｜ 当前版本 v6.0.8_
+_Last updated: 2026-09-29 ｜ 当前版本 v6.0.9_
