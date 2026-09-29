@@ -360,6 +360,10 @@ class Plex(_IMediaClient):
                     library_type = MediaType.TV.value
                     image_list_str = self.get_libraries_image(library.key, 2)
                 case _:
+                    # 非影视库（music/photo 等）跳过，但打日志方便排障，
+                    # 避免用户「库明明存在却不在列表里」时完全无线索。
+                    log.info(f"【{self.client_name}】跳过非影视媒体库："
+                             f"{library.title} (type={library.type})")
                     continue
             libraries.append({
                 "id": library.key,
@@ -445,24 +449,38 @@ class Plex(_IMediaClient):
             section = self._plex.library.sectionByID(parent)
             if section:
                 for item in section.all():
-                    if not item:
-                        continue
-                    ids = self.__get_ids(item.guids)
-                    path = None
-                    if item.locations:
-                        path = item.locations[0]
-                    yield {"id": item.key,
-                           "library": item.librarySectionID,
-                           "type": item.type,
-                           "title": item.title,
-                           "originalTitle": item.originalTitle,
-                           "year": item.year,
-                           "tmdbid": ids['tmdb_id'],
-                           "imdbid": ids['imdb_id'],
-                           "tvdbid": ids['tvdb_id'],
-                           "path": path}
+                    try:
+                        if not item:
+                            continue
+                        ids = self.__get_ids(item.guids)
+                        path = None
+                        if item.locations:
+                            path = item.locations[0]
+                        item_id = item.key
+                        image_url = f"{self._host}photo/:/transcode?width=300&height=450"\
+                                    f"&url={self._plex._baseurl}{item.thumb}&X-Plex-Token={self._plex._token}"\
+                            if getattr(item, "thumb", None) else ""
+                        yield {"id": item_id,
+                               "library": item.librarySectionID,
+                               "type": item.type,
+                               "title": item.title,
+                               "originalTitle": item.originalTitle,
+                               "year": item.year,
+                               "tmdbid": ids['tmdb_id'],
+                               "imdbid": ids['imdb_id'],
+                               "tvdbid": ids['tvdb_id'],
+                               "path": path,
+                               "image": image_url,
+                               "link": f"{self._play_host or self._host}web/index.html"
+                                       f"#!/server/{self._plex.machineIdentifier}"
+                                       f"/details?key=%2Flibrary%2Fmetadata%2F{item_id}"}
+                    except Exception as e:
+                        # 条目级容错：单条出错只跳过该条，不能中断整个媒体库的同步
+                        ExceptionUtils.exception_traceback(e)
+                        log.error(f"【{self.client_name}】同步条目出错，跳过：" + str(e))
         except Exception as err:
             ExceptionUtils.exception_traceback(err)
+            log.error(f"【{self.client_name}】遍历媒体库 {parent} 出错：" + str(err))
         yield {}
 
     @staticmethod

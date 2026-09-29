@@ -197,13 +197,21 @@
         </div>
         <details class="m-3">
             <summary class="summary">
-              媒体库列表
+              媒体库列表（<span id="mediasync_lib_count">0 / {{ Librarys|length }}</span> 个已选）
             </summary>
+            <div class="d-flex align-items-center gap-2 mt-2">
+              <a href="javascript:select_SelectALL(true, 'sync_library'); update_mediasync_lib_count();"
+                 class="btn btn-sm btn-outline-secondary">全选</a>
+              <a href="javascript:select_SelectALL(false, 'sync_library'); update_mediasync_lib_count();"
+                 class="btn btn-sm btn-outline-secondary">全不选</a>
+              <span class="text-secondary small">不勾选任何库时，点「开始同步」将同步全部媒体库</span>
+            </div>
             <div class="row mt-2">
-              <div class="form-selectgroup">
+              <div class="form-selectgroup" id="sync_library_group">
                 {% for Library in Librarys %}
                 <label class="form-selectgroup-item">
                   <input type="checkbox" name="sync_library" value="{{ Library.id }}" class="form-selectgroup-input"
+                      onchange="update_mediasync_lib_count();"
                       {% if Library.id in LibrarySyncConf %}checked{% endif %}
                   >
                   <span class="form-selectgroup-label">{{ Library.name }}</span>
@@ -390,6 +398,7 @@
           $("#mediasync_btn").text("开始同步")
               .attr("href", "javascript:start_media_sync(true)");
           $("#save_mediasync_btn").show();
+          update_mediasync_lib_count();
           $("#index-mediasync-modal").modal('show');
         }, true, false);
       }
@@ -401,8 +410,25 @@
     $("#index-mediasync-modal").modal('hide');
   }
 
+  // 更新媒体库已选计数
+  function update_mediasync_lib_count() {
+    let total = $("input[name=sync_library][type=checkbox]").length;
+    let selected = select_GetSelectedVAL("sync_library").length;
+    $("#mediasync_lib_count").text(selected + " / " + total);
+  }
+
   //开始媒体库同步
   function start_media_sync(flag) {
+    if (flag) {
+      let selected = select_GetSelectedVAL("sync_library");
+      if (selected.length === 0) {
+        // 一个库都没勾选时，后端语义是「同步全部」，这里必须让用户确认，
+        // 否则很容易误以为「没勾选 = 不同步」。
+        if (!confirm("未勾选任何媒体库，将同步全部媒体库，确定继续？")) {
+          return;
+        }
+      }
+    }
     $("#mediasync_btn").text("关闭")
         .attr("href", "javascript:close_mediasync_modal()");
     $("#save_mediasync_btn").hide();

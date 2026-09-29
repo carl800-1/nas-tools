@@ -194,7 +194,9 @@ class MediaServer:
         """
         if not self.server:
             return []
-        return self.server.get_items(parent)
+        # 各客户端实现不一致（emby/jellyfin/plex 是生成器、ugreen 是 list），
+        # 且都可能在连接失败时返回 None，这里统一兜底为空列表。
+        return self.server.get_items(parent) or []
 
     def get_play_url(self, item_id):
         """
@@ -221,6 +223,26 @@ class MediaServer:
         """
         if not self.server:
             return
+        # 用 try/finally 保证进度条一定会 end()：
+        # 历史上任何一次未捕获异常都会让前端弹窗永久卡在「正在获取 xxx 数据...」。
+        try:
+            self.__sync_mediaserver_impl()
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error("【MediaServer】媒体库同步异常终止：" + str(e))
+            try:
+                self.progress.update(ptype=ProgressKey.MediaSync,
+                                     value=100,
+                                     text="媒体库同步异常终止，请查看日志")
+            except Exception:
+                pass
+        finally:
+            self.progress.end(ProgressKey.MediaSync)
+
+    def __sync_mediaserver_impl(self):
+        """
+        媒体库同步的实现体（由 sync_mediaserver 统一包裹进度与异常）
+        """
         with lock:
             # 开始进度条
             log.info("【MediaServer】开始同步媒体库数据...")
@@ -274,28 +296,34 @@ class MediaServer:
                 # 获取媒体库所有项目
                 self.progress.update(ptype=ProgressKey.MediaSync,
                                      text="正在获取 %s 数据..." % lib_name)
-                items = self.get_items(lib_id)
+                # emby/jellyfin/plex 的 get_items 是生成器，不能直接 len()，
+                # 先物化为 list 再计数与遍历（ugreen 本来就返回 list，同样安全）。
+                items = list(self.get_items(lib_id) or [])
                 log.info(f"【MediaServer】媒体库 {lib_name} 获取到 {len(items)} 个条目")
                 for item in items:
-                    if not item:
-                        continue
-                    # 更新进度
-                    seasoninfo = []
-                    total_count += 1
-                    if item.get("type") in ['Movie', 'movie']:
-                        movie_count += 1
-                    elif item.get("type") in ['Series', 'show']:
-                        tv_count += 1
-                        # 查询剧集信息
-                        seasoninfo = self.get_tv_episodes(item.get("id"))
-                    self.progress.update(ptype=ProgressKey.MediaSync,
-                                         text="正在同步 %s，已完成：%s / %s ..." % (
-                                             lib_name, total_count, total_media_count),
-                                         value=round(100 * total_count / total_media_count, 1) if total_media_count else 0)
-                    # 插入数据
-                    self.mediadb.insert(server_type=self._server_type,
-                                        iteminfo=item,
-                                        seasoninfo=seasoninfo)
+                    try:
+                        if not item:
+                            continue
+                        # 更新进度
+                        seasoninfo = []
+                        total_count += 1
+                        if item.get("type") in ['Movie', 'movie']:
+                            movie_count += 1
+                        elif item.get("type") in ['Series', 'show']:
+                            tv_count += 1
+                            # 查询剧集信息
+                            seasoninfo = self.get_tv_episodes(item.get("id"))
+                        self.progress.update(ptype=ProgressKey.MediaSync,
+                                             text="正在同步 %s，已完成：%s / %s ..." % (
+                                                 lib_name, total_count, total_media_count),
+                                             value=round(100 * total_count / total_media_count, 1) if total_media_count else 0)
+                        # 插入数据
+                        self.mediadb.insert(server_type=self._server_type,
+                                            iteminfo=item,
+                                            seasoninfo=seasoninfo)
+                    except Exception as e:
+                        ExceptionUtils.exception_traceback(e)
+                        log.error(f"【MediaServer】同步条目 {item.get('id')} 出错，跳过：" + str(e))
 
             # 更新总体同步情况
             self.mediadb.statistics(server_type=self._server_type,
@@ -326,10 +354,13 @@ class MediaServer:
         :param episode: 集号
         :return: 媒体服务器中的ITEMID
         """
+        # 名称/年份相同时电影与剧集可能同时命中（如《三体》既有电影又有剧集），
+        # 这里把媒体类型下推给 query，从 SQL 层就按类型收敛，避免串台。
         media = self.mediadb.query(server_type=self._server_type,
                                    title=title,
                                    year=year,
-                                   tmdbid=tmdbid)
+                                   tmdbid=tmdbid,
+                                   mtype=mtype)
         if not media:
             return None
 

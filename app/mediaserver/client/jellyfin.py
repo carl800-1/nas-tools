@@ -447,12 +447,25 @@ class Jellyfin(_IMediaClient):
             return []
         libraries = []
         for library in self.__get_jellyfin_librarys() or []:
-            match library.get("CollectionType"):
+            # CollectionType 与 Emby 同构，混合库该字段为 null。原先只认
+            # movies/tvshows，导致「动画电影」「综艺」「纪录片」等库被静默丢弃。
+            collection_type = library.get("CollectionType")
+            match collection_type:
                 case "movies":
                     library_type = MediaType.MOVIE.value
                 case "tvshows":
                     library_type = MediaType.TV.value
+                case "musicvideos":
+                    library_type = MediaType.MOVIE.value
+                case "homevideos":
+                    library_type = MediaType.MOVIE.value
+                case None | "":
+                    # 混合库：里面可能同时有电影和剧集，按通用类型放行，
+                    # 具体条目类型在 get_items 里逐条判定。
+                    library_type = ""
                 case _:
+                    log.info(f"【{self.client_name}】跳过非影视媒体库："
+                             f"{library.get('Name')} (CollectionType={collection_type})")
                     continue
             image = self.get_local_image_by_id(library.get("Id"), remote=False, inner=True)
             link = f"{self._play_host or self._host}web/index.html#!" \
@@ -509,10 +522,16 @@ class Jellyfin(_IMediaClient):
         try:
             res = RequestUtils().get_res(req_url)
             if res and res.status_code == 200:
-                return res.json()
+                return res.json() or {}
+            if not res:
+                log.error(f"【{self.client_name}】Users/Items/{itemid} 未获取到返回数据")
+            else:
+                log.error(f"【{self.client_name}】Users/Items/{itemid} 返回状态码 {res.status_code}")
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
-            return {}
+            log.error(f"【{self.client_name}】连接Users/Items/{itemid}出错：" + str(e))
+        # 统一契约：任何失败路径都返回空字典，调用方无需再做 None 判断
+        return {}
 
     def get_items(self, parent):
         """
@@ -525,26 +544,62 @@ class Jellyfin(_IMediaClient):
         req_url = "%sUsers/%s/Items?parentId=%s&api_key=%s" % (self._host, self._user, parent, self._apikey)
         try:
             res = RequestUtils().get_res(req_url)
-            if res and res.status_code == 200:
-                results = res.json().get("Items") or []
-                for result in results:
+            if not res:
+                log.error(f"【{self.client_name}】Users/Items?parentId={parent} 未获取到返回数据")
+                yield {}
+                return
+            if res.status_code != 200:
+                log.error(f"【{self.client_name}】Users/Items?parentId={parent} 返回状态码 {res.status_code}")
+                yield {}
+                return
+            results = res.json().get("Items") or []
+            for result in results:
+                try:
                     if not result:
                         continue
-                    if result.get("Type") in ["Movie", "Series"]:
-                        item_info = self.get_iteminfo(result.get("Id"))
-                        yield {"id": result.get("Id"),
-                               "library": item_info.get("ParentId"),
-                               "type": item_info.get("Type"),
-                               "title": item_info.get("Name"),
-                               "originalTitle": item_info.get("OriginalTitle"),
-                               "year": item_info.get("ProductionYear"),
-                               "tmdbid": item_info.get("ProviderIds", {}).get("Tmdb"),
-                               "imdbid": item_info.get("ProviderIds", {}).get("Imdb"),
+                    item_type = result.get("Type") or ""
+                    if item_type in ["Movie", "Series"]:
+                        item_info = self.get_iteminfo(result.get("Id")) or {}
+                        # 详情接口失败时降级用列表接口自带的字段，保证条目不丢
+                        item_id = result.get("Id")
+                        provider_ids = item_info.get("ProviderIds") or {}
+                        image_url = f"{self._host}Items/{item_id}/Images/Primary"\
+                                    f"?fillWidth=300&api_key={self._apikey}" if item_id else ""
+                        yield {"id": item_id,
+                               "library": item_info.get("ParentId") or parent,
+                               "type": item_info.get("Type") or item_type,
+                               "title": item_info.get("Name") or result.get("Name"),
+                               "originalTitle": item_info.get("OriginalTitle") or result.get("OriginalTitle"),
+                               "year": item_info.get("ProductionYear") or result.get("ProductionYear"),
+                               "tmdbid": provider_ids.get("Tmdb"),
+                               "imdbid": provider_ids.get("Imdb"),
                                "path": item_info.get("Path"),
+                               "image": image_url,
+                               "link": f"{self._play_host or self._host}web/index.html"
+                                       f"#!/item?id={item_id}&serverId={self._serverid}",
                                "json": str(item_info)}
-                    elif "Folder" in result.get("Type"):
-                        for item in self.get_items(result.get("Id")):
-                            yield item
+                    elif item_type in ["BoxSet", "Season", "Episode"] or "Folder" in item_type:
+                        # BoxSet(合集) / Season(季) / Folder(目录) 都是容器，继续下钻；
+                        # Episode 单独成条时按条目登记，避免整集丢失。
+                        if item_type == "Episode":
+                            item_id = result.get("Id")
+                            yield {"id": item_id,
+                                   "library": parent,
+                                   "type": item_type,
+                                   "title": result.get("Name"),
+                                   "originalTitle": result.get("OriginalTitle"),
+                                   "year": result.get("ProductionYear"),
+                                   "tmdbid": None,
+                                   "imdbid": None,
+                                   "path": None,
+                                   "json": str(result)}
+                        else:
+                            for item in self.get_items(result.get('Id')):
+                                yield item
+                except Exception as e:
+                    # 条目级容错：单条出错只跳过该条，不能中断整个媒体库的同步
+                    ExceptionUtils.exception_traceback(e)
+                    log.error(f"【{self.client_name}】同步条目 {result.get('Id')} 出错，跳过：" + str(e))
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】连接Users/Items出错：" + str(e))
