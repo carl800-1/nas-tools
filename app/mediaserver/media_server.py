@@ -289,6 +289,10 @@ class MediaServer:
             tv_count = 0
             # 清空登记薄
             self.mediadb.empty(server_type=self._server_type)
+            # 批量写入缓冲：SQLite 上每 commit 一次就是一次 fsync，逐条提交在 NAS 上极慢。
+            # 这里每 BATCH_SIZE 条合并成一个事务，并在每批结束后刷新一次进度。
+            BATCH_SIZE = 50
+            batch = []
             for library in libraries_to_sync:
                 lib_id = library.get("id")
                 lib_name = library.get("name", lib_id)
@@ -296,34 +300,54 @@ class MediaServer:
                 # 获取媒体库所有项目
                 self.progress.update(ptype=ProgressKey.MediaSync,
                                      text="正在获取 %s 数据..." % lib_name)
-                # emby/jellyfin/plex 的 get_items 是生成器，不能直接 len()，
-                # 先物化为 list 再计数与遍历（ugreen 本来就返回 list，同样安全）。
-                items = list(self.get_items(lib_id) or [])
-                log.info(f"【MediaServer】媒体库 {lib_name} 获取到 {len(items)} 个条目")
-                for item in items:
+                # 逐个消费生成器：emby/jellyfin/plex 的 get_items 是生成器，且每一条都要
+                # 单独请求详情接口。若先 list() 物化，必须等全部条目抓完进度条才会动，
+                # 大库会长时间停在「正在获取 xxx 数据...」，看起来像卡死。
+                # 这里改为边取边处理，收一条就更新进度、写一条库。
+                item_count = 0
+                for item in (self.get_items(lib_id) or []):
                     try:
                         if not item:
                             continue
-                        # 更新进度
                         seasoninfo = []
                         total_count += 1
+                        item_count += 1
                         if item.get("type") in ['Movie', 'movie']:
                             movie_count += 1
                         elif item.get("type") in ['Series', 'show']:
                             tv_count += 1
                             # 查询剧集信息
                             seasoninfo = self.get_tv_episodes(item.get("id"))
-                        self.progress.update(ptype=ProgressKey.MediaSync,
-                                             text="正在同步 %s，已完成：%s / %s ..." % (
-                                                 lib_name, total_count, total_media_count),
-                                             value=round(100 * total_count / total_media_count, 1) if total_media_count else 0)
-                        # 插入数据
-                        self.mediadb.insert(server_type=self._server_type,
-                                            iteminfo=item,
-                                            seasoninfo=seasoninfo)
+                        batch.append((item, seasoninfo))
+                        # 攒够一批就落盘，并同步刷新一次进度
+                        if len(batch) >= BATCH_SIZE:
+                            self.mediadb.insert_batch(server_type=self._server_type, rows=batch)
+                            batch = []
+                            self.progress.update(ptype=ProgressKey.MediaSync,
+                                                 text="正在同步 %s，已完成：%s / %s ..." % (
+                                                     lib_name, total_count, total_media_count),
+                                                 value=round(100 * total_count / total_media_count, 1) if total_media_count else 0)
                     except Exception as e:
-                        ExceptionUtils.exception_traceback(e)
-                        log.error(f"【MediaServer】同步条目 {item.get('id')} 出错，跳过：" + str(e))
+                        # 异常处理自身也要兜住：这里的 log/ExceptionUtils 若再抛异常，
+                        # 会中断整库循环，把「单条失败」放大成「整库丢失」。
+                        try:
+                            ExceptionUtils.exception_traceback(e)
+                            log.error(f"【MediaServer】同步条目 {item.get('id')} 出错，跳过：" + str(e))
+                        except Exception:
+                            pass
+                # 每个库收尾：把剩余缓冲落盘并刷新进度
+                if batch:
+                    self.mediadb.insert_batch(server_type=self._server_type, rows=batch)
+                    batch = []
+                self.progress.update(ptype=ProgressKey.MediaSync,
+                                     text="正在同步 %s，已完成：%s / %s ..." % (
+                                         lib_name, total_count, total_media_count),
+                                     value=round(100 * total_count / total_media_count, 1) if total_media_count else 0)
+                log.info(f"【MediaServer】媒体库 {lib_name} 已处理 {item_count} 个条目")
+            # 全部库处理完后，兜底提交任何残留
+            if batch:
+                self.mediadb.insert_batch(server_type=self._server_type, rows=batch)
+                batch = []
 
             # 更新总体同步情况
             self.mediadb.statistics(server_type=self._server_type,

@@ -199,13 +199,6 @@
             <summary class="summary">
               媒体库列表（<span id="mediasync_lib_count">0 / {{ Librarys|length }}</span> 个已选）
             </summary>
-            <div class="d-flex align-items-center gap-2 mt-2">
-              <a href="javascript:select_SelectALL(true, 'sync_library'); update_mediasync_lib_count();"
-                 class="btn btn-sm btn-outline-secondary">全选</a>
-              <a href="javascript:select_SelectALL(false, 'sync_library'); update_mediasync_lib_count();"
-                 class="btn btn-sm btn-outline-secondary">全不选</a>
-              <span class="text-secondary small">不勾选任何库时，点「开始同步」将同步全部媒体库</span>
-            </div>
             <div class="row mt-2">
               <div class="form-selectgroup" id="sync_library_group">
                 {% for Library in Librarys %}
@@ -383,11 +376,19 @@
 <script type="text/javascript">
   //显示媒体库同步框
   function show_mediasync_modal() {
-    //获取同步状态
+    // 先把弹窗打开（带占位文案），再异步取状态。
+    // 之前是等 refresh_process + mediasync_state 两次串行请求都回来才 modal('show')，
+    // 服务器稍慢就会「点了没反应」，是「反应慢」的观感主因。
+    update_mediasync_lib_count();
+    $("#mediasync_status").text("正在获取同步状态...");
+    $("#mediasync_btn").text("开始同步")
+        .attr("href", "javascript:start_media_sync(true)");
+    $("#save_mediasync_btn").show();
+    $("#index-mediasync-modal").modal('show');
+    // 获取同步状态
     ajax_post("refresh_process", {type: "mediasync"}, function (ret) {
       if (ret.code === 0 && ret.value < 100) {
         //同步中
-        $("#index-mediasync-modal").modal('show');
         start_media_sync(false);
       } else {
         //没有在同步，获取目前同步的数据情况
@@ -395,11 +396,6 @@
           if (ret.code === 0) {
             $("#mediasync_status").text(ret.text);
           }
-          $("#mediasync_btn").text("开始同步")
-              .attr("href", "javascript:start_media_sync(true)");
-          $("#save_mediasync_btn").show();
-          update_mediasync_lib_count();
-          $("#index-mediasync-modal").modal('show');
         }, true, false);
       }
     }, true, false);
@@ -432,14 +428,15 @@
     $("#mediasync_btn").text("关闭")
         .attr("href", "javascript:close_mediasync_modal()");
     $("#save_mediasync_btn").hide();
+    // 立即给出反馈并建立进度流，不再等 1 秒
+    $("#mediasync_status").text("正在启动同步...");
+    start_mediasync_progress();
     if (flag) {
       ajax_post("start_mediasync", {
         "librarys": select_GetSelectedVAL("sync_library")
       }, function (ret) {
-        setTimeout("start_mediasync_progress()", 1000);
+        // 后端已起线程；若立即建流时进度还没有值，SSE 会在下次推送时补上
       }, true, false);
-    } else {
-      setTimeout("start_mediasync_progress()", 1000);
     }
   }
 
@@ -473,7 +470,10 @@
       if (ret.code === 0) {
         $("#mediasync_process_bar").attr("style", "width: " + ret.value + "%")
             .attr("aria-valuenow", ret.value);
-        $("#mediasync_status").text(ret.text);
+        // 只在有文案时覆盖，避免瞬时空值把「正在启动同步...」抹掉
+        if (ret.text) {
+          $("#mediasync_status").text(ret.text);
+        }
       }
       if ($("#index-mediasync-modal").is(":hidden")) {
         stop_mediasync_progress();

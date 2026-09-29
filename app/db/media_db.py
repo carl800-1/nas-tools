@@ -12,6 +12,8 @@ from app.db.models import BaseMedia, MEDIASYNCITEMS, MEDIASYNCSTATISTIC
 from app.utils import ExceptionUtils
 from config import Config
 
+import log
+
 lock = threading.Lock()
 _Engine = create_engine(
     f"sqlite:///{os.path.join(Config().get_config_path(), 'media.db')}?check_same_thread=False",
@@ -65,6 +67,61 @@ class MediaDb:
             ExceptionUtils.exception_traceback(e)
             self.session.rollback()
         return False
+
+    def insert_batch(self, server_type, rows):
+        """
+        批量写入媒体库条目。同步大库时逐条 commit 会在 SQLite 上产生大量 fsync
+        （NAS 上尤其慢），这里合并成一次事务提交。
+        :param rows: [(iteminfo, seasoninfo), ...]
+        :return: 成功写入的条数
+
+        ⚠️ 条目级容错不能丢：整批一个事务意味着「一条坏数据会拖垮整批」，
+        因此每条用 savepoint 隔离，坏条目只回滚自己、其余照常入库。
+        """
+        if not server_type or not rows:
+            return 0
+        written = 0
+        try:
+            for iteminfo, seasoninfo in rows:
+                if not iteminfo:
+                    continue
+                item_id = None
+                try:
+                    item_id = iteminfo.get("id")
+                    # 单条 savepoint：该条失败只回滚这一条，不影响同批其它条目
+                    with self.session.begin_nested():
+                        self.session.query(MEDIASYNCITEMS).filter(
+                            MEDIASYNCITEMS.SERVER == server_type,
+                            MEDIASYNCITEMS.ITEM_ID == item_id).delete()
+                        self.session.add(MEDIASYNCITEMS(
+                            SERVER=server_type,
+                            LIBRARY=iteminfo.get("library"),
+                            ITEM_ID=item_id,
+                            ITEM_TYPE=iteminfo.get("type"),
+                            TITLE=iteminfo.get("title"),
+                            ORGIN_TITLE=iteminfo.get("originalTitle"),
+                            YEAR=iteminfo.get("year"),
+                            TMDBID=iteminfo.get("tmdbid"),
+                            IMDBID=iteminfo.get("imdbid"),
+                            PATH=iteminfo.get("path"),
+                            JSON=json.dumps(seasoninfo)
+                        ))
+                    written += 1
+                except Exception as e:
+                    # 异常处理本身也要兜住：若 ExceptionUtils / log 再抛异常，
+                    # 会逃到外层导致整批 rollback，把「单条失败」放大成「整批丢失」。
+                    try:
+                        ExceptionUtils.exception_traceback(e)
+                        log.error(f"【MediaDb】批量写入条目 {item_id} 出错，跳过：" + str(e))
+                    except Exception:
+                        pass
+            self.session.commit()
+            self.__clear_query_cache()
+            return written
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            self.session.rollback()
+        return written
 
     @staticmethod
     def __clear_query_cache():
