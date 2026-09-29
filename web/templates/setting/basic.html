@@ -929,129 +929,139 @@
                         data-bs-toggle="tooltip">?</span>
                 </div>
               </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.search_keyword" {% if
-                      Config.laboratory and Config.laboratory.search_keyword %}checked{% endif %}>
-                    <span class="form-check-label">辅助识别 <span class="form-help"
-                                                                  title="开启后，无法识别到媒体信息时会尝试猜测和纠正关键词并再次匹配，会大大增加识别耗时，一般情况下不建议开启"
-                                                                  data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
+              {# 开关组：统一 4 列网格（每行 4 个），行高一致 #}
+              <div class="col-12">
+                <div class="row">
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.search_keyword" {% if
+                          Config.laboratory and Config.laboratory.search_keyword %}checked{% endif %}>
+                        <span class="form-check-label">辅助识别 <span class="form-help"
+                                                                      title="开启后，无法识别到媒体信息时会尝试猜测和纠正关键词并再次匹配，会大大增加识别耗时，一般情况下不建议开启"
+                                                                      data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.search_tmdbweb" {% if
+                          Config.laboratory and Config.laboratory.search_tmdbweb %}checked{% endif %}>
+                        <span class="form-check-label">WEB增强识别 <span class="form-help"
+                                                                         title="开启后，通过TMDB的API无法识别到媒体信息时，会尝试通过themoviedb.org网站再次搜索匹配，仅个别极端情况下有效，会大大增加识别耗时，一般情况下不建议开启"
+                                                                         data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.recognize_enhance_enable" {% if
+                          Config.laboratory and Config.laboratory.recognize_enhance_enable %}checked{% endif %}>
+                        <span class="form-check-label">增强识别V2 <span class="form-help"
+                                                                      title="开启后，会使用增强识别V2功能去识别，优先级最高"
+                                                                      data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.quick_search" {% if
+                          Config.laboratory and Config.laboratory.quick_search %}checked{% endif %}>
+                        <span class="form-check-label">极速搜索 <span class="form-help"
+                                                                      title="开启后搜索过程会加入本地算法协助识别匹配资源，优化搜索体验"
+                                                                      data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.tmdb_cache_expire" {% if
+                          Config.laboratory and Config.laboratory.tmdb_cache_expire %}checked{% endif %}>
+                        <span class="form-check-label">TMDB缓存过期策略 <span class="form-help"
+                                                                              title="开启TMDB缓存过期策略后，默认7天过期，过期缓存将被删除,  7天内访问过期时间可以被刷新，建议开启"
+                                                                              data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.use_douban_titles" {% if
+                          Config.laboratory and Config.laboratory.use_douban_titles %}checked{% endif %}>
+                        <span class="form-check-label">默认搜索豆瓣资源 <span class="form-help"
+                                                                              title="开启将使用豆瓣进行电影电视剧的名称搜索，允许中文名不完整时自动联想，但如豆瓣数据与TMDB不一致时可能会无法搜索；关闭后使用TMDB的数据，对中文支持不友好，但不会有无法搜索的问题"
+                                                                              data-bs-toggle="tooltip">?</span></span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.search_en_title" {% if
+                          Config.laboratory and Config.laboratory.search_en_title %}checked{% endif %}>
+                        <span class="form-check-label">搜索优先使用英文名 <span class="form-help"
+                                                                                title="只决定先搜中文名还是先搜英文名，不再决定「搜不搜第二个名称」——那是右边「补搜阈值」的事"
+                                                                                data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.show_more_sites" {% if
+                          Config.laboratory and Config.laboratory.show_more_sites %}checked{% endif %}>
+                        <span class="form-check-label">展示更多站点 <span class="form-help"
+                                                                                title="开启后会展示更多内置站点"
+                                                                                data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+    <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="mb-3">
+                      <label class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="laboratory.simplify_library_notification" {% if
+                          Config.laboratory and Config.laboratory.simplify_library_notification %}checked{% endif %}>
+                        <span class="form-check-label">简化入库推送通知 <span class="form-help"
+                                                                                title="开启后会简化入库推送通知"
+                                                                                data-bs-toggle="tooltip">?</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.search_tmdbweb" {% if
-                      Config.laboratory and Config.laboratory.search_tmdbweb %}checked{% endif %}>
-                    <span class="form-check-label">WEB增强识别 <span class="form-help"
-                                                                     title="开启后，通过TMDB的API无法识别到媒体信息时，会尝试通过themoviedb.org网站再次搜索匹配，仅个别极端情况下有效，会大大增加识别耗时，一般情况下不建议开启"
-                                                                     data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.recognize_enhance_enable" {% if
-                      Config.laboratory and Config.laboratory.recognize_enhance_enable %}checked{% endif %}>
-                    <span class="form-check-label">增强识别V2 <span class="form-help"
-                                                                  title="开启后，会使用增强识别V2功能去识别，优先级最高"
-                                                                  data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.quick_search" {% if
-                      Config.laboratory and Config.laboratory.quick_search %}checked{% endif %}>
-                    <span class="form-check-label">极速搜索 <span class="form-help"
-                                                                  title="开启后搜索过程会加入本地算法协助识别匹配资源，优化搜索体验"
-                                                                  data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.tmdb_cache_expire" {% if
-                      Config.laboratory and Config.laboratory.tmdb_cache_expire %}checked{% endif %}>
-                    <span class="form-check-label">TMDB缓存过期策略 <span class="form-help"
-                                                                          title="开启TMDB缓存过期策略后，默认7天过期，过期缓存将被删除,  7天内访问过期时间可以被刷新，建议开启"
-                                                                          data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.use_douban_titles" {% if
-                      Config.laboratory and Config.laboratory.use_douban_titles %}checked{% endif %}>
-                    <span class="form-check-label">默认搜索豆瓣资源 <span class="form-help"
-                                                                          title="开启将使用豆瓣进行电影电视剧的名称搜索，允许中文名不完整时自动联想，但如豆瓣数据与TMDB不一致时可能会无法搜索；关闭后使用TMDB的数据，对中文支持不友好，但不会有无法搜索的问题"
-                                                                          data-bs-toggle="tooltip">?</span></span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.search_en_title" {% if
-                      Config.laboratory and Config.laboratory.search_en_title %}checked{% endif %}>
-                    <span class="form-check-label">搜索优先使用英文名 <span class="form-help"
-                                                                            title="只决定先搜中文名还是先搜英文名，不再决定「搜不搜第二个名称」——那是右边「补搜阈值」的事"
-                                                                            data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-label">第二名称补搜阈值 <span class="form-help"
-                                                                title="累计有效结果少于该条数时，自动换下一个名称补搜并合并去重。1 = 只有一条都搜不到才补搜（老版本行为）；5 = 不足 5 条就补搜（推荐）；填一个很大的数 = 把所有候选名都搜一遍。只增加结果、不会减少"
-                                                                data-bs-toggle="tooltip">?</span></label>
-                  <input type="text" class="form-control" id="laboratory.search_en_min_result"
-                         value="{{ Config.laboratory.search_en_min_result if Config.laboratory and Config.laboratory.search_en_min_result is not none else 5 }}">
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-label">最多搜索几个名称 <span class="form-help"
-                                                              title="候选名顺序：首选名 → 次选名 → 原名 → TMDB别名。1 = 只搜首选名；2 = 首选名 + 次选名（默认，与老版本请求量相同）；3 = 再补一个 TMDB 别名。填得越大，对站点的请求量越多，越容易触发站点流控"
-                                                              data-bs-toggle="tooltip">?</span></label>
-                  <input type="text" class="form-control" id="laboratory.search_candidate_max"
-                         value="{{ Config.laboratory.search_candidate_max if Config.laboratory and Config.laboratory.search_candidate_max is not none else 2 }}">
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.show_more_sites" {% if
-                      Config.laboratory and Config.laboratory.show_more_sites %}checked{% endif %}>
-                    <span class="form-check-label">展示更多站点 <span class="form-help"
-                                                                            title="开启后会展示更多内置站点"
-                                                                            data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div class="col-12 col-xl-3">
-                <div class="mb-3">
-                  <label class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="laboratory.simplify_library_notification" {% if
-                      Config.laboratory and Config.laboratory.simplify_library_notification %}checked{% endif %}>
-                    <span class="form-check-label">简化入库推送通知 <span class="form-help"
-                                                                            title="开启后会简化入库推送通知"
-                                                                            data-bs-toggle="tooltip">?</span>
-                    </span>
-                  </label>
+              {# 数值项：并排一行，各占一半宽 #}
+              <div class="col-12">
+                <div class="row">
+    <div class="col-12 col-md-6 col-xl-6">
+                    <div class="mb-3">
+                      <label class="form-label">第二名称补搜阈值 <span class="form-help"
+                                                                    title="累计有效结果少于该条数时，自动换下一个名称补搜并合并去重。1 = 只有一条都搜不到才补搜（老版本行为）；5 = 不足 5 条就补搜（推荐）；填一个很大的数 = 把所有候选名都搜一遍。只增加结果、不会减少"
+                                                                    data-bs-toggle="tooltip">?</span></label>
+                      <input type="text" class="form-control" id="laboratory.search_en_min_result"
+                             value="{{ Config.laboratory.search_en_min_result if Config.laboratory and Config.laboratory.search_en_min_result is not none else 5 }}">
+                    </div>
+                  </div>
+    <div class="col-12 col-md-6 col-xl-6">
+                    <div class="mb-3">
+                      <label class="form-label">最多搜索几个名称 <span class="form-help"
+                                                                  title="候选名顺序：首选名 → 次选名 → 原名 → TMDB别名。1 = 只搜首选名；2 = 首选名 + 次选名（默认，与老版本请求量相同）；3 = 再补一个 TMDB 别名。填得越大，对站点的请求量越多，越容易触发站点流控"
+                                                                  data-bs-toggle="tooltip">?</span></label>
+                      <input type="text" class="form-control" id="laboratory.search_candidate_max"
+                             value="{{ Config.laboratory.search_candidate_max if Config.laboratory and Config.laboratory.search_candidate_max is not none else 2 }}">
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
