@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.9** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.1.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -675,6 +675,16 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 > 若同步个别条目失败，日志会有「同步条目 xxx 出错，跳过」，不影响其余条目入库。
 
+#### 2.30 「识别与搜索」区排版重排
+
+**问题**：设置页「识别与搜索」一区里，开关与数值输入框混排在同一行，行高忽高忽低（36px 与 80px 交替）、两个数值框分散在上下两行、右下角还空出一块。
+
+**修复后**：
+
+- **9 个开关归为整齐的 4 列网格**，行高完全统一；窄屏自动降为 2 列；
+- **两个数值框并排成一行**，各占一半宽，同类控件对齐；
+- 功能、字段、保存逻辑**均未改动**。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1295,7 +1305,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.9   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.1.1   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1398,4 +1408,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-29 ｜ 当前版本 v6.0.9_
+_Last updated: 2026-09-30 ｜ 当前版本 v6.1.1_
