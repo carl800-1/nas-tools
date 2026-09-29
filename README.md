@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.0.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.0.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -634,6 +634,27 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 - 根目录与阈值都可在 `config/config.yaml` 的 `clean_dirs` 段预置（留空则每次在界面上填）；
   阈值填非法值时会回落为 0（只清空文件夹），避免误删有内容的目录。
 
+#### 2.28 我的媒体库同步：修复「卡在正在获取数据」
+
+**问题**：点「我的媒体库 → 媒体库同步」后，弹窗一直停在「**正在获取 XXX 数据...**」，进度条不走、不报错、结束不了；「统计」里电影/剧集数量始终是 0。同步 **Emby、Jellyfin、Plex 都会命中**。
+
+**原因**：三件事叠加 ——
+
+1. `get_items()` 在 Emby/Jellyfin/Plex 客户端里是**生成器**，而同步代码直接对它调用 `len()`，第一步就抛 `TypeError`；
+2. 同步方法**没有兜底**，异常冒泡出线程后 `progress.end()` 永远不会执行，前端因此**永久停留在「正在获取...」**（这就是「卡住」的直接原因）；
+3. 单条目抓取详情失败（接口超时/非 200）时函数隐式返回 `None`，下一行 `.get()` 立刻抛异常并被外层吞掉，**整个媒体库的循环当场中断**，后面的条目一条都不入库。
+
+**修复后**：
+
+- 同步**不会再卡死**：无论发生什么异常，弹窗都会结束并给出明确提示；
+- 单条目失败只跳过该条并记日志，**不再连带丢失整个库**；
+- **「动画电影」「综艺」「纪录片」等混合库不再被静默丢弃** —— 原先只识别 `CollectionType` 为 `movies`/`tvshows` 的库；
+- 剧集下的 **合集（BoxSet）/ 季（Season）/ 目录**会继续向下展开，不再漏掉嵌套结构里的内容；
+- 同名电影与剧集（如《三体》）不再互相误判为「已存在」，避免重复下载或漏下；
+- 媒体库列表新增「**全选 / 全不选**」与「**已选 N / M 个库**」计数；一个库都没勾选时点「开始同步」会先确认 —— 此时的后端语义是**同步全部库**。
+
+> 排查同类问题时可先看容器日志里有没有「媒体库同步异常终止」或「同步条目 xxx 出错，跳过」这两行。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1254,7 +1275,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.0.7   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.0.8   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1357,4 +1378,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-24 ｜ 当前版本 v6.0.7_
+_Last updated: 2026-09-29 ｜ 当前版本 v6.0.8_
