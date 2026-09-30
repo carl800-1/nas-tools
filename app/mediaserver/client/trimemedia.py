@@ -631,7 +631,7 @@ class TrimeMediaClient(_IMediaClient):
                     self._play_host = play_api.host
                     play_api.close()
                 else:
-                    log.warning(
+                    log.warn(
                         f"【{self.client_name}】播放地址 {self._play_host} 无法连接，将按填写值使用")
             # 刷新媒体库列表缓存
             self.get_libraries()
@@ -656,7 +656,7 @@ class TrimeMediaClient(_IMediaClient):
         else:
             candidates.append(base + "/v")
             candidates.append(base)
-        last_detail = None
+        reasons = []
         for cand in candidates:
             try:
                 api = _TrimeApi(
@@ -666,24 +666,29 @@ class TrimeMediaClient(_IMediaClient):
                 )
             except Exception as e:
                 ExceptionUtils.exception_traceback(e)
-                last_detail = f"初始化请求会话失败（{cand}）：{str(e)}"
-                log.error(f"【{self.client_name}】{last_detail}")
+                reasons.append(f"{cand} → 初始化请求会话失败：{str(e)}")
+                log.error(f"【{self.client_name}】{cand} 初始化请求会话失败：{str(e)}")
                 continue
             try:
                 if api.verify_access_code() and api.sys_version():
                     log.info(f"【{self.client_name}】服务端地址探测成功：{cand}")
                     return api
-                last_detail = api.last_error or f"地址 {cand} 的版本接口未通过校验"
-                log.warning(f"【{self.client_name}】服务端地址探测失败，将继续尝试下一个候选：{cand}")
+                detail = api.last_error or "版本接口未通过校验"
+                reasons.append(f"{cand} → {detail}")
+                log.warn(f"【{self.client_name}】地址探测失败（{cand}）：{detail}")
             except Exception as e:
                 ExceptionUtils.exception_traceback(e)
-                last_detail = f"地址探测异常（{cand}）：{type(e).__name__}: {e}"
-                log.error(f"【{self.client_name}】{last_detail}")
+                reasons.append(f"{cand} → {type(e).__name__}: {e}")
+                log.error(f"【{self.client_name}】地址探测异常（{cand}）：{type(e).__name__}: {e}")
             api.close()
         log.error(
             f"【{self.client_name}】所有候选地址均无法连接（已尝试：{'、'.join(candidates)}）；"
             f"请确认该地址从本容器内可达、端口正确、地址形如 http://ip:5666/v")
-        self.last_error = last_detail or f"所有候选地址均无法连接：{'、'.join(candidates)}"
+        # 逐个候选的原因都要保留 —— 只留最后一个会把真正有用的线索丢掉
+        if reasons:
+            self.last_error = "所有候选地址均无法连接；" + "；".join(reasons)
+        else:
+            self.last_error = f"所有候选地址均无法连接：{'、'.join(candidates)}"
         return None
 
     @classmethod
