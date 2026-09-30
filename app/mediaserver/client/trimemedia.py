@@ -5,11 +5,22 @@ import time
 from enum import Enum
 from urllib.parse import quote, urlsplit, urlunsplit
 
+import requests
+
 import log
 from app.mediaserver.client._base import _IMediaClient
-from app.utils import RequestUtils, ExceptionUtils
+from app.utils import ExceptionUtils
 from app.utils.types import MediaType, MediaServerType
 from config import Config
+
+
+def _norm_bool(value, default=True):
+    """配置项里的布尔值可能是字符串，统一归一化为 bool"""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ("false", "0", "no", "off")
 
 
 class _TrimeCategory(Enum):
@@ -54,6 +65,8 @@ class _TrimeApi:
     # authx 签名盐值
     AUTH_SALT = "NDzZTVxnRKP8Z0jXg1VAMonaG8akvh"
 
+    # 图片接口前缀（飞牛返回的相对图片路径必须补此前缀才能访问）
+    IMG_API_PREFIX = "/api/v1/sys/img"
     # 分页单页最大条数
     PAGE_SIZE = 100
     # 目录递归最大页数保护
@@ -67,7 +80,14 @@ class _TrimeApi:
         self._token = None
         self._version = {}
         self._timeout = timeout
-        self._ssl_verify = ssl_verify
+        self._ssl_verify = _norm_bool(ssl_verify)
+        # 访问码校验下发的会话凭证、以及服务端 cookie 都靠同一会话保持，
+        # 因此必须使用独立的 requests.Session，不能每次请求临时建连接。
+        self._session = requests.Session()
+        self._session.headers.update({
+            "User-Agent": Config().get_ua(),
+            "Accept": "application/json",
+        })
 
     @staticmethod
     def _normalize_base_url(host):
@@ -104,11 +124,12 @@ class _TrimeApi:
         root = self._host[:-len("/v")] if self._host.endswith("/v") else self._host
         url = f"{root}/c/{quote(str(self._access_code), safe='')}"
         try:
-            res = RequestUtils(
+            res = self._session.get(
+                url,
                 timeout=self._timeout,
                 verify=self._ssl_verify,
-                session=True,
-            ).get_res(url)
+                allow_redirects=True,
+            )
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【飞牛影视】校验访问码异常：{str(e)}")
@@ -213,16 +234,16 @@ class _TrimeApi:
             headers["Content-Type"] = "application/json"
 
         try:
-            req = RequestUtils(
+            res = self._session.request(
+                method,
+                url,
                 headers=headers,
+                params=params,
+                data=json_body,
                 timeout=self._timeout,
                 verify=self._ssl_verify,
-                session=True,
+                allow_redirects=True,
             )
-            if method == "GET":
-                res = req.get_res(url, params=params)
-            else:
-                res = req.post_res(url, data=json_body, params=params)
             if not res:
                 if not suppress_log:
                     log.error(f"【飞牛影视】请求接口 {url} 失败，无响应")
@@ -435,16 +456,20 @@ class _TrimeApi:
 
     @staticmethod
     def build_img_api_url(img_path):
-        """把图片相对路径拼成可访问的 API 地址"""
+        """把图片相对路径拼成可访问的 API 地址（幂等：已带前缀则原样返回）"""
         if not img_path:
             return None
-        if not str(img_path).startswith("/"):
-            img_path = "/" + str(img_path)
-        return f"/api/v1/sys/img{img_path}"
+        img_path = str(img_path)
+        if img_path.startswith(_TrimeApi.IMG_API_PREFIX):
+            return img_path
+        if not img_path.startswith("/"):
+            img_path = "/" + img_path
+        return f"{_TrimeApi.IMG_API_PREFIX}{img_path}"
 
     def close(self):
-        """关闭 API（本实现使用短连接，无需释放）"""
-        pass
+        """关闭 API 会话"""
+        if self._session:
+            self._session.close()
 
 
 class TrimeMediaClient(_IMediaClient):
@@ -496,7 +521,9 @@ class TrimeMediaClient(_IMediaClient):
             return url.rstrip("/") + "/"
 
         self._host = _norm(conf.get("host"))
-        self._play_host = _norm(conf.get("play_host")) or self._host
+        # 播放地址未填写时留空，由 get_play_url / get_libraries 回落到已含 /v 的 API 地址；
+        # 若在这里回落成 _host，会因缺少 /v 前缀导致播放链接打不开。
+        self._play_host = _norm(conf.get("play_host"))
         self._username = conf.get("username")
         self._password = conf.get("password")
         self._access_code = conf.get("access_code")
@@ -536,6 +563,16 @@ class TrimeMediaClient(_IMediaClient):
                 self._api = None
                 return
             log.info(f"【{self.client_name}】登录成功，用户：{self._username}")
+            # 外网播放地址按同样规则探测（飞牛地址可能需要补 /v），
+            # 探测失败时保留用户填写值，不阻断主流程
+            if self._play_host:
+                play_api = self._resolve_api(self._play_host)
+                if play_api:
+                    self._play_host = play_api.host
+                    play_api.close()
+                else:
+                    log.warning(
+                        f"【{self.client_name}】播放地址 {self._play_host} 无法连接，将按填写值使用")
             # 刷新媒体库列表缓存
             self.get_libraries()
         except Exception as e:
@@ -586,12 +623,22 @@ class TrimeMediaClient(_IMediaClient):
     def get_status(self):
         """测试连通性"""
         if not self._host:
+            log.error(
+                f"【{self.client_name}】未获取到服务端地址，请先填写并保存配置后再测试")
+            return False
+        if not self._username or not self._password:
+            log.error(f"【{self.client_name}】用户名或密码未填写，请补全后保存再测试")
             return False
         try:
             if not self.__is_ready():
+                log.error(
+                    f"【{self.client_name}】未建立连接（地址 {self._host}），"
+                    f"请检查地址、端口、访问码、用户名与密码")
                 return False
             return self._api.user_info() is not None
-        except Exception:
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】测试连接出错：" + str(e))
             return False
 
     def get_user_count(self):
