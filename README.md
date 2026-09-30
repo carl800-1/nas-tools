@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -716,6 +716,21 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：修复均为补齐与放宽，**不影响 Emby / Jellyfin / Plex 的既有行为**，无新依赖。
 
+#### 2.33 飞牛影视测试连接修复（v6.2.2）
+
+**问题**：飞牛影视填好配置保存后，点「测试连接」始终失败。
+
+**修复后**：
+
+- **测试连接恢复正常**：修正了请求层的调用方式 —— 此前向工具类传入了它并不支持的参数，导致每个请求都会直接报错，功能完全不可用；
+- **「校验 SSL 证书」开关真正生效**：此前该开关在飞牛客户端上是失效的；
+- **封面图地址不再重复叠加前缀**；
+- **未填「外网播放地址」时播放链接也能正常打开**。
+
+**说明**：仅请求层实现变更，**不影响其它媒体服务器**，无新依赖。
+
+**使用提示**：测试连接读取的是**已保存**的配置 —— 请先点「保存」再点「测试连接」。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1336,7 +1351,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.2   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1439,4 +1454,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-30 ｜ 当前版本 v6.2.1_
+_Last updated: 2026-09-30 ｜ 当前版本 v6.2.2_

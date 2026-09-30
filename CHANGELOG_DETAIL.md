@@ -3,6 +3,103 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.2 (2026-09-30) — 飞牛影视测试连接修复
+
+## 背景
+
+用户反馈「飞牛影视测试一直失败」。v6.2.0 / v6.2.1 的功能只在**本地假服务端**验证过，
+这是该客户端第一次与真实服务端联调。
+
+## 根因：HTTP 层调错 API，每个请求必然抛错
+
+`trimemedia.py` 的请求层写的是：
+
+```python
+RequestUtils(verify=self._ssl_verify, session=True)
+```
+
+而 nas-tools 真实的 `RequestUtils.__init__` 签名是：
+
+```
+(headers, cookies, api_key, proxies, session, timeout, referer, content_type, accept_type)
+```
+
+- **根本没有 `verify` 参数** ⇒ `TypeError: unexpected keyword argument 'verify'`；
+- `session` 要的是 `requests.Session` **实例**，传 `True` 会在内部变成 `True.get(...)` ⇒ `AttributeError`。
+
+于是链路必然断在第一步：
+
+```
+_resolve_api() → verify_access_code() / sys_version() 恒失败 → _api = None
+→ get_status() 恒 False → 前端永远显示「测试失败」
+```
+
+**100% 复现，不可能偶尔通。**
+
+## 为什么 132 项验证全绿仍然漏掉：桩自证循环
+
+v6.2.0 的假服务端验证脚本里的 `_RequestUtils` 是**按记忆手写的桩**，
+其签名恰好写成 `(headers, timeout, verify=True, session=False, ...)` ——
+**正好接受了我写错的参数**。于是「写错的调用」与「过于宽容的桩」互相印证，形成自证循环。
+
+**教训**：**验证用的桩不能比真实实现更宽容**。参数合法性应当用 `inspect.signature`
+对着**真实源码**断言，而不是靠桩「能跑通」来证明。
+
+## 修复
+
+| # | 内容 |
+|---|---|
+| 1 | 改用真实 `requests.Session`（与 ugreen 客户端同构）+ User-Agent。**副产品**：`ssl_verify` 配置从此真正生效（`RequestUtils` 内部把 `verify` 硬编码成了 False，用它等于一个死开关） |
+| 2 | 图片前缀**幂等** —— 服务端若已返回带 `/api/v1/sys/img` 的地址，不再重复叠加 |
+| 3 | `_play_host` 未填时不再回落成 `_host`（缺 `/v`，播放链接 404），改为回落到已含 `/v` 的 API 地址 |
+| 4 | `get_status()` 补失败原因日志（未配置地址 / 缺用户名密码 / 未建立连接），便于用户自查 |
+
+## 改动文件
+
+| 文件 | 变更 |
+|---|---|
+| `app/mediaserver/client/trimemedia.py` | 请求层改真实 `requests.Session`；图片前缀幂等；`play_host` 回落修正；`get_status` 补日志 |
+
+合计 1 文件 +66 / −19。
+
+## 测试
+
+| 层级 | 脚本 | 项数 | 结果 |
+|---|---|---|---|
+| 抽象方法契约 | `_verify_trimemedia_contract.py` | 19 | ✓ |
+| 声明 | `_verify_trimemedia.py` | 26 | ✓ |
+| 运行时 | `_verify_trimemedia_runtime.py` | 20 | ✓ |
+| **真实 HTTP 链路（新增，HTTP 层不桩）** | `_verify_trimemedia_realhttp.py` | **59** | ✓ 43 个 `/v` 请求全部通过服务端侧 authx 复算 |
+| 端到端 | `_verify_trimemedia_e2e.py` | 36 | ✓ |
+| 修复专项 | `_verify_trimemedia_fix.py` | 63 | ✓ |
+| 存量回归 | `_verify_trimemedia_regression.py` | 31 | ✓ |
+| 类型判定 | `_verify_mediasync_type.py` | 21 | ✓ |
+
+合计 **275 项断言，0 失败**。
+
+新脚本 `_verify_trimemedia_realhttp.py` 为三段式：
+
+- **A** 从真实源码取 `inspect.signature`，AST 扫描全部媒体服务器客户端的请求构造，参数非法即红；
+- **B** 把旧写法喂给真实实现，断言它**确实抛错**（根因确证，反向复现）；
+- **C** 真实 `requests` 打假服务端，服务端侧独立复算 authx。
+
+这条护栏对存量客户端同样生效。
+
+## 踩坑
+
+- **验证脚本的桩不能比真实实现宽容** —— 本次根因，详见上节。
+- **测试连接用的是「已保存」的配置**：前端点测试时带 `test=true`，后端**不落盘**
+  ⇒ 顺序必须是**先「保存」再「测试」**，改了表单直接点测试，测的是上一次保存的配置。
+- **真实环境联调前，所有验证都只是「协议自洽」**，不能替代与真机对接。本次就是靠用户实测才暴露。
+
+## 兼容性
+
+- 仅 HTTP 层实现变更，无接口变更、无新依赖、无数据迁移；
+- 存量 emby / jellyfin / plex / ugreen **不受影响**（它们各有自己的请求方式，未共用本次改动）；
+- `ssl_verify` 在本客户端从「无效」变为「有效」，属**修正**而非行为破坏。
+
+---
+
 # v6.2.1 (2026-09-30) — 飞牛影视首页数据与图片链路修复
 
 ## 背景
