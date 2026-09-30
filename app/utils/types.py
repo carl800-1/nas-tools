@@ -82,6 +82,7 @@ class MediaServerType(Enum):
     EMBY = "Emby"
     PLEX = "Plex"
     UGREEN = "绿联影视"
+    TRIMEMEDIA = "飞牛影视"
 
 
 class BrushDeleteType(Enum):

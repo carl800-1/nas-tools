@@ -1087,6 +1087,100 @@ class ModuleConf(object):
                 }
             }
         },
+        "trimemedia": {
+            "name": "飞牛影视",
+            "img_url": "../static/img/mediaserver/trimemedia.png",
+            "background": "bg-cyan",
+            "test_command": "app.mediaserver.client.trimemedia|TrimeMediaClient",
+            "config": {
+                "enabled": {
+                    "id": "trimemedia.enabled",
+                    "required": False,
+                    "title": "启用媒体服务器",
+                    "tooltip": "",
+                    "type": "switch"
+                },
+                "name": {
+                    "id": "trimemedia.name",
+                    "required": False,
+                    "title": "名称",
+                    "tooltip": "媒体服务器的别名",
+                    "type": "text",
+                    "placeholder": "飞牛影视"
+                },
+                "host": {
+                    "id": "trimemedia.host",
+                    "required": True,
+                    "title": "地址",
+                    "tooltip": "服务端地址，格式: http(s)://ip:port，一般与飞牛影视 Web 访问地址一致",
+                    "type": "text",
+                    "placeholder": "http://192.168.3.3:5666"
+                },
+                "play_host": {
+                    "id": "trimemedia.play_host",
+                    "required": False,
+                    "title": "外网播放地址",
+                    "tooltip": "跳转播放页面使用的地址，格式: http(s)://domain:port",
+                    "type": "text",
+                    "placeholder": "http://carlstation.top:5666"
+                },
+                "username": {
+                    "id": "trimemedia.username",
+                    "required": True,
+                    "title": "用户名",
+                    "tooltip": "飞牛影视登录用户名",
+                    "type": "text",
+                    "placeholder": ""
+                },
+                "password": {
+                    "id": "trimemedia.password",
+                    "required": True,
+                    "title": "密码",
+                    "tooltip": "飞牛影视登录密码",
+                    "type": "password",
+                    "placeholder": ""
+                },
+                "access_code": {
+                    "id": "trimemedia.access_code",
+                    "required": False,
+                    "title": "访问码",
+                    "tooltip": "飞牛影视开启「访问码」时必填，未开启留空（开启后不填将无法登录）",
+                    "type": "password",
+                    "placeholder": "未开启访问码则留空"
+                },
+                "sync_library": {
+                    "id": "trimemedia.sync_library",
+                    "required": False,
+                    "title": "同步媒体库",
+                    "tooltip": "只有选中的媒体库才会被同步；留空表示全部（需至少有一名管理员账号才能读取媒体库列表）",
+                    "type": "select",
+                    "options": {
+                        "": "全部",
+                        "movie": "电影",
+                        "tv": "电视剧"
+                    }
+                },
+                "scan_mode": {
+                    "id": "trimemedia.scan_mode",
+                    "required": False,
+                    "title": "扫描模式",
+                    "tooltip": "用于全库刷新和按库刷新：新添加和修改 / 补充缺失 / 覆盖扫描",
+                    "type": "select",
+                    "options": {
+                        "add": "新添加和修改",
+                        "missing": "补充缺失",
+                        "full": "覆盖扫描"
+                    }
+                },
+                "ssl_verify": {
+                    "id": "trimemedia.ssl_verify",
+                    "required": False,
+                    "title": "校验SSL证书",
+                    "tooltip": "开启后会校验HTTPS证书；如使用自签名证书可关闭",
+                    "type": "switch"
+                }
+            }
+        },
     }
 
     # 索引器
