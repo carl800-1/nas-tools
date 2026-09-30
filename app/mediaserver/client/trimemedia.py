@@ -797,6 +797,25 @@ class TrimeMediaClient(_IMediaClient):
 
     # -------------------------------------------------------------- 图片
 
+    def __abs_image_url(self, path):
+        """
+        把飞牛返回的图片路径拼成可访问的绝对地址
+
+        ⚠️ 飞牛返回的是相对路径（如 media/img/xxx.jpg），必须补上
+        `/api/v1/sys/img` 前缀才能取到图，这与 MoviePilot 的
+        `__build_img_api_url` 同口径；若本身就是绝对地址则原样返回。
+        """
+        if not path:
+            return ""
+        if isinstance(path, (list, tuple)):
+            path = path[0] if path else ""
+            if not path:
+                return ""
+        path = str(path)
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+        return f"{self._api.host}{_TrimeApi.build_img_api_url(path)}"
+
     def get_remote_image_by_id(self, item_id, image_type):
         """根据 ItemId 查询远程图片地址"""
         if not self.__is_ready():
@@ -810,7 +829,7 @@ class TrimeMediaClient(_IMediaClient):
             else:
                 path = info.get("posters") or info.get("poster")
             if path:
-                return f"{self._api.host}{path}"
+                return self.__abs_image_url(path)
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取远程图片出错：" + str(e))
@@ -827,7 +846,9 @@ class TrimeMediaClient(_IMediaClient):
             path = info.get("poster") or info.get("posters")
             if not path:
                 return ""
-            image_url = f"{self._api.host}{path}"
+            image_url = self.__abs_image_url(path)
+            if not image_url:
+                return ""
             if remote:
                 return image_url
             if inner:
@@ -877,11 +898,19 @@ class TrimeMediaClient(_IMediaClient):
                     "category": category,
                     "dir_list": lib.get("dir_list") or [],
                 }
+                # 库封面：飞牛 /mdb/list 会带 posters 数组（相对路径）
+                posters = lib.get("posters") or []
+                if not isinstance(posters, list):
+                    posters = [posters]
                 libraries.append({
                     "id": guid,
                     "name": lib.get("name") or lib.get("title") or guid,
                     "type": library_type,
                     "path": self._libraries[guid]["dir_list"],
+                    "image": self.__abs_image_url(posters[0]) if posters else "",
+                    # 无封面时前端会退到 custom-plex-library-img，该组件会对
+                    # img-src-list 做 split(",")，故这里必须给字符串而不是列表
+                    "image_list": ",".join(self.__abs_image_url(p) for p in posters[:4] if p),
                     "link": (self._play_host or self._api.host).rstrip("/") + f"/library/{guid}",
                 })
                 log.info(f"【{self.client_name}】发现媒体库：{libraries[-1]['name']} ({library_type})")
@@ -1055,6 +1084,184 @@ class TrimeMediaClient(_IMediaClient):
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取播放地址出错：" + str(e))
             return ""
+
+    # ---------------------------------------------------------- 首页数据
+
+    @staticmethod
+    def __item_sort_key(item):
+        """「最近添加」的排序键：飞牛不同版本字段名不一，逐个兜底"""
+        if not isinstance(item, dict):
+            return 0.0
+        for key in ("create_time", "create_time_ms", "add_time", "ctime", "update_time"):
+            val = item.get(key)
+            if val is None:
+                continue
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    @staticmethod
+    def __build_resume_name(item, item_type):
+        """拼「继续观看」卡片的标题"""
+        title = item.get("title") or ""
+        if item_type == _TrimeType.EPISODE.value:
+            tv_title = item.get("tv_title") or item.get("parent_title") or title
+            season = item.get("season_number")
+            episode = item.get("episode_number")
+            if season is not None and episode is not None:
+                return f"{tv_title} 第{season}季第{episode}集"
+            return tv_title
+        return title
+
+    @staticmethod
+    def __calc_percent(item):
+        """
+        已播放百分比
+
+        飞牛给的是 ts（已播放秒）与 duration（片长秒），而首页进度条要的是百分比。
+        """
+        ts = item.get("ts")
+        duration = item.get("duration")
+        try:
+            if ts is None or not duration:
+                return None
+            percent = round(float(ts) * 100.0 / float(duration), 1)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return max(0.0, min(100.0, percent))
+
+    def get_resume(self, num=12):
+        """
+        获得继续观看（首页「正在观看」模块）
+
+        走 /play/list（播放历史），条目自带 ts / duration / watched。
+        """
+        if not self.__is_ready():
+            return []
+        try:
+            items = self._api.play_list()
+            if not items:
+                return []
+            ret_resume = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if len(ret_resume) >= num:
+                    break
+                # 已看完（watched=1）的不算「继续观看」
+                if item.get("watched") == 1:
+                    continue
+                item_type = self._to_trime_type(item.get("type"))
+                if item_type not in (_TrimeType.MOVIE.value,
+                                     _TrimeType.EPISODE.value,
+                                     _TrimeType.TV.value,
+                                     _TrimeType.VIDEO.value):
+                    continue
+                guid = item.get("guid")
+                if not guid:
+                    continue
+                ret_resume.append({
+                    "id": guid,
+                    "name": self.__build_resume_name(item, item_type),
+                    # 首页按中文类型值决定角标配色（电影=绿、其余=蓝）
+                    "type": MediaType.TV.value
+                            if item_type in (_TrimeType.EPISODE.value, _TrimeType.TV.value)
+                            else MediaType.MOVIE.value,
+                    "image": self.get_local_image_by_id(guid, remote=False,
+                                                        inner=True, video_info=item),
+                    "link": self.get_play_url(guid, item_info=item),
+                    "percent": self.__calc_percent(item),
+                })
+            return ret_resume
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取继续观看出错：" + str(e))
+            return []
+
+    def get_latest(self, num=20):
+        """
+        获得最近添加（首页「最新入库」模块）
+
+        先按全库（不带 ancestor_guid）取 create_time 倒序；若服务端不支持全库
+        列表会返回空，此时退化为「逐媒体库取 + 合并重排」。
+        """
+        if not self.__is_ready():
+            return []
+        try:
+            types = [_TrimeType.MOVIE, _TrimeType.TV]
+            items = self._api.item_list(types=types,
+                                        page=1,
+                                        page_size=num,
+                                        sort_by="create_time",
+                                        sort="DESC")
+            if not items:
+                merged = []
+                for library in self.get_libraries():
+                    part = self._api.item_list(guid=library.get("id"),
+                                               types=types,
+                                               page=1,
+                                               page_size=num,
+                                               sort_by="create_time",
+                                               sort="DESC")
+                    if part:
+                        merged.extend(part)
+                items = sorted(merged, key=self.__item_sort_key, reverse=True)
+
+            ret_latest = []
+            seen = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if len(ret_latest) >= num:
+                    break
+                item_type = self._to_trime_type(item.get("type"))
+                if item_type not in (_TrimeType.MOVIE.value, _TrimeType.TV.value):
+                    continue
+                guid = item.get("guid")
+                if not guid or guid in seen:
+                    continue
+                seen.add(guid)
+                ret_latest.append({
+                    "id": guid,
+                    "name": item.get("title") or "",
+                    "type": MediaType.TV.value if item_type == _TrimeType.TV.value
+                            else MediaType.MOVIE.value,
+                    "image": self.get_local_image_by_id(guid, remote=False,
+                                                        inner=True, video_info=item),
+                    "link": self.get_play_url(guid, item_info=item),
+                })
+            return ret_latest
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取最近添加出错：" + str(e))
+            return []
+
+    def get_episode_image_by_id(self, item_id, season_id, episode_id):
+        """
+        根据 itemid、season_id、episode_id 查询某一集的图片地址
+
+        飞牛的 episode_id 一般是「集条目 GUID」，与 Emby 的「集号」语义不同，
+        这里按「集 -> 季 -> 剧」逐个尝试，取到即返回。
+        """
+        if not self.__is_ready():
+            return None
+        for guid in (episode_id, season_id, item_id):
+            if not guid:
+                continue
+            try:
+                info = self._api.item(guid)
+            except Exception as e:
+                ExceptionUtils.exception_traceback(e)
+                continue
+            if not info:
+                continue
+            image = self.get_local_image_by_id(guid, remote=False,
+                                               inner=True, video_info=info)
+            if image:
+                return image
+        return None
 
     def get_playing_sessions(self):
         """获取正在播放的会话（飞牛暂不支持）"""

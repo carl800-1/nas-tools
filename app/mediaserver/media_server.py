@@ -312,9 +312,14 @@ class MediaServer:
                         seasoninfo = []
                         total_count += 1
                         item_count += 1
-                        if item.get("type") in ['Movie', 'movie']:
+                        # 各客户端的条目类型口径不同：emby/jellyfin/plex 用英文
+                        # （Movie / Series），ugreen 与飞牛用 MediaType 的中文值
+                        # （电影 / 电视剧）。统一按 MediaDb 的类型别名表判定，
+                        # 否则中文口径的客户端会「统计恒为 0 且剧集不拉集数」。
+                        item_type = str(item.get("type") or "")
+                        if item_type in MediaDb.MOVIE_TYPES:
                             movie_count += 1
-                        elif item.get("type") in ['Series', 'show']:
+                        elif item_type in MediaDb.TV_TYPES:
                             tv_count += 1
                             # 查询剧集信息
                             seasoninfo = self.get_tv_episodes(item.get("id"))
