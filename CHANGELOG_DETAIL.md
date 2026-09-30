@@ -3,6 +3,71 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.0 (2026-09-30) — 媒体服务器接入「飞牛影视」
+
+## 背景
+
+飞牛 OS（fnOS）自带影视中心「飞牛影视」，内部代号 **TrimMedia**。MoviePilot 已支持接入，本项目参照其实现完整移植，使 nas-tools 也能把飞牛影视当作媒体服务器使用（媒体库展示 + 下载控重 + 入库后刷新媒体库）。
+
+## 协议要点（三重认证）
+
+| 层 | 说明 |
+|---|---|
+| API Key | 固定值 `16CCEB3D-AB42-077D-36A1-F355324E4237`，**参与签名**（非用户配置项） |
+| authx 签名 | `MD5(盐_路径_nonce_ts_bodyHash_apikey)`，盐 = `NDzZTVxnRKP8Z0jXg1VAMonaG8akvh`；`api_path` 需以 `/v` 开头；GET 用**未 URL 编码**的 query 串算 bodyHash |
+| Token | 登录响应下发，走 `Authorization` 头（**无 Bearer 前缀**） |
+| 访问码 | 可选，`GET {设备根}/c/{code}`（**在设备根路径，不在 /v 下**），404 = 码错 |
+
+登录优先 `POST /api/v2/user/loginByPassword`（密码传 **SHA256 hex 小写摘要**），v2 不存在才回退 v1 `POST /api/v1/login` 明文。
+
+## 改动文件
+
+| 文件 | 变更 |
+|---|---|
+| `app/mediaserver/client/trimemedia.py` | **新增** +1069（`_TrimeApi` 29 方法 + `TrimeMediaClient` 30 方法） |
+| `app/conf/moduleconf.py` | +94（`MEDIASERVER_CONF` 新增 `trimemedia` 卡片，10 个字段） |
+| `config/config.yaml` | +23（新增 `trimemedia:` 段） |
+| `app/utils/types.py` | +1（`MediaServerType.TRIMEMEDIA = "飞牛影视"`） |
+| `web/static/img/mediaserver/trimemedia.png` | **新增** 5234 bytes（512×512 图标） |
+
+合计 5 文件 +1187 行 / **0 删除**。
+
+## 前端零改动
+
+`mediaserver.html` 与 `macro/form.html::gen_form_config_elements` 均为数据驱动（循环 `MEDIASERVER_CONF`），支持 `switch` / `select` / `text` / `password` / `textarea` 五种类型自动出控件 ⇒ 新增媒体服务器**不需要改任何前端文件**。
+
+客户端通过 `SubmoduleHelper.import_submodules('app.mediaserver.client', filter_func=lambda _, obj: hasattr(obj, 'client_id'))` 自动发现，无需注册表；`__build_class` 用 `match(ctype)` 匹配类型。
+
+## 测试
+
+| 层级 | 脚本 | 项数 | 结果 |
+|---|---|---|---|
+| L1 契约 | `_verify_trimemedia_contract.py` | 19 | ✓ `_IMediaClient` 19 个抽象方法全覆盖 |
+| L2 声明 | `_verify_trimemedia.py` | 26 | ✓ 语法 / 卡片 / 字段 / 四处一致 / authx 算法自检 |
+| L3 运行时 | `_verify_trimemedia_runtime.py` | 20 | ✓ 真实导入 + 发现契约 + **authx 与 MoviePilot 参考实现逐字符一致** |
+| L4 端到端 | `_verify_trimemedia_e2e.py` | 36 | ✓ 本地假 HTTP 服务端跑通全链路，**42 个 `/v` 请求全部通过服务端侧 authx 校验** |
+| 存量回归 | `_verify_trimemedia_regression.py` | 31 | ✓ emby / jellyfin / plex / ugreen 零影响 |
+
+合计 **132 断言 + 19 契约项，0 失败**。
+
+## 踩坑
+
+- **MoviePilot 默认分支是 `v3` 不是 `main`** ⇒ 直接按 main 拉源码会 404。
+- **`raw.githubusercontent.com` DNS 被封**（`getaddrinfo failed`），两个企业代理同时失效 ⇒ 改用 **Contents API**（`/repos/{owner}/{repo}/contents/{path}?ref=v3` 返 base64）拉源码。
+- **`MediaType.MUSIC` 枚举不存在**：音乐库类别误用后会 `AttributeError`，**AST / `py_compile` 完全抓不到**，运行才炸 ⇒ 已改 `MediaType.UNKNOWN`，并加静态断言防回归。
+- **`get_play_url` 类型两形态**：`item_info` 可能收到飞牛原始 dict（`type="Movie"`）或 `_build_item` 产物（`type="电影"`） ⇒ 新增 `_to_trime_type()` 归一化，否则恒走 `/other/` 分支。
+- **假服务端要在服务端侧独立复算 authx**（客户端自算自比无意义），且服务端需对 query **先 `unquote` 再复算** —— 客户端用 requests `params` 交中文会被编码成 `%E6...`，与「未编码」口径不一致（真实飞牛服务端即此行为）。
+- **`-14 Task duplicate`**：飞牛扫描接口在已有任务在跑时会拒绝 ⇒ 客户端先调 `task_running()` 规避。
+- **图标背景色冲突**：飞牛初版用 `bg-purple` 与 jellyfin 重复 ⇒ 改 `bg-cyan`（未占用）。
+
+## 兼容性
+
+- **纯增量**：5 文件 +1187 行，**0 删除**；
+- 存量 4 个媒体服务器（emby / jellyfin / plex / ugreen）的名称、背景色、`test_command`、枚举值、`config.yaml` 段**全部未变**（已逐项快照比对）；
+- 无数据库迁移、无接口变更。
+
+---
+
 # v6.1.1 (2026-09-30) — 设置页「识别与搜索」区排版归组
 
 ## 症状（无头浏览器实测）

@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.1.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -685,6 +685,24 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 - **两个数值框并排成一行**，各占一半宽，同类控件对齐；
 - 功能、字段、保存逻辑**均未改动**。
 
+#### 2.31 媒体服务器新增「飞牛影视」（v6.2.0）
+
+**新增**：设置 → 媒体服务器 里多了一张「飞牛影视」卡片，填主机地址、用户名、密码即可接入飞牛影视（fnOS）。
+
+**配置项**：
+
+- **地址**（必填）：`http(s)://ip:port`，一般与飞牛影视 Web 访问地址一致；
+- **外网播放地址**（可选）：跳转播放页面使用的地址；
+- **用户名 / 密码**（必填）：飞牛影视登录账号；
+- **访问码**（可选）：飞牛影视开启了「访问码」时必填，未开启留空；
+- **同步媒体库**（可选）：全部 / 电影 / 电视剧，留空 = 全部；
+- **扫描模式**（可选）：新添加和修改 / 补充缺失 / 覆盖扫描；
+- **校验 SSL 证书**（可选）：使用自签名证书时可关闭。
+
+**支持的能力**：媒体库浏览、电影 / 剧集 / 播放链接查询、媒体库刷新（触发扫描）、下载前控重、入库后刷新媒体库。
+
+**说明**：纯 HTTP 客户端实现，**不引入任何新依赖**；与前四家（Emby / Jellyfin / Plex / 绿联影视）同级并列，可同时启用。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -989,7 +1007,7 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 | 类别 | 支持列表 |
 |---|---|
 | **下载器** | qBittorrent、Transmission、Aria2、115 网盘、PikPak |
-| **媒体服务器** | Emby、Jellyfin、Plex、绿联影视（UGREEN） |
+| **媒体服务器** | Emby、Jellyfin、Plex、绿联影视（UGREEN）、飞牛影视（TrimMedia） |
 | **索引器** | 内置 PT 站点、MTeam、TNode、TorrentLeech、海胆、Jackett、Prowlarr、内置 BT |
 | **元数据源** | TMDB、豆瓣、Bangumi、Fanart |
 | **字幕** | 站点字幕下载、ChineseSubFinder、OpenSubtitles、AutoSub |
@@ -1305,7 +1323,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.1.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1408,4 +1426,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-30 ｜ 当前版本 v6.1.1_
+_Last updated: 2026-09-30 ｜ 当前版本 v6.2.0_
