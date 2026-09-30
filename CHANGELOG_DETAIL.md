@@ -3,6 +3,100 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.4 (2026-09-30) — 修复 log.warning 越界调用 + 加固测试桩
+
+## 用户可见的问题
+
+飞牛影视点「测试连接」弹窗：
+
+```
+测试失败：
+地址探测异常（http://192.168.3.3:5666）：AttributeError: module 'log' has no attribute 'warning'
+```
+
+## 根因
+
+仓库根 `log.py` 只提供 `debug / info / error / warn / refresh_loglevel / console`，
+**没有 `warning`**（这个项目里叫 `warn`）。
+
+而 v6.2.3 新增的 `_resolve_api()` 诊断日志里写了 `log.warning(...)`：
+
+```python
+detail = api.last_error or "版本接口未通过校验"
+log.warning(f"【…】地址探测失败（{cand}）：{detail}")   # ← 这一行自己抛 AttributeError
+```
+
+**为什么杀伤力被放大**：该行位于 `try` 内部，下面紧跟 `except Exception` ——
+它自己抛的 `AttributeError` 被**当成「探测失败的原因」记了下来**，
+把 `api.last_error` 里**真正**的原因（HTTP 状态码 / 返回非 JSON / 连接被拒）覆盖掉了。
+两个候选地址走完，用户能看到的就只剩这句 AttributeError。
+
+同类越界调用共 2 处：
+- `_resolve_api()` 里这处 —— 会覆盖真实原因，**危害大**；
+- `_connect()` 里「播放地址不可达」那处 —— 会直接中断 `init_config`。
+
+## 修复
+
+1. `log.warning(` → `log.warn(`（2 处）。
+2. **候选地址失败原因改为累积**：原先 `last_detail` 会被后一个候选覆盖，
+   现在用 `reasons` 列表把每个候选的原因都收起来，最终 `last_error` 形如
+   `所有候选地址均无法连接；http://ip:5666/v → HTTP 404…；http://ip:5666 → …`。
+
+## 为什么 330 项断言没拦住（真正的教训）
+
+`_verify_*` 系列脚本里的 `log` 桩是**手写**的：
+
+```python
+lg = types.ModuleType("log")
+for n in ("info", "error", "warn", "warning", "debug"):   # ← 我凭空造了 "warning"
+    setattr(lg, n, lambda *a, **k: None)
+```
+
+**桩比真实实现更宽容** ⇒ 产品代码里不存在的调用也照样「通过」。
+这与 v6.2.0「132 项全绿却真机必挂」是**同一类错误**，只是换了个模块。
+
+### 新增守卫 `_verify_log_api_usage.py`
+
+双向设防，全部**从真实源码派生**、不手写：
+
+| 段 | 内容 |
+|---|---|
+| A | 解析 `log.py` AST 得到真实公开面；扫描第一方代码里所有 `log.<name>` 调用，越界即失败 |
+| B | 扫描所有验证脚本的 `log` 桩名字表，**桩里出现 `log.py` 没有的名字即失败** |
+| C | 把 `trimemedia.py` 依赖的 `ExceptionUtils` / `MediaType` / `MediaServerType` 也按真实成员校验 |
+
+[A] 实跑：`log.warn` 146 次、`log.info` 423 次、`log.error` 345 次…全部合法，越界 0。
+[B] 实跑：**10 个脚本**（不只本次相关的）都把 `"warning"` 写进了桩 —— 已用
+`_fix_logstubs.py` 按真实公开面统一矫正，并在每处加注释指回守卫。
+
+**反向测试**（证明守卫有牙）：临时写入一个含 `import log` + `log.warning("x")` 的文件，
+守卫立即报「产品代码使用了 log.warning（1 处，首处 app\_tmp_logcheck.py:5）」✓，随后删除。
+
+## 改动文件
+
+| 文件 | 变更 |
+|---|---|
+| `app/mediaserver/client/trimemedia.py` | `log.warning` → `log.warn`（2 处）；`_resolve_api` 累积每个候选地址的失败原因 |
+
+## 测试
+
+| 脚本 | 项数 | 结果 |
+|---|---|---|
+| `_verify_log_api_usage.py`（**新增守卫**） | 5 | ✓ |
+| `_verify_tri_vs_upstream.py` | 40 | ✓ |
+| `_verify_trimemedia_diagnostics.py` | 28 | ✓ |
+| `_verify_diagnose_script.py` | 6 | ✓ |
+| `_verify_trimemedia_realhttp.py` | 59 | ✓ |
+| `_verify_trimemedia_fix.py` | 63 | ✓ |
+| `_verify_trimemedia_e2e.py` | 36 | ✓ |
+| `_verify_trimemedia_regression.py` | 31 | ✓ |
+| `_verify_trimemedia.py` | 26 | ✓ |
+| `_verify_trimemedia_runtime.py` | 20 | ✓ |
+
+合计 **314 项断言，0 失败**，且本次全部使用**已校正的严格桩**。
+
+---
+
 # v6.2.3 (2026-09-30) — 连接诊断与「测试即保存」
 
 ## 背景

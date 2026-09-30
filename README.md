@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -749,6 +749,18 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：「先保存再测试」对**全部媒体服务器**生效（Emby / Jellyfin / Plex / 绿联影视 / 飞牛影视），更符合「填完就点测试」的直觉；无新依赖。
 
+#### 2.35 飞牛影视：修复「测试连接」报 log.warning（v6.2.4）
+
+**问题**：v6.2.3 点「测试连接」会弹出一句 `AttributeError: module 'log' has no attribute 'warning'` —— 这是 v6.2.3 引入的缺陷（日志函数名写错），而且它还会把**真正的失败原因覆盖掉**。
+
+**修复后**：
+
+- 报错消失；
+- 地址探测失败时，会把「带 `/v`」和「不带 `/v`」两个候选地址**各自的失败原因都列出来**，例如：
+  `所有候选地址均无法连接；http://192.168.3.3:5666/v → HTTP 404…；http://192.168.3.3:5666 → 连接被拒绝…`
+
+**说明**：只影响日志调用与错误提示，不改变任何协议行为；已升级到 v6.2.3 的用户建议直接升到 v6.2.4。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1369,7 +1381,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.4   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1472,4 +1484,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-30 ｜ 当前版本 v6.2.3_
+_Last updated: 2026-09-30 ｜ 当前版本 v6.2.4_
