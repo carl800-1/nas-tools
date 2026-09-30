@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -729,7 +729,25 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：仅请求层实现变更，**不影响其它媒体服务器**，无新依赖。
 
-**使用提示**：测试连接读取的是**已保存**的配置 —— 请先点「保存」再点「测试连接」。
+**使用提示**：测试连接读取的是**已保存**的配置。（v6.2.3 起「测试」会自动先保存，v6.2.2 及以前必须先点「保存」的限制已解除，详见 2.34。）
+
+#### 2.34 飞牛影视连接诊断与「测试即保存」（v6.2.3）
+
+**问题**：飞牛影视点「测试」始终失败，页面上却只有一句「测试失败！」，看不出任何原因；有时重启容器后，填好的配置还会凭空消失。
+
+**修复后**：
+
+- **测试失败会直接告诉你原因**：不再只显示「测试失败！」，而是把具体原因弹出来 —— HTTP 状态码、返回的不是 JSON、业务错误码、连接被拒绝等；日志里也会带上 HTTP 状态码与响应片段；
+- **点「测试」会先把配置真正保存下来**：此前点「测试」走的是「仅测试不保存」分支，配置只在内存生效、从不写入配置文件，容器一重启就回滚成空 —— 这正是「测试失败 / 首页媒体服务器连接失败 / 媒体库列表 0/0」的常见原因；
+- **新增连接诊断脚本**，一条命令逐步检查地址、`/v` 路径、访问码、登录与媒体库列表：
+
+  ```bash
+  docker exec -it nas-tools python /nas-tools/scripts/diagnose_trimemedia.py
+  ```
+
+  不带参数时会自动读取已保存的「飞牛影视」配置。
+
+**说明**：「先保存再测试」对**全部媒体服务器**生效（Emby / Jellyfin / Plex / 绿联影视 / 飞牛影视），更符合「填完就点测试」的直觉；无新依赖。
 
 ### 3. 跳转与入口优化
 
@@ -1351,7 +1369,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.2   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.3   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1454,4 +1472,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-30 ｜ 当前版本 v6.2.2_
+_Last updated: 2026-09-30 ｜ 当前版本 v6.2.3_

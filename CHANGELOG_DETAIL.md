@@ -3,6 +3,111 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.3 (2026-09-30) — 连接诊断与「测试即保存」
+
+## 背景
+
+用户反馈「测试也是失败」，并质疑「你怎么测试的」。核对后确认两点：
+
+1. **代码协议层没有问题** —— 本版补了「与上游逐字节比对」的验证（见下），40 项全一致；
+2. **接入层确实有两个坑**：点「测试」不保存配置；失败原因被吞掉。两者叠加，用户看到的
+   就是「测试失败 / 首页媒体服务器连接失败 / 媒体库列表 0/0」，而且完全无从下手。
+
+## 坑 1：点「测试」= 配置从不落盘
+
+`web/action.py::__update_config`：
+
+```python
+config_test = False
+for key, value in cfgs:
+    if key == "test" and value:
+        config_test = True
+        continue
+    cfg = self.set_config_value(cfg, key, value)   # 就地改 Config()._config
+if not config_test:
+    Config().save_config(cfg)                      # ← 只有非测试分支才落盘
+```
+
+而 `web/templates/setting/mediaserver.html::test_mediaserver_config` 传的正是 `test=true`：
+
+```js
+save_config(type, function (ret) { ... }, true);   // ← 第三个参数就是 test
+```
+
+`set_config_value` 是**就地修改** `Config()._config` 的，所以：
+
+- 点「测试」→ 值进内存 → 本次测试能用到新值 ✓
+- **但从不 `save_config()` 落盘** → 容器一重启，配置回滚到上一次保存的状态 ⇒ 全空
+- 用户随后看到的「首页媒体服务器连接失败」「媒体库列表 0/0」正是配置为空的直接后果
+
+**修复**：`test_mediaserver_config` 改为**先保存、再测试**（去掉 `test=true`）；
+`save_config` 也只在真的需要「仅测试」时才带 `test` 字段（原先无条件写 `test: false`，
+会把这个无用字段顺手写进配置文件）。
+
+## 坑 2：失败原因被吞掉
+
+`__test_connection` 原先只返回 `{"code": 0/1}`，前端只能显示「测试失败！」。
+一个连不上飞牛的用户，拿不到任何可行动的线索。
+
+**修复**：新增 `last_error` 字段，把最底层的原因一路带上来。
+
+| 层 | 内容 |
+|---|---|
+| `_TrimeApi.last_error` | `HTTP 404（url）Content-Type：... 响应：...` / `返回非 JSON 响应（HTTP 200，url）...` / `错误码 1001：用户名或密码错误（url）` / `ConnectionError: ...（url）` |
+| `TrimeMediaClient.last_error` | `未读到「飞牛影视」配置：请先…` / `配置不完整，缺少：用户名、密码` / `登录失败：错误码 1001…` / `获取用户信息失败：…` |
+| `__test_connection` | 读 `last_error` 放进返回的 `msg`；**导入/构造类异常也回显**（此前被静默吞成「测试失败」） |
+| `mediaserver.html` | 失败时 `alert` 弹出原因 |
+
+## 坑 3：请求报文与上游有 2 处细节差异
+
+与 MoviePilot 官方 `api.py` 逐字节比对后发现：
+
+| # | 差异 | 处理 |
+|---|---|---|
+| 1 | POST 且无请求体时：上游发 `""` 并带 `Content-Type: application/json`，本仓发 `None` 且不带 | 对齐上游 |
+| 2 | `json.dumps` 上游带 `allow_nan=False`，本仓带 `ensure_ascii=False` | 对齐上游（`ensure_ascii` 只影响中文转义、不影响签名自洽，但一致更稳） |
+
+## 改动文件
+
+| 文件 | 变更 |
+|---|---|
+| `app/mediaserver/client/trimemedia.py` | `last_error` 全链路；`request()` 补 HTTP 状态码/Content-Type/响应片段；POST 空体与 Content-Type 对齐上游；`_resolve_api` 逐候选记日志并带出底层原因 |
+| `web/action.py` | `__test_connection` 回显 `last_error` 与异常 |
+| `web/templates/setting/mediaserver.html` | 测试按钮改为「先保存再测试」；失败弹窗显示原因；去掉 `test:false` 脏写 |
+| `scripts/diagnose_trimemedia.py` | **新增**：独立诊断脚本（不依赖 NAStool 代码，容器内可直接跑） |
+
+## 测试
+
+| 层级 | 脚本 | 项数 | 结果 |
+|---|---|---|---|
+| **报文级交叉验证（新增）** | `_verify_tri_vs_upstream.py` | **40** | ✓ 与 MoviePilot 上游 api.py 逐字节一致 |
+| **失败原因链路（新增）** | `_verify_trimemedia_diagnostics.py` | **28** | ✓ |
+| **诊断脚本（新增）** | `_verify_diagnose_script.py` | **6** | ✓ 四个分支 + 服务端侧独立复算 authx |
+| 真实 HTTP 链路 | `_verify_trimemedia_realhttp.py` | 59 | ✓ |
+| 修复专项 | `_verify_trimemedia_fix.py` | 63 | ✓ |
+| 端到端 | `_verify_trimemedia_e2e.py` | 36 | ✓ |
+| 存量回归 | `_verify_trimemedia_regression.py` | 31 | ✓ |
+| 声明 / 运行时 / 类型 / 契约 / 缺口审计 | 5 个脚本 | 26+20+21+契约+无缺口 | ✓ |
+
+合计 **330 项断言，0 失败**。
+
+## 为什么这次的验证可信（回应「你怎么测试的」）
+
+此前 v6.2.0 的验证是「自己写假服务端 + 自己写桩」，而**桩比真实实现更宽容**，
+形成自证循环，所以 132 项全绿却真机必挂。
+
+本版新增的三件事专门用来打破自证：
+
+1. **`_verify_tri_vs_upstream.py`**：把 MoviePilot 官方 `api.py` 从 GitHub 拉下来，与本仓实现
+   在**相同输入**下驱动，固定 `random` / `time` 后逐字节比对实际发出的
+   `method / url / params / body / headers / authx` —— **上游代码是协议的唯一权威参照**。
+2. **`_verify_diagnose_script.py`**：起本地假服务端，**服务端侧独立复算 authx**
+   （不复用被测算法的任何代码），签名对不上直接返回错误码。
+3. **`scripts/diagnose_trimemedia.py`**：交付给用户在**真实环境**跑，不依赖 NAStool 任何代码 ——
+   它的输出就是真机的第一手证据。
+
+---
+
 # v6.2.2 (2026-09-30) — 飞牛影视测试连接修复
 
 ## 背景
