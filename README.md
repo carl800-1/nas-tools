@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -703,6 +703,19 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：纯 HTTP 客户端实现，**不引入任何新依赖**；与前四家（Emby / Jellyfin / Plex / 绿联影视）同级并列，可同时启用。
 
+#### 2.32 飞牛影视首页与图片修复（v6.2.1）
+
+**问题**：飞牛影视的「媒体库同步」能正常跑，但首页「我的媒体库」里看不到内容；封面图也全部不显示。
+
+**修复后**：
+
+- **首页恢复正常**：补齐「正在观看」与「最新入库」两个数据源，此前缺失会让整个首页加载失败；
+- **封面图正常显示**：修正图片地址前缀，媒体库卡片也补上了封面；
+- **统计数字正确**：电影 / 剧集数量不再恒为 0，剧集也会正确统计季集信息
+  （**这一项同时修复了绿联影视的同类问题**）。
+
+**说明**：修复均为补齐与放宽，**不影响 Emby / Jellyfin / Plex 的既有行为**，无新依赖。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1323,7 +1336,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.0   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.1   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1426,4 +1439,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-30 ｜ 当前版本 v6.2.0_
+_Last updated: 2026-09-30 ｜ 当前版本 v6.2.1_

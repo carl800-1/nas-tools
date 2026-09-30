@@ -3,6 +3,97 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.1 (2026-09-30) — 飞牛影视首页数据与图片链路修复
+
+## 背景
+
+v6.2.0 接入飞牛影视后，用户反馈「媒体库同步能跑了，但『我的媒体库』里的内容没变化」。
+排查发现这不是同步的问题 —— **「媒体库同步」与首页「我的媒体库」是两条互不相干的链路**：
+
+- 「媒体库同步」把条目写进 `media.db`，**只服务于**「该媒体是否已存在」的判断（搜索结果、详情页标记）；
+- 首页「我的媒体库」的「正在观看」/「最新入库」/ 库卡片是**每次打开页面实时**从媒体服务器拉的。
+
+真正的缺陷是首页这条链路上的三个问题。
+
+## 缺陷 1：首页直接 500（缺 2 个方法 + 1 个转发契约）
+
+`web/main.py:297/300` 分别调用 `MediaServer().get_resume()` 与 `MediaServer().get_latest()`，
+但这两个方法**不在** `_IMediaClient` 的 19 个抽象方法里，`_base.py` 也**没有默认实现**，
+v6.2.0 的飞牛客户端因此漏掉它们 ⇒ 调用直接 `AttributeError`，而那两行**没有 try 兜底** ⇒ **整个首页 500**。
+
+另 `media_server.py` 会转发 `get_episode_image_by_id()`，同样缺失。
+
+**修复**（新增 3 个方法）：
+
+- `get_resume(num=12)`：走飞牛 `/play/list`，用 `ts` / `duration` 换算播放进度，`watched=1` 自动过滤；
+- `get_latest(num=20)`：走飞牛 `/item/list` 按 `create_time` 倒序；**服务端不支持全库查询时自动退化为逐库取再合并**；
+- `get_episode_image_by_id()`：补齐转发契约。
+
+## 缺陷 2：所有封面图 404
+
+飞牛接口返回的图片是**相对路径**（如 `media/img/x.jpg`），客户端此前直接拼 `host + path`，
+少了 `/api/v1/sys/img` 前缀（MoviePilot `__build_img_api_url` 的口径）⇒ 图片全部取不到。
+
+**修复**：新增幂等助手 `__abs_image_url()` 统一处理（已是绝对 URL 则原样返回，兼容 list 形态），
+`get_remote_image_by_id` / `get_local_image_by_id` 改用它，并给 `get_libraries` 补充库封面 `image` / `image_list`。
+
+## 缺陷 3：类型判定只认英文（存量 bug，影响面更大）
+
+`media_server.py` 判断条目类型时写死了 `['Movie', 'movie']` / `['Series', 'show']`，
+而 **ugreen 与飞牛客户端输出的是 `MediaType` 中文值**（「电影」/「电视剧」）⇒
+
+- 首页统计的**电影数 / 剧集数恒为 0**；
+- **剧集根本不会去调 `get_tv_episodes()`** ⇒ 剧集的季集信息为空 ⇒ 剧集「是否已存在」的判断永远失败。
+
+**这是 v6.2.0 之前就存在的问题**（绿联影视同样中招），不是飞牛引入的。
+**修复**：改用 `MediaDb.MOVIE_TYPES` / `TV_TYPES`（本身同时含中英文），与库侧口径统一。
+
+## 改动文件
+
+| 文件 | 变更 |
+|---|---|
+| `app/mediaserver/client/trimemedia.py` | +3 个方法（`get_resume` / `get_latest` / `get_episode_image_by_id`）+ 新增 `__abs_image_url` + 图片与库封面接线 |
+| `app/mediaserver/media_server.py` | 类型判定由英文白名单改为 `MediaDb.MOVIE_TYPES` / `TV_TYPES` |
+
+合计 2 文件 +216 / −4。
+
+## 测试
+
+| 层级 | 脚本 | 项数 | 结果 |
+|---|---|---|---|
+| 抽象方法契约 | `_verify_trimemedia_contract.py` | 19 | ✓ |
+| 声明 | `_verify_trimemedia.py` | 26 | ✓ |
+| 运行时 | `_verify_trimemedia_runtime.py` | 20 | ✓ |
+| 端到端（v6.2.0 既有） | `_verify_trimemedia_e2e.py` | 36 | ✓ |
+| 存量回归 | `_verify_trimemedia_regression.py` | 31 | ✓ |
+| **本次专项** | `_verify_trimemedia_fix.py` | **63** | ✓ 真实 HTTP 假服务端 + 服务端侧复算 authx，覆盖 `get_resume` / `get_latest` / 图片 URL / 库封面 |
+| **类型判定** | `_verify_mediasync_type.py` | **21** | ✓ 加载真实 `media_server.py`，注入中 / 英文口径真跑同步 |
+
+合计 **216 项断言，0 失败**。
+
+其中最有分量的一条：**修复前中文口径下 `get_tv_episodes()` 完全不会被调用**；
+修复后正确调用、统计 1 / 1，且 emby 的英文口径未受影响。
+
+## 踩坑
+
+- **「同步成功」≠「首页有内容」**：两者是不同链路（见「背景」），排查时别往同步方向使劲。
+- **抽象方法契约会漏**：`_IMediaClient` 只列了 19 个方法，但 `MediaServer` 转发的方法**多于 19 个**
+  （`get_resume` / `get_latest` / `get_episode_image_by_id` 都不在其中）⇒ 真正可靠的做法是
+  **用脚本自动交叉核对「`MediaServer` 转发的方法」vs「客户端已实现的方法」**，而不是人肉数抽象方法。
+- **`.git/packed-refs` 被文本模式写成 CRLF**：v6.2.0 推送后写跟踪引用时用了文本模式 `open(..., 'w')`，
+  Windows 把 `\n` 全转成 `\r\n` ⇒ 之后**所有 git 命令**报 `fatal: unexpected line in .git/packed-refs`
+  （push / fetch / ls-remote 全废），而 `git status` 竟也不报错（当时只用 REST 复核，REST 不读该文件）。
+  ⇒ **`.git` 下的文件一律 `open(..., 'wb')` 二进制写**；已沉淀 `_fix_git_refs.py` 作为发版第 0 步预检。
+
+## 兼容性
+
+- 修复均为**补齐 / 放宽**，无破坏性变更；
+- `media_server.py` 的类型判定改动**同时惠及绿联影视**（同一 bug 的另一受害者）；
+- 存量 emby / jellyfin / plex 的英文口径**未受影响**（已实测）；
+- 无数据库迁移、无接口变更、无新依赖。
+
+---
+
 # v6.2.0 (2026-09-30) — 媒体服务器接入「飞牛影视」
 
 ## 背景
