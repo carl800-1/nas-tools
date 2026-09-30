@@ -1730,6 +1730,7 @@ class WebAction:
         # 支持两种传入方式：命令数组或单个命令，单个命令时xx|xx模式解析为模块和类，进行动态引入
         command = data.get("command")
         ret = None
+        detail = None
         if command:
             try:
                 module_obj = None
@@ -1747,6 +1748,10 @@ class WebAction:
                         if hasattr(module_obj, "init_config"):
                             module_obj.init_config()
                         ret = module_obj.get_status()
+                        # 客户端若把失败原因放进 last_error，就直接回显到页面上，
+                        # 免得用户只能看到一个笼统的「测试失败！」
+                        if not ret:
+                            detail = getattr(module_obj, "last_error", None)
                     else:
                         ret = eval(command)
                 # 重载配置
@@ -1756,8 +1761,13 @@ class WebAction:
                         module_obj.init_config()
             except Exception as e:
                 ret = None
+                # 导入失败 / 构造失败 / 方法未实现等异常同样回显，否则页面只会显示「测试失败」
+                detail = f"{type(e).__name__}: {e}"
                 ExceptionUtils.exception_traceback(e)
-            return {"code": 0 if ret else 1}
+            resp = {"code": 0 if ret else 1}
+            if not ret and detail:
+                resp["msg"] = str(detail)
+            return resp
         return {"code": 0}
 
     @staticmethod

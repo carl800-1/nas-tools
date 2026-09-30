@@ -88,6 +88,9 @@ class _TrimeApi:
             "User-Agent": Config().get_ua(),
             "Accept": "application/json",
         })
+        # 最近一次失败原因（HTTP 状态码 / 非 JSON 响应 / 业务错误码 / 网络异常），
+        # 供上层「测试连接」把真实原因回显到页面上
+        self.last_error = None
 
     @staticmethod
     def _normalize_base_url(host):
@@ -201,6 +204,7 @@ class _TrimeApi:
         :return: {'success': bool, 'code': int, 'msg': str, 'data': any} 或 None
         """
         if not self._host or not api:
+            self.last_error = "未配置服务端地址"
             return None
 
         prefix = base_path if base_path is not None else self._api_path
@@ -214,8 +218,10 @@ class _TrimeApi:
             method = "get" if data is None else "post"
         method = method.upper()
 
-        if method != "GET" and data:
-            json_body = json.dumps(data, ensure_ascii=False, default=self.__encode_types)
+        if method != "GET":
+            # 与 MoviePilot 上游逐字节对齐：POST 无 body 时发空串而非 None，
+            # 且此时仍带 Content-Type: application/json
+            json_body = json.dumps(data, allow_nan=False, default=self.__encode_types) if data else ""
         else:
             json_body = None
 
@@ -245,18 +251,49 @@ class _TrimeApi:
                 allow_redirects=True,
             )
             if not res:
+                self.last_error = f"请求 {url} 无响应"
                 if not suppress_log:
                     log.error(f"【飞牛影视】请求接口 {url} 失败，无响应")
                 return None
-            resp = res.json()
+            if not res.ok:
+                # 非 2xx：典型是地址写错、路径少了 /v、被反代/访问码拦截
+                snippet = (res.text or "")[:200]
+                self.last_error = (
+                    f"HTTP {res.status_code}（{url}）"
+                    f"Content-Type：{res.headers.get('Content-Type')}，响应：{snippet}")
+                if not suppress_log:
+                    log.error(
+                        f"【飞牛影视】请求接口 {url} 返回 HTTP {res.status_code}，"
+                        f"Content-Type：{res.headers.get('Content-Type')}，"
+                        f"响应片段：{snippet!r}")
+                return {"success": False, "code": res.status_code,
+                        "msg": f"HTTP {res.status_code}", "data": None}
+            try:
+                resp = res.json()
+            except Exception:
+                # 返回的不是 JSON（访问码页 / 反代 HTML / 404 页面）——只报
+                # 「Expecting value」根本无法定位，必须打出状态码与响应片段
+                snippet = (res.text or "")[:200]
+                self.last_error = (
+                    f"返回非 JSON 响应（HTTP {res.status_code}，{url}），"
+                    f"Content-Type：{res.headers.get('Content-Type')}，响应：{snippet}")
+                if not suppress_log:
+                    log.error(
+                        f"【飞牛影视】请求接口 {url} 返回非 JSON 响应，"
+                        f"HTTP {res.status_code}，Content-Type：{res.headers.get('Content-Type')}，"
+                        f"响应片段：{snippet!r}")
+                return None
             code = int(resp.get("code", -1))
             msg = resp.get("msg")
             if code:
+                self.last_error = f"错误码 {code}：{msg}（{url}）"
                 if not suppress_log:
                     log.error(f"【飞牛影视】请求接口 {url} 失败，错误码：{code} {msg}")
                 return {"success": False, "code": code, "msg": msg, "data": None}
+            self.last_error = None
             return {"success": True, "code": 0, "msg": msg, "data": resp.get("data")}
         except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}（{url}）"
             if not suppress_log:
                 ExceptionUtils.exception_traceback(e)
                 log.error(f"【飞牛影视】请求接口 {url} 异常：" + str(e))
@@ -499,6 +536,8 @@ class TrimeMediaClient(_IMediaClient):
     _api = None
     _userinfo = None
     _libraries = {}
+    # 最近一次失败原因 —— 「测试连接」失败时由 web 层直接回显到页面上
+    last_error = None
 
     def __init__(self, config=None):
         if config:
@@ -509,6 +548,9 @@ class TrimeMediaClient(_IMediaClient):
 
     def init_config(self):
         if not self._client_config:
+            self.last_error = (
+                "未读到「飞牛影视」配置：请先在 设置 → 媒体服务器 → 飞牛影视 里"
+                "填好地址/用户名/密码，并点「确定」保存")
             return
         conf = self._client_config
 
@@ -540,6 +582,16 @@ class TrimeMediaClient(_IMediaClient):
 
         if self._host and self._username and self._password:
             self._connect()
+        else:
+            missing = []
+            if not self._host:
+                missing.append("地址")
+            if not self._username:
+                missing.append("用户名")
+            if not self._password:
+                missing.append("密码")
+            self.last_error = "配置不完整，缺少：" + "、".join(missing)
+            log.error(f"【{self.client_name}】配置不完整，缺少：{'、'.join(missing)}")
 
     def _connect(self):
         """连接并登录飞牛影视"""
@@ -550,18 +602,26 @@ class TrimeMediaClient(_IMediaClient):
 
             api = self._resolve_api(self._host)
             if not api:
-                log.error(f"【{self.client_name}】无法连接服务端，请检查地址 {self._host}")
+                # _resolve_api 已把最底层原因写进 self.last_error
+                if not self.last_error:
+                    self.last_error = f"无法连接服务端，请检查地址 {self._host}"
+                log.error(f"【{self.client_name}】无法连接服务端（{self.last_error}）")
                 return
             if not api.login(self._username, self._password):
-                log.error(f"【{self.client_name}】登录失败，请检查用户名和密码")
+                self.last_error = (
+                    f"登录失败：{api.last_error or '用户名或密码不正确'}")
+                log.error(f"【{self.client_name}】{self.last_error}")
                 api.close()
                 return
             self._api = api
             self._userinfo = api.user_info()
             if self._userinfo is None:
-                log.error(f"【{self.client_name}】获取用户信息失败")
+                self.last_error = (
+                    f"获取用户信息失败：{api.last_error or 'token 未被服务端接受'}")
+                log.error(f"【{self.client_name}】{self.last_error}")
                 self._api = None
                 return
+            self.last_error = None
             log.info(f"【{self.client_name}】登录成功，用户：{self._username}")
             # 外网播放地址按同样规则探测（飞牛地址可能需要补 /v），
             # 探测失败时保留用户填写值，不阻断主流程
@@ -576,6 +636,7 @@ class TrimeMediaClient(_IMediaClient):
             # 刷新媒体库列表缓存
             self.get_libraries()
         except Exception as e:
+            self.last_error = f"连接异常：{type(e).__name__}: {e}"
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】连接异常：" + str(e))
 
@@ -584,6 +645,7 @@ class TrimeMediaClient(_IMediaClient):
         解析可用的 API 地址
 
         飞牛影视地址可能带 /v 后缀也可能不带，逐个尝试并校验可达性。
+        每个候选地址的探测结果都写日志，便于定位「地址填错 / 网络不通 / SSL 校验失败」。
         """
         if not host:
             return None
@@ -594,15 +656,34 @@ class TrimeMediaClient(_IMediaClient):
         else:
             candidates.append(base + "/v")
             candidates.append(base)
+        last_detail = None
         for cand in candidates:
-            api = _TrimeApi(
-                host=cand,
-                access_code=self._access_code,
-                ssl_verify=self._ssl_verify,
-            )
-            if api.verify_access_code() and api.sys_version():
-                return api
+            try:
+                api = _TrimeApi(
+                    host=cand,
+                    access_code=self._access_code,
+                    ssl_verify=self._ssl_verify,
+                )
+            except Exception as e:
+                ExceptionUtils.exception_traceback(e)
+                last_detail = f"初始化请求会话失败（{cand}）：{str(e)}"
+                log.error(f"【{self.client_name}】{last_detail}")
+                continue
+            try:
+                if api.verify_access_code() and api.sys_version():
+                    log.info(f"【{self.client_name}】服务端地址探测成功：{cand}")
+                    return api
+                last_detail = api.last_error or f"地址 {cand} 的版本接口未通过校验"
+                log.warning(f"【{self.client_name}】服务端地址探测失败，将继续尝试下一个候选：{cand}")
+            except Exception as e:
+                ExceptionUtils.exception_traceback(e)
+                last_detail = f"地址探测异常（{cand}）：{type(e).__name__}: {e}"
+                log.error(f"【{self.client_name}】{last_detail}")
             api.close()
+        log.error(
+            f"【{self.client_name}】所有候选地址均无法连接（已尝试：{'、'.join(candidates)}）；"
+            f"请确认该地址从本容器内可达、端口正确、地址形如 http://ip:5666/v")
+        self.last_error = last_detail or f"所有候选地址均无法连接：{'、'.join(candidates)}"
         return None
 
     @classmethod
@@ -623,22 +704,31 @@ class TrimeMediaClient(_IMediaClient):
     def get_status(self):
         """测试连通性"""
         if not self._host:
-            log.error(
-                f"【{self.client_name}】未获取到服务端地址，请先填写并保存配置后再测试")
+            self.last_error = "未填写服务端地址（请在 设置 → 媒体服务器 → 飞牛影视 里填写并保存）"
+            log.error(f"【{self.client_name}】{self.last_error}")
             return False
         if not self._username or not self._password:
-            log.error(f"【{self.client_name}】用户名或密码未填写，请补全后保存再测试")
+            self.last_error = "用户名或密码未填写（请补全后保存再测试）"
+            log.error(f"【{self.client_name}】{self.last_error}")
             return False
         try:
             if not self.__is_ready():
-                log.error(
-                    f"【{self.client_name}】未建立连接（地址 {self._host}），"
-                    f"请检查地址、端口、访问码、用户名与密码")
+                # init_config/_connect 已把更具体的原因写进 last_error，优先用它
+                self.last_error = self.last_error or (
+                    f"未建立连接（地址 {self._host}），请检查地址、端口、访问码、用户名与密码")
+                log.error(f"【{self.client_name}】{self.last_error}")
                 return False
-            return self._api.user_info() is not None
+            info = self._api.user_info()
+            if info is None:
+                self.last_error = f"连接中断：{self._api.last_error or 'token 未被服务端接受'}"
+                log.error(f"【{self.client_name}】{self.last_error}")
+                return False
+            self.last_error = None
+            return True
         except Exception as e:
+            self.last_error = f"测试连接出错：{type(e).__name__}: {e}"
             ExceptionUtils.exception_traceback(e)
-            log.error(f"【{self.client_name}】测试连接出错：" + str(e))
+            log.error(f"【{self.client_name}】{self.last_error}")
             return False
 
     def get_user_count(self):

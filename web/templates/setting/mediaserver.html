@@ -70,7 +70,11 @@
   function save_config(type, func, test) {
     currType = type;
     const params = input_select_GetVal(`modal-${type}`);
-    params['test'] = test || false;
+    // 仅在明确要求「只测试不保存」时才带 test 字段。
+    // 原实现无条件写 params['test']=false，会把无用的 test 字段顺手写进配置文件。
+    if (test) {
+      params['test'] = true;
+    }
     params['media.media_server'] = type;
     ajax_post("update_config", params, func);
   }
@@ -86,6 +90,10 @@
   //保存配置和测试配置
   function test_mediaserver_config(type) {
     $("#" + type + "_test_btn").text("测试中...").attr("disabled", true);
+    // 注意：必须先把弹窗里填的内容真正保存下来，再去测试。
+    // 早前这里传了 test=true，后端走「仅测试不保存」分支：配置只在内存生效、从不落盘，
+    // 容器一重启就回滚成空，表现为「测试失败 / 首页媒体服务器连接失败 / 媒体库列表 0/0」。
+    // 现改为「先保存、再测试」，与用户「填完就点测试」的直觉一致。
     save_config(type, function (ret) {
       let command;
       {% for Type, MediaServer in MediaServerConf.items() %}
@@ -94,12 +102,17 @@
       }
       {% endfor %}
       ajax_post("test_connection", {"command": command}, function (ret) {
+        const btn = $("#" + currType + "_test_btn");
         if (ret.code === 0) {
-          $("#" + currType + "_test_btn").text("测试成功").attr("disabled", false);
+          btn.text("测试成功").attr("disabled", false);
         } else {
-          $("#" + currType + "_test_btn").text("测试失败！").attr("disabled", false);
+          btn.text("测试失败！").attr("disabled", false);
+          if (ret.msg) {
+            // 把后端给出的具体原因直接展示出来，而不是只留一句「测试失败！」
+            window.alert("测试失败：\n" + ret.msg);
+          }
         }
       });
-    }, true);
+    });
   }
 </script>
