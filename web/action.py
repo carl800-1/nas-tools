@@ -1328,9 +1328,65 @@ class WebAction:
 
         # 保存配置
         if not config_test:
-            Config().save_config(cfg)
+            try:
+                Config().save_config(cfg)
+            except Exception as err:
+                ExceptionUtils.exception_traceback(err)
+                return {"code": 1, "msg": "配置文件写入失败：%s" % err}
+            # 保存后回读：从磁盘重新读一遍，逐键确认「提交的非空值确实写进去了」。
+            # 目的：把「点了保存、其实没落盘」这类静默失败直接摆出来，不让人靠猜。
+            warning = self.__verify_config_saved(cfgs)
+            if warning:
+                log.warn(f"【配置】{warning}")
+                return {"code": 0, "msg": warning}
 
         return {"code": 0}
+
+    @staticmethod
+    def __verify_config_saved(cfgs):
+        """
+        保存后回读校验：把本次提交的配置项从磁盘文件里重新读出来核对。
+
+        只校验「提交了非空标量值」的键，且只在磁盘上「找不到 / 读出来是空」时才报，
+        避免把后端的正常转换（密码散列、代理包装等）误判成保存失败。
+        :param cfgs: 本次提交的 (key, value) 迭代对象
+        :return: 有问题的说明文本；一切正常返回 None
+        """
+        try:
+            saved = Config().read_config_file()
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+            saved = None
+        if saved is None:
+            return "配置已写入，但回读校验失败：config.yaml 可能被其它程序占用或格式异常"
+        if not isinstance(saved, dict):
+            return "配置已写入，但回读结果不是有效的配置结构，请检查 config.yaml"
+
+        # 这些键后端会做转换，不参与比对
+        skip_keys = ("app.login_password", "app.proxies")
+        missing = []
+        for key, value in cfgs:
+            if value is None or isinstance(value, (list, dict, tuple)):
+                continue
+            if not str(value).strip():
+                continue
+            if key in skip_keys:
+                continue
+            node = saved
+            found = True
+            for part in str(key).split("."):
+                if isinstance(node, dict) and part in node:
+                    node = node[part]
+                else:
+                    found = False
+                    break
+            if not found or node is None or (isinstance(node, str) and not node.strip()):
+                missing.append(key)
+
+        if missing:
+            return ("以下配置项已提交但未能在 config.yaml 中读到：%s。"
+                    "请检查配置目录是否可写、磁盘是否已满。" % "、".join(missing))
+        return None
 
     @staticmethod
     def __add_or_edit_sync_path(data):
@@ -3648,6 +3704,16 @@ class WebAction:
                 "User": UserCount
             }
         else:
+            # 客户端若有 last_error（如飞牛影视），把真实原因带回前端，
+            # 首页报错就不再只有一句「连接失败」。
+            reason = ""
+            try:
+                client = MediaServer().server
+                reason = getattr(client, "last_error", None) or ""
+            except Exception as err:
+                ExceptionUtils.exception_traceback(err)
+            if reason:
+                return {"code": -1, "msg": "媒体库服务器连接失败：%s" % reason}
             return {"code": -1, "msg": "媒体库服务器连接失败"}
 
     @staticmethod

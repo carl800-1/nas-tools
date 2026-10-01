@@ -172,6 +172,127 @@ def check_code(base, access_code, verify_ssl):
     return True
 
 
+def _split_host_port(base):
+    """把 http(s)://host:port/v 拆成 (scheme, hostname, port, origin, path)"""
+    p = urlsplit(base)
+    scheme = (p.scheme or "http").lower()
+    hostname = p.hostname or ""
+    port = p.port or (443 if scheme == "https" else 80)
+    path = p.path.rstrip("/")
+    if path.endswith("/v"):
+        path = path[:-2]
+    origin = "%s://%s" % (scheme, p.netloc or hostname)
+    return scheme, hostname, port, origin, path
+
+
+def _cert_field(cert, name):
+    items = cert.get(name) or []
+    return ", ".join("%s=%s" % (k, v) for item in items for k, v in item) or "(空)"
+
+
+def preflight(base, verify_ssl):
+    """
+    连接前置体检：DNS → TCP → TLS → 反向代理识别。
+
+    目的是把「还没走到协议层就已经失败」的情况单独摘出来讲清楚：
+    这类问题改代码是改不好的，只能改地址 / 网络 / 代理配置。
+    返回 True 表示可以继续做接口探测。
+    """
+    import socket
+    import ssl as _ssl
+
+    scheme, hostname, port, origin, path = _split_host_port(base)
+    out("")
+    out("[0/5] 连接前置体检（DNS / TCP / TLS / 反向代理）")
+
+    # —— 0.1 DNS ——
+    out("  · DNS：解析 %s" % hostname)
+    addrs = []
+    try:
+        for info in socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP):
+            addr = info[4][0]
+            if addr not in addrs:
+                addrs.append(addr)
+        out("      ✓ 解析到：%s" % ", ".join(addrs))
+    except Exception as err:
+        out("      ✗ DNS 解析失败：%s %s" % (type(err).__name__, err))
+        out("      → 容器内解析不了这个主机名。请改用 IP 地址，或给容器配 DNS / 写 hosts。")
+        return False
+
+    # —— 0.2 TCP ——
+    out("  · TCP：连接 %s:%s" % (hostname, port))
+    t0 = time.time()
+    try:
+        socket.create_connection((hostname, port), timeout=5).close()
+        out("      ✓ 端口连通，耗时 %.0f ms" % ((time.time() - t0) * 1000))
+    except Exception as err:
+        out("      ✗ 端口不通：%s %s（耗时 %.0f ms）"
+            % (type(err).__name__, err, (time.time() - t0) * 1000))
+        out("      → 端口写错 / 服务没起 / 容器与飞牛不在同一网络或被防火墙挡住。")
+        out("        容器内可先试：ping %s" % hostname)
+        return False
+
+    # —— 0.3 TLS ——
+    if scheme != "https":
+        out("  · TLS：地址是 http，跳过")
+    else:
+        out("  · TLS：握手并读取服务端证书")
+        try:
+            raw = socket.create_connection((hostname, port), timeout=5)
+            tls = _ssl._create_unverified_context().wrap_socket(raw, server_hostname=hostname)
+            cert = tls.getpeercert()
+            tls.close()
+        except Exception as err:
+            out("      ✗ TLS 握手失败：%s %s" % (type(err).__name__, err))
+            out("      → 服务端可能不是 https，或端口/协议不匹配，请改用 http 试试。")
+            return False
+        subject = _cert_field(cert, "subject")
+        issuer = _cert_field(cert, "issuer")
+        out("      ✓ 握手成功")
+        out("        证书主体：%s" % subject)
+        out("        签发者　：%s" % issuer)
+        out("        有效期　：%s ~ %s" % (cert.get("notBefore"), cert.get("notAfter")))
+        if subject != "(空)" and subject == issuer:
+            out("      ! 自签名证书 ⇒ 请在设置里关闭「校验SSL证书」，或加 --no-ssl-verify")
+        if verify_ssl:
+            try:
+                csock = socket.create_connection((hostname, port), timeout=5)
+                _ssl.create_default_context().wrap_socket(csock, server_hostname=hostname).close()
+                out("      ✓ 证书校验通过")
+            except Exception as err:
+                out("      ✗ 证书校验失败：%s" % err)
+                out("      → 自签名 / 主机名不匹配 ⇒ 不关掉证书校验，后面每个接口都会 SSLError。")
+        else:
+            out("      · 已关闭证书校验，跳过")
+
+    # —— 0.4 反向代理 / 网关识别 ——
+    out("  · 反向代理：不带签名裸探根路径与 /v/ 路径")
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": "NAStool-TrimeMedia-Diagnose/1.0"})
+    for url in (origin + path + "/", origin + path + "/v/"):
+        try:
+            r = sess.get(url, timeout=8, verify=verify_ssl, allow_redirects=False)
+        except Exception as err:
+            out("      · %s -> 请求异常：%s" % (url, type(err).__name__))
+            continue
+        ct = (r.headers.get("Content-Type") or "").lower()
+        kind = "HTML" if "html" in ct else (ct or "-")
+        loc = r.headers.get("Location")
+        out("      · %s -> HTTP %s  Server=%s  %s%s"
+            % (url, r.status_code, r.headers.get("Server") or "-", kind,
+               ("  Location=" + loc) if loc else ""))
+        if r.status_code in (502, 503, 504):
+            out("        → 反向代理活着但后端不可达，检查代理转发目标。")
+        elif r.status_code in (301, 302, 303, 307, 308) and loc:
+            out("        → 被重定向（多半是登录页 / 网关），确认该地址就是你平时浏览器访问飞牛的入口。")
+        elif r.status_code in (401, 403):
+            out("        → 网关层就要求鉴权（反向代理的账号密码、或 IP 白名单）。")
+        elif r.status_code == 404:
+            out("        → 路径不匹配，确认该地址后面没有多写/少写子路径。")
+    out("  ✓ 前置体检通过，继续做接口探测")
+    return True
+
+
 def probe_candidate(raw_host, access_code, username, password, verify_ssl):
     """对单个候选地址做一遍完整探测，返回 (是否成功, 诊断小结)"""
     base = normalize(raw_host)
@@ -264,6 +385,8 @@ def main():
     ap.add_argument("--access-code", dest="access_code")
     ap.add_argument("--no-ssl-verify", action="store_true", help="跳过 HTTPS 证书校验")
     ap.add_argument("--config", default=None, help="config.yaml 路径")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="跳过 DNS/TCP/TLS/反代 前置体检，直接做接口探测")
     args = ap.parse_args()
 
     conf_paths = [args.config] if args.config else \
@@ -317,6 +440,10 @@ def main():
     ok_base = None
     for cand in candidates:
         try:
+            if not args.no_preflight and not preflight(cand, verify_ssl):
+                out("")
+                out("► 前置体检未通过，跳过接口探测：%s" % normalize(cand))
+                continue
             if probe_candidate(cand, access_code, username, password, verify_ssl):
                 ok_base = normalize(cand)
                 break
@@ -332,6 +459,8 @@ def main():
         return 0
 
     out("✗ 全部候选地址均无法完成探测。请按上面每一步的 HTTP 状态码定位：")
+    out("  · 前置体检（[0/5]）就已失败")
+    out("      → 属于网络/地址/证书问题，改代码无用：看那一小节给的具体提示")
     out("  · 连接被拒绝 / 超时 (ConnectionError/Timeout)")
     out("      → 地址或端口不对，或 NAStool 容器与飞牛不在同一网络（容器内试 ping）")
     out("  · HTTP 404 且响应是 HTML")

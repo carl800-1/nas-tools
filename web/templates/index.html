@@ -181,7 +181,7 @@
 {% endif %}
 {% endwith %}
 {% else %}
-{{ OOPS.systemerror('媒体服务器连接失败！', '当前无法连接媒体服务器获取数据，请确认Emby/Jellyfin/Plex配置是否正确。') }}
+{{ OOPS.systemerror('媒体服务器连接失败！', '当前无法连接「' ~ MediaServerName ~ '」获取数据' ~ ('（' ~ ServerError ~ '）' if ServerError else '') ~ '。请前往「设置 → 媒体服务器」检查「' ~ MediaServerName ~ '」的地址、账号密码（开启访问码时还需填访问码）是否正确，改完先点「测试」确认，再刷新本页。') }}
 {% endif %}
 <div class="modal modal-blur fade" id="index-mediasync-modal" tabindex="-1" role="dialog" aria-hidden="true">
   <div class="modal-dialog modal-md modal-dialog-centered" role="document">

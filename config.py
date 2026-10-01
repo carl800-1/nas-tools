@@ -174,6 +174,19 @@ class Config(object):
             yaml = ruamel.yaml.YAML()
             return yaml.dump(new_cfg, sf)
 
+    def read_config_file(self):
+        """
+        从磁盘重新读取配置文件内容（不改变内存中的配置）
+        用于「保存后回读」校验，确认配置确实已写入文件
+        :return: 配置字典；读取失败返回 None
+        """
+        try:
+            with open(self._config_path, mode='r', encoding='utf-8') as cf:
+                return ruamel.yaml.YAML().load(cf)
+        except Exception as err:
+            print("【Config】回读配置文件失败：%s" % str(err))
+            return None
+
     def get_config_path(self):
         return os.path.dirname(self._config_path)
 

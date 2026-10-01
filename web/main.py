@@ -271,12 +271,16 @@ def web():
 def index():
     # 媒体服务器类型
     MSType = Config().get_config('media').get('media_server')
+    # 媒体服务器显示名（飞牛影视 / 绿联影视 这类中文名），用于首页报错文案
+    MediaServerName = (ModuleConf.MEDIASERVER_CONF.get(str(MSType).lower()) or {}).get("name") or str(MSType)
     # 获取媒体数量
     MediaCounts = WebAction().get_library_mediacount()
     if MediaCounts.get("code") == 0:
         ServerSucess = True
+        ServerError = ""
     else:
         ServerSucess = False
+        ServerError = MediaCounts.get("msg") or ""
 
     # 获得活动日志
     Activity = WebAction().get_library_playhistory().get("result")
@@ -302,6 +306,8 @@ def index():
 
     return render_template("index.html",
                            ServerSucess=ServerSucess,
+                           ServerError=ServerError,
+                           MediaServerName=MediaServerName,
                            MediaCount={'MovieCount': MediaCounts.get("Movie"),
                                        'SeriesCount': MediaCounts.get("Series"),
                                        'SongCount': MediaCounts.get("Music"),

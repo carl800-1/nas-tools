@@ -83,6 +83,10 @@
   function save_mediaserver_config(type) {
     $("#modal-" + type).modal('hide');
     save_config(type, function (ret) {
+      // 后端保存后会从磁盘回读校验，发现「提交了却没落盘」时通过 msg 提示
+      if (ret && ret.msg) {
+        window.alert("配置保存提示：\n" + ret.msg);
+      }
       window_history_refresh();
     });
   }
@@ -95,6 +99,9 @@
     // 容器一重启就回滚成空，表现为「测试失败 / 首页媒体服务器连接失败 / 媒体库列表 0/0」。
     // 现改为「先保存、再测试」，与用户「填完就点测试」的直觉一致。
     save_config(type, function (ret) {
+      if (ret && ret.msg) {
+        window.alert("配置保存提示：\n" + ret.msg);
+      }
       let command;
       {% for Type, MediaServer in MediaServerConf.items() %}
       if (currType === "{{ Type }}") {
