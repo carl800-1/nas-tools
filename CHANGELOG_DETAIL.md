@@ -3,6 +3,75 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.6 (2026-10-01) — 图片鉴权闭环：库封面 / 观看记录封面 + 标题显示名
+
+## 背景
+
+v6.2.5 收口了「连不上」的可观测性。用户改对地址后飞牛影视接通，随即暴露两个新问题：
+
+1. 首页标题把内部代号直接写在了页面上：`我的媒体库 - trimemedia`；
+2. 「我的媒体库」页里的媒体库封面、以及「正在观看」的封面**全部不显示**。
+
+## 根因（对照上游 MoviePilot 源码确认）
+
+飞牛的图片接口（`/api/v1/sys/img/...`）与业务接口一样校验登录态，**并且需要把登录 token
+以 Cookie（`Trim-MC-token`）形式携带**；而 `<img>` 标签无法附加请求头。上游
+`app/modules/trimemedia/trimemedia.py::get_image_cookies()` 正是这个口径，且自带同源校验：
+
+```python
+if not image_url or not SecurityUtils.is_safe_url(image_url, [self._api.host], strict=True):
+    return None
+cookies = {"Trim-MC-token": self._api.token}
+if self._access_code:
+    cookies.update(self._api.cookies)
+```
+
+本仓此前**整条图片链路不带任何凭证**，且媒体库封面返回的是飞牛的绝对地址、由浏览器直连
+⇒ 100% 失败。
+
+## 改动（6 文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/mediaserver/client/_base.py` | 新增**非抽象**钩子 `get_image_cookies(image_url)`，默认 `None` |
+| `app/mediaserver/client/trimemedia.py` | 新增 `_TrimeApi.cookies` 属性；实现 `get_image_cookies()`；`get_libraries()` 的 `image` / `image_list` 改走 `get_nt_image_url()` 本机中转 |
+| `web/backend/web_utils.py` | `request_cache(url, cookies=None)`；凭证指纹进 `lru_cache` 键；新增 `get_image_cookies(url)` |
+| `web/main.py::Img()` | 取凭证并传给 `request_cache`；Etag 含凭证指纹 |
+| `web/templates/index.html` | 标题改用 `MediaServerName` |
+| `scripts/diagnose_trimemedia.py` | 新增 `probe_image_auth()` 封面鉴权探测 |
+
+## 关键设计
+
+- **同源白名单（安全红线）**：`get_image_cookies` 只在图片地址与本机配置的 `host` 同源
+  （scheme + host + port 完全一致）时才返回凭证。否则 `/img?url=<任意地址>` 会变成
+  「带着 token 请求任意 URL」的凭证外泄 / SSRF 通道 —— 比不做更危险。实测拦下
+  `userinfo 伪装`（`http://ip:port@evil.com`）与「把目标地址塞进 query」两种写法。
+- **钩子必须非抽象、默认 `None`**：写成 `@abstractmethod` 会逼 Emby / Jellyfin / Plex / 绿联
+  五个已有客户端全部实现；默认返回 `None` ⇒ 老客户端行为完全不变。
+- **`lru_cache` 键必须含凭证指纹**：`dict` 不可哈希 ⇒ 转成 `tuple(sorted(...))`；
+  否则「换了凭证仍命中旧缓存」，表现为登录态变了图片却还是旧的。
+- **登录 token 权威**：先合并会话 Cookie、最后写 `Trim-MC-token`。上游顺序相反，
+  若会话里恰好存在同名 Cookie 会把登录 token 顶掉。
+
+## 离线验证逮到的两个真 bug
+
+1. **`request_cache` 的 douban 分支会丢凭证**：原代码 `if url.find('douban'):` 缺 `!= -1`，
+   实际几乎总走这一支，而这一支调用 `RequestUtils(referer=...)` **没带 cookies**
+   ⇒ 即便实现了凭证注入，图片依然取不到。已在两支都带上。
+2. **`_split_origin` 的宽 `except Exception` 会把编程错误吞成「不同源」**：测试命名空间漏了
+   `urlsplit` 时它静默返回 `None`（= 白名单永久不通过），表现为「功能不生效但不报错」。
+   已收窄为 `except ValueError`，只吞「地址本身畸形」。
+
+## 测试
+
+- `_verify_bump_626.py` **65 项全绿**，含 4 条反向注入（标题回退 / 钩子加 `@abstractmethod` /
+  摘掉同源校验 / 缓存键去掉凭证指纹），确保判据不是「永远为真」。
+- 存量回归：trimemedia 26 / fix 63 / regression 31 / runtime 20 / e2e 36 / realhttp 59 /
+  diagnose 6 / log 守卫 7 / bump_625 48，全部通过。
+- 两处**过期判据**随行为变化更新（行为是刻意改的）：
+  `_verify_trimemedia_fix.py` 的「库封面是绝对地址」→「库封面走本机 /img 中转」；
+  `_verify_diagnose_script.py` 的服务端验签**豁免图片请求**（`<img>` 式请求按设计不带 authx）。
+
 # v6.2.5 (2026-10-01) — 连接诊断闭环：首页给原因 + 诊断脚本前置体检 + 保存后回读
 
 ## 背景

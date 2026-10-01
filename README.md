@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -786,6 +786,31 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 **说明**：本版不改变任何协议行为、无新依赖。「连接失败」的成因可能在本机网络 / 地址侧，
 本版的作用是把它指出来。
 
+#### 2.37 飞牛影视封面恢复显示 + 标题显示名（v6.2.6）
+
+**问题**：飞牛影视接通后，「我的媒体库」页的媒体库封面、「正在观看」「最新入库」的封面
+**全部不显示**；页面标题还直接写着内部代号 `我的媒体库 - trimemedia`。
+
+**原因**：飞牛的图片接口和业务接口一样要校验登录态，并且需要把登录凭证放进 Cookie
+（`Trim-MC-token`）—— 而网页里的 `<img>` 标签**带不了请求头**，所以无论怎么拼图片地址都取不到图。
+
+**修复后**：
+
+- 图片改由 NAStool **本机中转代取**，并自动带上登录凭证（开了访问码时连同访问码凭证一起带），
+  「媒体库列表 / 正在观看 / 最新入库」的封面都会正常显示；
+- 标题按设置页里的名字显示：`我的媒体库 - 飞牛影视`；
+- 诊断脚本新增**封面鉴权探测**，对同一张封面各请求一次「不带凭证 / 带凭证」，
+  用状态码直接判断封面不显示是不是凭证问题：
+
+  ```bash
+  docker exec -it nas-tools python /nas-tools/scripts/diagnose_trimemedia.py
+  ```
+
+**安全说明**：中转图片时会校验目标地址与本机配置的**媒体服务器是否同源**（协议 + 主机 + 端口
+完全一致），不是同一台就**不带任何凭证**，避免图片中转被当作「带着凭证访问任意地址」的通道。
+
+**说明**：Emby / Jellyfin / Plex / 绿联影视不受影响（它们的图片不需要凭证，钩子默认返回空）。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1406,7 +1431,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.5   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.6   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1509,4 +1534,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-01 ｜ 当前版本 v6.2.5_
+_Last updated: 2026-10-01 ｜ 当前版本 v6.2.6_
