@@ -190,6 +190,75 @@ def _cert_field(cert, name):
     return ", ".join("%s=%s" % (k, v) for item in items for k, v in item) or "(空)"
 
 
+def probe_image_auth(base, probe, libs, verify_ssl):
+    """
+    封面图鉴权探测
+
+    飞牛的图片接口同样校验登录态，而 <img> 标签带不了请求头 ⇒ 只有把登录 token
+    放进 Cookie（Trim-MC-token）才能取到图。这里对同一张封面各请求一次
+    「不带凭证 / 带凭证」，用状态码直接说明封面不显示是不是凭证问题。
+    """
+    out("")
+    hr("封面图鉴权探测")
+    out("对同一张封面各请求一次「不带凭证 / 带 Trim-MC-token」，用于判断")
+    out("「封面不显示」是不是凭证问题（v6.2.6 起 NAStool 给图片带上凭证）。")
+
+    img_path = ""
+    for lib in libs or []:
+        if not isinstance(lib, dict):
+            continue
+        posters = lib.get("posters")
+        if isinstance(posters, (list, tuple)) and posters:
+            img_path = posters[0]
+            break
+        if isinstance(posters, str) and posters:
+            img_path = posters
+            break
+    if not img_path:
+        out("  · 媒体库返回里没有 posters 字段，无法取样（该库本身就没有封面）")
+        return
+    img_path = str(img_path)
+    if img_path.startswith(("http://", "https://")):
+        img_url = img_path
+    elif img_path.startswith("/api/v1/sys/img"):
+        img_url = base + img_path
+    else:
+        img_url = base + "/api/v1/sys/img" + \
+            ("" if img_path.startswith("/") else "/") + img_path
+    out("  · 取样封面：%s" % img_url)
+
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": "NAStool-TrimeMedia-Diagnose/1.0"})
+    result = {}
+    for label, cookies in (("不带凭证", None),
+                           ("带 Trim-MC-token", {"Trim-MC-token": probe.token})):
+        try:
+            r = sess.get(img_url, cookies=cookies, timeout=10,
+                         verify=verify_ssl, allow_redirects=True)
+        except Exception as err:
+            out("      ✗ %s -> 请求异常：%s %s" % (label, type(err).__name__, err))
+            result[label] = None
+            continue
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        ok = r.ok and "image" in ctype
+        out("      %s %-18s -> HTTP %s  Content-Type=%s  长度=%d 字节"
+            % ("✓" if ok else "✗", label, r.status_code, ctype or "-",
+               len(r.content or b"")))
+        result[label] = r.status_code
+
+    no_cred = result.get("不带凭证")
+    with_cred = result.get("带 Trim-MC-token")
+    if with_cred == 200 and no_cred != 200:
+        out("  → 已证实：这张封面必须带凭证才取得到（正是 v6.2.6 修的问题，")
+        out("    升级后首页封面应当恢复）。")
+    elif with_cred == 200 and no_cred == 200:
+        out("  → 该封面不带凭证也能取到；封面不显示应从别处找原因")
+        out("    （例如浏览器所在网络访问不到飞牛的地址）。")
+    else:
+        out("  → 带凭证也取不到，请确认：① 访问码是否已配置、是否填对；")
+        out("    ② 该媒体库里是否真的有封面图。")
+
+
 def preflight(base, verify_ssl):
     """
     连接前置体检：DNS → TCP → TLS → 反向代理识别。
@@ -371,6 +440,8 @@ def probe_candidate(raw_host, access_code, username, password, verify_ssl):
             out("         - guid=%s  category=%s  name=%s"
                 % (lib.get("guid"), lib.get("category"),
                    lib.get("name") or lib.get("title")))
+
+    probe_image_auth(base, p, libs, verify_ssl)
 
     out("")
     out("► 该地址可用：%s" % base)

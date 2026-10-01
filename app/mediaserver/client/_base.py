@@ -178,6 +178,22 @@ class _IMediaClient(metaclass=ABCMeta):
                 return ""
         else:
             return f"img?url={quote(url)}"
+
+    def get_image_cookies(self, image_url):
+        """
+        获取访问指定图片所需的 Cookies
+
+        默认不返回任何凭证 —— Emby / Jellyfin / Plex / 绿联影视的图片不需要凭证，
+        需要鉴权的客户端（如飞牛影视）自行覆写。
+        ⚠️ 必须是非抽象方法：写成 @abstractmethod 会让所有已有客户端都被迫实现。
+        ⚠️ 覆写时必须自行校验「图片地址属于本客户端那台服务器」，
+        否则 /img 会变成「带着凭证请求任意 URL」的凭证外泄通道。
+
+        :param image_url: 图片的完整地址
+        :return: dict 或 None
+        """
+        return None
+
     @abstractmethod
     def get_host(self):
         """

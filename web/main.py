@@ -1845,8 +1845,12 @@ def Img():
     url = request.args.get('url')
     if not url:
         return make_response("参数错误", 400)
+    # 需要鉴权的图片（如飞牛影视）：凭证由对应的媒体服务器客户端提供，
+    # 客户端内部会校验「目标必须是自己那台服务器」，不会把凭证发给任意地址。
+    cookies = WebUtils.get_image_cookies(url)
+    cookie_key = ",".join("%s=%s" % (k, v) for k, v in sorted((cookies or {}).items()))
     # 计算Etag
-    etag = hashlib.sha256(url.encode('utf-8')).hexdigest()
+    etag = hashlib.sha256(("%s|%s" % (url, cookie_key)).encode('utf-8')).hexdigest()
     # 检查协商缓存
     if_none_match = request.headers.get('If-None-Match')
     if if_none_match and if_none_match == etag:
@@ -1854,7 +1858,7 @@ def Img():
     
     # 获取图片数据
     try:
-      img = WebUtils.request_cache(url)
+      img = WebUtils.request_cache(url, cookies=cookies)
       response = Response(
           img,
           mimetype='image/jpeg'

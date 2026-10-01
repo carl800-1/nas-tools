@@ -191,15 +191,55 @@ class WebUtils:
         return range(StartPage, EndPage + 1)
 
     @staticmethod
-    @lru_cache(maxsize=128)
-    def request_cache(url):
+    def get_image_cookies(url):
+        """
+        取当前媒体服务器客户端为某张图片提供的凭证
+
+        只有目标属于该客户端自己那台服务器时，客户端才会返回凭证（客户端内部校验），
+        避免 /img 变成「带着凭证请求任意 URL」的通道。
+        """
+        try:
+            # 延迟导入：避免 web 层与 app.mediaserver 形成导入环
+            from app.mediaserver import MediaServer
+            server = MediaServer().server
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return None
+        if not server:
+            return None
+        getter = getattr(server, "get_image_cookies", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(url) or None
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return None
+
+    @staticmethod
+    def request_cache(url, cookies=None):
         """
         带缓存的请求
+
+        :param url: 图片地址
+        :param cookies: 需要随请求携带的 Cookies（飞牛这类鉴权图片需要凭证）
         """
+        # dict 不可哈希，先归一化成可哈希的元组才能进 lru_cache 的键；
+        # 键里必须含凭证指纹，否则同一 URL 换了凭证会命中旧缓存。
+        cookie_key = tuple(sorted((cookies or {}).items()))
+        return WebUtils._request_cache(url, cookie_key)
+
+    @staticmethod
+    @lru_cache(maxsize=128)
+    def _request_cache(url, cookie_key):
+        cookies = dict(cookie_key) if cookie_key else None
         if url.find('douban'):
-            ret = RequestUtils(referer="https://movie.douban.com").get_res(url)
+            # ⚠️ 这个判断缺 `!= -1`，实际几乎总走这一支；凭证必须在这里也带上，
+            # 否则飞牛这类需要鉴权的图片永远取不到（v6.2.6 由离线测试逮到）。
+            ret = RequestUtils(referer="https://movie.douban.com",
+                               cookies=cookies).get_res(url)
         else:
-            ret = RequestUtils().get_res(url)
+            ret = RequestUtils(cookies=cookies).get_res(url)
         if ret:
             return ret.content
         

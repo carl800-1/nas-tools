@@ -23,6 +23,27 @@ def _norm_bool(value, default=True):
     return str(value).strip().lower() not in ("false", "0", "no", "off")
 
 
+def _split_origin(url):
+    """拆出 (scheme, host, port)；非 http(s) 或没有主机名时返回 None"""
+    try:
+        parts = urlsplit(str(url))
+    except ValueError:
+        # 只吞「地址本身畸形」；导入错、拼写错这类编程错误必须炸出来，
+        # 否则会被静默当成「不同源」，白名单就形同虚设。
+        return None
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return None
+    hostname = (parts.hostname or "").lower()
+    if not hostname:
+        return None
+    try:
+        port = parts.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        return None
+    return scheme, hostname, port
+
+
 class _TrimeCategory(Enum):
     """飞牛影视媒体库分类"""
     MOVIE = "Movie"
@@ -110,6 +131,16 @@ class _TrimeApi:
     @property
     def token(self):
         return self._token
+
+    @property
+    def cookies(self):
+        """当前会话的 Cookies（开启访问码后含访问码校验凭证）"""
+        if not self._session:
+            return {}
+        try:
+            return self._session.cookies.get_dict()
+        except Exception:
+            return {}
 
     @property
     def version(self):
@@ -958,6 +989,48 @@ class TrimeMediaClient(_IMediaClient):
             return path
         return f"{self._api.host}{_TrimeApi.build_img_api_url(path)}"
 
+    def __proxy_image_url(self, path):
+        """
+        把图片路径转成「经本机 /img 中转、且中转代取时会带上凭证」的相对地址
+
+        飞牛的图片接口同样校验登录态，而 <img> 带不了请求头 ⇒ 不能把飞牛地址直接
+        交给浏览器（必然 401/403），必须由本机中转代取。
+        """
+        return self.get_nt_image_url(self.__abs_image_url(path))
+
+    @staticmethod
+    def __same_origin(image_url, allowed_url):
+        """判断两个地址是否同源（scheme + host + port 完全一致）"""
+        origin = _split_origin(image_url)
+        return bool(origin) and origin == _split_origin(allowed_url)
+
+    def get_image_cookies(self, image_url):
+        """
+        获取访问飞牛图片所需的 Cookies
+
+        把登录 token 放进 Cookie（与 MoviePilot 的 Trim-MC-token 同口径），
+        由本机 /img 中转换取时携带。
+
+        ★安全红线：只有 image_url 就是本客户端配置的那台服务器（同源）时才给凭证，
+        否则 /img 会变成「带着 token 请求任意 URL」的凭证外泄通道。
+        """
+        if not image_url or not self.__is_ready():
+            return None
+        if not self.__same_origin(image_url, getattr(self._api, "host", "")):
+            return None
+        token = getattr(self._api, "token", None)
+        if not token:
+            return None
+        cookies = {}
+        if self._access_code:
+            # 开启访问码后，图片请求也需要携带访问码校验凭证
+            cookies.update(getattr(self._api, "cookies", None) or {})
+        # ⚠️ 登录 token 最后写：确保用的就是本次登录拿到的 token。
+        # 若先放 token 再 update 会话 Cookie，会话里一个同名的 Trim-MC-token
+        # 就会把它顶掉（上游 MoviePilot 就是这个顺序，这里刻意收紧）。
+        cookies["Trim-MC-token"] = token
+        return cookies
+
     def get_remote_image_by_id(self, item_id, image_type):
         """根据 ItemId 查询远程图片地址"""
         if not self.__is_ready():
@@ -1049,10 +1122,11 @@ class TrimeMediaClient(_IMediaClient):
                     "name": lib.get("name") or lib.get("title") or guid,
                     "type": library_type,
                     "path": self._libraries[guid]["dir_list"],
-                    "image": self.__abs_image_url(posters[0]) if posters else "",
+                    # 飞牛图片要带凭证，浏览器直连必然失败 ⇒ 与 emby/jellyfin 一样走本机中转
+                    "image": self.__proxy_image_url(posters[0]) if posters else "",
                     # 无封面时前端会退到 custom-plex-library-img，该组件会对
                     # img-src-list 做 split(",")，故这里必须给字符串而不是列表
-                    "image_list": ",".join(self.__abs_image_url(p) for p in posters[:4] if p),
+                    "image_list": ",".join(self.__proxy_image_url(p) for p in posters[:4] if p),
                     "link": (self._play_host or self._api.host).rstrip("/") + f"/library/{guid}",
                 })
                 log.info(f"【{self.client_name}】发现媒体库：{libraries[-1]['name']} ({library_type})")
