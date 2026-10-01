@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -811,6 +811,26 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：Emby / Jellyfin / Plex / 绿联影视不受影响（它们的图片不需要凭证，钩子默认返回空）。
 
+#### 2.38 「媒体库同步」弹窗标题改显示名（v6.2.7）
+
+**问题**：v6.2.6 改了「我的媒体库」的页面标题，但点「媒体库同步」弹出的那个完成弹窗顶部
+仍显示内部代号 —— 飞牛影视显示为 `Trimemedia`、绿联影视显示为 `Ugreen`。
+
+**原因**：同一个模板里有**两处**引用了媒体服务器类型。页面标题那处 v6.2.6 已换成显示名，
+弹窗标题那处漏了，仍在用内部代号并套 `|title` 过滤器（`trimemedia` → `Trimemedia`，
+看着像个人名，所以一眼看不出来）。
+
+**修复后**：弹窗标题与页面标题口径一致，统一按「设置 → 媒体服务器」里的名字显示：
+
+| 媒体服务器 | 改前 | 改后 |
+|---|---|---|
+| 飞牛影视 | `Trimemedia` | `飞牛影视` |
+| 绿联影视 | `Ugreen` | `绿联影视` |
+| Emby / Jellyfin / Plex | `Emby` / `Jellyfin` / `Plex` | 不变 |
+
+**说明**：弹窗左侧那个图标**不受影响**（图标文件名本来就是内部代号，如 `trimemedia.png`），
+本版只改文案。无协议、配置或依赖变更。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1431,7 +1451,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.6   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.7   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1534,4 +1554,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-01 ｜ 当前版本 v6.2.6_
+_Last updated: 2026-10-01 ｜ 当前版本 v6.2.7_

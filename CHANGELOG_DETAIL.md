@@ -3,6 +3,58 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.7 (2026-10-01) — 补齐：同步弹窗标题也走显示名
+
+## 背景
+
+v6.2.6 把首页标题从 `MediaServerType`（内部代号）换成了 `MediaServerName`（显示名），
+但**只改了页面标题那一处**。用户实测发现，点「媒体库同步」弹出的那个完成弹窗顶部
+仍写着 `Trimemedia` —— 那是同一份模板里的另一处引用，v6.2.6 漏掉了。
+
+## 根因
+
+`web/templates/index.html` 里，同一个模板变量被用于两层不同语义：
+
+| 用途 | 变量 | 为什么不能互换 |
+|---|---|---|
+| 静态图标文件名 | `MediaServerType` | 文件名就是内部代号（`trimemedia.png`），换中文名会 404 |
+| 给人看的名字 | `MediaServerName` | 取 `ModuleConf.MEDIASERVER_CONF[type]["name"]`，已是中文名 |
+
+第 193 行用 `MediaServerType` 拼图标路径（**正确，不动**）；第 195 行原本也用了
+`MediaServerType`，但套了个 `|title` 过滤器 —— 它把 `trimemedia` 变成 `Trimemedia`，
+看着像个正经人名，所以从界面上一眼看不出来。
+
+⚠️ `web/main.py` 里另有 `MediaServerType.PLEX` / `.JELLYFIN` / `.EMBY` 这类引用，
+那是 `app.utils.types.MediaServerType` **枚举**（值本身已是 `Plex` / `绿联影视` / `飞牛影视`），
+与模板变量同名但完全无关，**不能一起改**。本次锚点核对专门把这三行排除在外。
+
+## 改动（1 文件 / 1 行）
+
+| 文件 | 改动 |
+|---|---|
+| `web/templates/index.html` | 第 195 行 `{{ MediaServerType\|title }}` → `{{ MediaServerName }}` |
+
+`git diff --stat` = `1 file changed, 1 insertion(+), 1 deletion(-)`；行尾保持 CRLF
+（补丁走「归一成 LF 替换 → 按原行尾写回」，并断言 CRLF/裸 LF 计数不变）。
+
+## 影响面
+
+| 媒体服务器 | 改前显示 | 改后显示 |
+|---|---|---|
+| 飞牛影视 | `Trimemedia` | `飞牛影视` |
+| 绿联影视 | `Ugreen` | `绿联影视` |
+| Emby / Jellyfin / Plex | `Emby` / `Jellyfin` / `Plex` | 不变（显示名与代号仅大小写之差） |
+
+## 测试
+
+- `_verify_bump_627.py` 共 **67 项**，含 6 条反向注入，确保判据不是「永远为真」。
+- 存量回归：全套通过（trimemedia / fix / regression / runtime / e2e / realhttp /
+  diagnose / log 守卫 / bump_626 等）。
+- **判据按「行为」而非「字面」**：断言的是「模板里交给用户看的那处用 `MediaServerName`」
+  且「图标那处仍用 `MediaServerType`」—— 否则会把本来正确的图标表达式误判成漏改
+  （v6.0.3 踩过同类坑：文档里说明「某字段已移除」必然要写出该字段名，导致「出现即失败」的
+  扫描判据在发版后必红）。
+
 # v6.2.6 (2026-10-01) — 图片鉴权闭环：库封面 / 观看记录封面 + 标题显示名
 
 ## 背景
