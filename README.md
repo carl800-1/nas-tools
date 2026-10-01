@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.9** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -874,6 +874,38 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 **说明**：仅飞牛影视适用（Emby / Jellyfin / Plex 用长期密钥，绿联影视自带长会话保活）；
 无新增依赖、无协议或数据结构变更。
 
+#### 2.41 「种子管理模式」三种模式重做（v6.3.0）
+
+**问题**：设置 → 下载器 → qBittorrent 里的「种子管理模式」，和它下面的「下载目录设置」
+长期对不上：
+
+- 选了「**自动**」，只要某一行填了「下载保存目录」，实际行为就会**退化成手动**；
+- 没匹配到目录时会打一条 `没有可用的下载目录…` 告警 —— 但**只要那行配了分类标签，分类名
+  其实已经下发给 qB 了**（qB 会按该分类的保存路径落盘），这条告警纯属**误报**；
+- 选了「**默认**」，NAStool 照样会去创建 / 覆盖 qB 的分类与保存路径。
+
+**修复后**：三种模式严格各管一段，界面也随模式自动调整。
+
+| 模式 | 下发给 qBittorrent | 说明 |
+|---|---|---|
+| **默认** | 什么都不下发 | 完全沿用 qBittorrent 自身的设置与行为，NAStool 不做任何干预 |
+| **手动** | 下载保存目录（不下发分类） | 下载目录由 NAStool 决定 |
+| **自动** | 有分类 → 只下发分类；没分类 → 下发下载保存目录 | 有分类时由 qB 按该分类绑定的保存路径落盘；两者都没有则交给下载器默认路径 |
+
+**告警也按模式给**：「默认」模式**不再告警**（那本来就是「沿用下载器设置」）；
+「手动」模式没匹配到下载保存目录才告警；「自动」模式分类与目录都没有才告警。
+
+**界面**：「下载目录设置」随所选模式调整 —— 默认模式整表收起（此时它只用于**路径映射**与
+**自动分类**，不影响下载位置）；手动模式不再显示「分类标签」；自动模式全部显示。
+另外**只有「自动」模式**会在启动时按「下载目录设置」创建 / 更新 qB 分类。
+
+**说明**：非 qBittorrent 下载器（Transmission 等）没有「种子管理模式」这个概念，行为不变；
+刷流 / IYUU / 订阅等显式指定下载目录的链路也不受影响。
+
+**顺带修掉一个空状态报错**：**未配置任何下载器**时打开「设置 → 下载器」，页面会直接报错（500）
+—— 因为该页面在「没有下载器」的分支里用了 `OOPS.empty(...)`，却漏了一行模板 import
+（全仓其它 17 个用到它的模板都写了，只有这一处漏）。现已补上。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1494,7 +1526,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.9   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1597,4 +1629,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-01 ｜ 当前版本 v6.2.9_
+_Last updated: 2026-10-01 ｜ 当前版本 v6.3.0_

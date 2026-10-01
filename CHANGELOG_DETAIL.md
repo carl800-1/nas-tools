@@ -3,6 +3,104 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.0 (2026-10-01) — 重做：种子管理模式（三模式语义 / 参数下发 / 报警 / 界面显隐）
+
+## 背景
+
+「种子管理模式」是 qBittorrent 独有的一组三档设置（默认 / 手动 / 自动），它决定
+**「设置 → 下载器 → 下载目录设置」里那些列会被下发给下载器**。旧实现有三处对不上：
+
+| # | 问题 | 代码事实 |
+|---|---|---|
+| 1 | **模式只在「目录为空」时才生效** | `add_torrent()` 里 `if download_dir: is_auto = False`，一旦拿到非空目录就把 `is_auto` 钉死，后面 `match self._torrent_management` 的三分支**永不执行** ⇒ 「自动」模式在填了「下载保存目录」的行上静默退化成手动 |
+| 2 | **报警是结构性误报** | 告警守卫 `if not download_dir:` 只看目录，而分类名要到**晚 7 行**才补上（`if not category: category = download_info.get('category')`）⇒ 分类名已算出来也照样 warn |
+| 3 | **「默认」模式并非「什么都不发」** | 只要表里匹配到行，`save_path` 与 `category` 照发；`autoTMM` 还会镜像 qB 的全局设置；`init_torrent_management()` 在该模式下也会去创建 / 覆盖 qB 分类 —— 与「尊重下载器自身设置」相矛盾 |
+
+## 改动（4 文件）
+
+### 1. `app/downloader/client/qbittorrent.py` —— 模式语义收敛成**唯一一个纯函数**
+
+新增模块级 `resolve_torrent_management(mode, save_path, category)`，返回
+`{save_path, category, auto_tmm, level, reason}`。参数下发与日志提示**都从这里取结果**，
+所以「模式切换 / 参数下发 / 报警」三者不可能各说各话。
+
+| 模式 | `save_path` | `category` | `autoTMM` |
+|---|---|---|---|
+| `default` | 不传 | 不传 | 不传 |
+| `manual` | 传（NAStool 定） | 不传 | `False` |
+| `auto` | 有分类 → 不传；无分类 → 传 | 有分类 → 传 | 有分类 → `True`；否则 `False`；全无 → 不传 |
+
+**「不传」= 传 `None`，这是有依据的**：`qbittorrent-api` 把 `data` 里每个值写成
+`(占位值, 实际值)` 元组，而 `requests` 编码表单时**会跳过元组里的 `None`**
+（`qbittorrent-api` 的 `torrents.py` 里 `"autoTMM": (None, use_auto_torrent_management)`，
+`requests._encode_params` 里 `if v is not None`）⇒ 传 `None` 等于**该参数不出现在请求体**，
+下载器用它自己的设置。已按 `qbittorrent-api==2023.9.53`（与 `requirements.txt` 同版本）
+的真实源码 + 真实编码跑通验证（见下「验证」B 组）。
+
+`add_torrent()` 相应改造：新增 `auto_tmm=None` 形参，由上层传决定好的值；
+删掉 `if download_dir: is_auto = False` 的提前钉死与 `match self._torrent_management` 三分支；
+**删除 `__check_category()`**（它是第 4 条隐式分支：自动模式无分类时按保存目录反查分类，
+新语义下已不可达 —— 无分类时直接下发目录给下载器）。
+
+`init_torrent_management()` 改为**只有 `auto` 模式**才继续往下走，默认与手动模式直接返回：
+默认模式不再创建 / 覆盖 qB 分类，手动模式的目录逐任务下发、无需维护分类。
+新增 `get_torrent_management()` 供上层读取模式。
+
+### 2. `app/downloader/downloader.py` —— 内部用途与下发用途分开 + 分模式报警
+
+- `downloader_type` 提前到「下载目录设置」之前计算（模式只对 qBittorrent 生效）。
+- 新增 `add_dir`（真正下发）与 `auto_tmm`；**表格解析出的 `download_dir` / `container_path`
+  仍用于内部**：下载历史登记、站点字幕目录、转移链路的路径映射 —— 默认模式「不下发参数」
+  不等于「这张表作废」。
+- 策略函数**延迟导入**（在 `if downloader_type == DownloaderType.QB:` 内）：
+  `qbittorrent.py` 依赖第三方库 `qbittorrentapi`，而下载器客户端是运行期动态加载的
+  （`SubmoduleHelper.import_submodules`，不是安装依赖）。放到模块顶层会让「没装这个库」
+  从「某一个下载器不可用」放大成「整个应用起不来」。
+- 新增 `__log_torrent_management()`：三种模式只在该说话时说话（默认只 info、绝不 warn）。
+- **调用方显式指定下载目录的路径保持原行为**：刷流 / IYUU / 转移 / 订阅都会直接传
+  `download_dir=`，那是明确的指令而不是从表格推出来的，因此不走模式 —— 目录照发 +
+  强制 `autoTMM=False`（避免下载器按分类把文件搬走）。
+
+### 3. `app/conf/moduleconf.py` —— tooltip 与三模式语义对齐
+
+### 4. `web/templates/setting/downloader.html` —— 按模式显隐填写项
+
+新增 `refresh_dir_mode_ui()`，在「模式切换 / 切换下载器类型 / 弹窗显示 / 新增规则行」四处调用：
+默认模式把整张表**折叠**并在表头写明「本表仅用于路径映射与自动分类」；手动模式隐藏
+「分类标签」列；自动模式全部展示。**只做显隐，不动取值** —— 隐藏的输入框仍会随表单提交，
+切模式不会丢数据。
+
+### 5. `web/templates/setting/downloader.html` —— 附带修复：补上缺失的 `OOPS` import
+
+该模板在「没有下载器」的空状态分支里调用了 `OOPS.empty(...)`，却从未
+`{% import 'macro/oops.html' as OOPS %}`。**全仓扫描确认这是唯一一处**（其余 17 个用到
+`OOPS.` 的模板都 import 了，见 `artifacts/_scan_oops_import_630.py`）。后果：
+**未配置任何下载器时打开「设置 → 下载器」直接 500**（Jinja `UndefinedError: 'OOPS' is undefined`）。
+已在模板首部补上该 import，并加了「空状态整页可渲染」的回归断言（验证 E11/E12）。
+
+> 这个缺陷是做本次验证时**渲染整页真实 Jinja 模板**才暴露出来的 —— 说明「真跑真实模板」
+> 比只读源码更能发现问题。
+
+## 已知边界（本版刻意不做）
+
+- **手动模式隐藏「分类标签」列**：该列同时是 fork「自动分类」规则的编辑入口（选「自动判定」
+  的行即规则）。手动/默认模式下要改这些规则，需切到「自动」模式再改 —— 规则本身照常生效。
+- 「种子管理模式」新建下载器时的**默认档仍是「手动」**（原行为，未改动）。
+- 非 qBittorrent 下载器（Transmission 等）没有「种子管理模式」这个概念，一律按原样处理。
+
+## 验证
+
+- `_verify_bump_630.py` 全绿（托管 venv：真实 `qbittorrent-api==2023.9.53` + 真实 Jinja）。
+- **B 组用真实库跑出结论**：截获 `qbittorrentapi.Client.torrents_add()` 真实发出的 POST
+  data，再用真实 `requests` 编码 —— 证明 `autoTMM=None` 时该键**确实不在表单体里**，
+  而 `True` / `False` 时在。
+- **C 组真跑 `Qbittorrent.add_torrent`**（只把 `qbc` 换成录制器）：三模式参数映射逐一断言。
+- **D 组真跑 `__log_torrent_management`**：六种情形逐一断言 info/warn 条数 ——
+  其中「默认模式 warn 必须为 0」正是本次修掉的误报。
+- **E 组真实 Jinja 渲染整页**，断言新增 id / 函数 / 三处调用点都在渲染结果里。
+- **G 组反向注入**：把策略换成「永不下发 autoTMM」、把「手动」分支与「自动按目录回退」分支
+  从真实源码里摘掉再执行，断言行为确实改变 —— 证明判据在测这段新代码而不只是同义反复。
+
 # v6.2.9 (2026-10-01) — 新增：飞牛影视登录态失效自动重登
 
 ## 背景
