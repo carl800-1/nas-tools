@@ -273,6 +273,12 @@ def index():
     MSType = Config().get_config('media').get('media_server')
     # 媒体服务器显示名（飞牛影视 / 绿联影视 这类中文名），用于首页报错文案
     MediaServerName = (ModuleConf.MEDIASERVER_CONF.get(str(MSType).lower()) or {}).get("name") or str(MSType)
+    # 媒体服务器图标：取配置里的 img_url，**不要**按内部代号硬拼文件名 ——
+    # 绿联影视复用的是 emby.png，磁盘上没有 ugreen.png，硬拼必然 404。
+    MediaServerImg = (
+        (ModuleConf.MEDIASERVER_CONF.get(str(MSType).lower()) or {}).get("img_url")
+        or f"../static/img/mediaserver/{MSType}.png"
+    )
     # 获取媒体数量
     MediaCounts = WebAction().get_library_mediacount()
     if MediaCounts.get("code") == 0:
