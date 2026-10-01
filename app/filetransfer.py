@@ -647,6 +647,26 @@ class FileTransfer:
         alert_count = 0
         alert_messages = []
         total_count = 0
+        # 实际转移成功的文件数（用于最终汇总）
+        success_count = 0
+        # 在识别阶段就被跳过的文件：get_media_info_on_files 内部是 continue，
+        # 这些文件根本不会出现在 Medias 里。不单独记账就是「静默丢文件」——
+        # 界面显示 26 个，实际只处理了几个，用户却看不到任何提示。
+        missed_files = [f for f in file_list if f not in Medias]
+        if missed_files:
+            _missed_names = [os.path.basename(f) for f in missed_files]
+            if len(_missed_names) > 10:
+                _missed_names = _missed_names[:10] + ["...等共 %s 个" % len(missed_files)]
+            log.warn("【Rmt】有 %s 个文件未能识别出有效媒体信息：%s"
+                     % (len(missed_files), "、".join(_missed_names)))
+            success_flag = False
+            for _missed_file in missed_files:
+                if self.dbhelper.is_need_insert_transfer_unknown(_missed_file):
+                    self.dbhelper.insert_transfer_unknown(_missed_file, target_dir, rmt_mode)
+                    alert_count += 1
+                failed_count += 1
+            if "无法识别媒体信息" not in alert_messages:
+                alert_messages.append("无法识别媒体信息")
 
         # 电视剧可能有多集，如果在循环里发消息就太多了，要在外面发消息
         message_medias = {}
@@ -680,8 +700,7 @@ class FileTransfer:
                     success_flag = False
                     error_message = "无法识别媒体信息"
                     self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
-                    if udf_flag:
-                        return __finish_transfer(success_flag, error_message)
+                    # 单个文件失败不再中断整批：记账后继续处理后面的文件
                     # 记录未识别
                     is_need_insert_unknown = self.dbhelper.is_need_insert_transfer_unknown(reg_path)
                     if is_need_insert_unknown:
@@ -722,7 +741,15 @@ class FileTransfer:
                         alert_messages.append(error_message)
                     continue
                 if dist_path and not os.path.exists(dist_path) and rmt_mode not in ModuleConf.REMOTE_RMT_MODES:
-                    return __finish_transfer(False, "目录不存在：%s" % dist_path)
+                    log.error("【Rmt】文件转移失败，目的路径不存在：%s" % dist_path)
+                    success_flag = False
+                    error_message = "目的路径不存在：%s" % dist_path
+                    self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
+                    failed_count += 1
+                    alert_count += 1
+                    if error_message not in alert_messages:
+                        alert_messages.append(error_message)
+                    continue
 
                 # 判断文件是否已存在，返回：目录存在标志、目录名、文件存在标志、文件名
                 dir_exist_flag, ret_dir_path, file_exist_flag, ret_file_path = self.__is_media_exists(dist_path, media)
@@ -737,8 +764,8 @@ class FileTransfer:
                     # 蓝光原盘
                     if bluray_disk_dir:
                         log.warn("【Rmt】蓝光原盘目录已存在：%s" % ret_dir_path)
-                        if udf_flag:
-                            return __finish_transfer(False, "蓝光原盘目录已存在：%s" % ret_dir_path)
+                        success_flag = False
+                        error_message = "蓝光原盘目录已存在：%s" % ret_dir_path
                         failed_count += 1
                         continue
                     # 文件存在
@@ -765,8 +792,6 @@ class FileTransfer:
                                     success_flag = False
                                     error_message = "文件转移失败，错误码 %s" % ret
                                     self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
-                                    if udf_flag:
-                                        return __finish_transfer(success_flag, error_message)
                                     failed_count += 1
                                     alert_count += 1
                                     if error_message not in alert_messages:
@@ -794,8 +819,6 @@ class FileTransfer:
                         success_flag = False
                         error_message = "识别失败，无法从文件名中识别出季集信息"
                         self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
-                        if udf_flag:
-                            return __finish_transfer(success_flag, error_message)
                         # 记录未识别
                         is_need_insert_unknown = self.dbhelper.is_need_insert_transfer_unknown(reg_path)
                         if is_need_insert_unknown:
@@ -816,8 +839,6 @@ class FileTransfer:
                         success_flag = False
                         error_message = "蓝光目录转移失败，错误码：%s" % ret
                         self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
-                        if udf_flag:
-                            return __finish_transfer(success_flag, error_message)
                         failed_count += 1
                         alert_count += 1
                         if error_message not in alert_messages:
@@ -831,8 +852,6 @@ class FileTransfer:
                             success_flag = False
                             error_message = "识别失败，无法从文件名中识别出集数"
                             self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
-                            if udf_flag:
-                                return __finish_transfer(success_flag, error_message)
                             # 记录未识别
                             is_need_insert_unknown = self.dbhelper.is_need_insert_transfer_unknown(reg_path)
                             if is_need_insert_unknown:
@@ -851,8 +870,6 @@ class FileTransfer:
                             success_flag = False
                             error_message = "文件转移失败，错误码 %s" % ret
                             self.progress.update(ptype=ProgressKey.FileTransfer, text=error_message)
-                            if udf_flag:
-                                return __finish_transfer(success_flag, error_message)
                             failed_count += 1
                             alert_count += 1
                             if error_message not in alert_messages:
@@ -912,6 +929,8 @@ class FileTransfer:
                                                    file_name=os.path.basename(ret_file_path),
                                                    file_ext=file_ext,
                                                    rmt_mode=rmt_mode)
+                # 已成功转移的文件数（供最终汇总使用）
+                success_count += 1
                 # 更新进度
                 self.progress.update(ptype=ProgressKey.FileTransfer,
                                      value=round(total_count / len(Medias) * 100),
@@ -940,6 +959,13 @@ class FileTransfer:
             except Exception as err:
                 ExceptionUtils.exception_traceback(err)
                 log.error("【Rmt】文件转移时发生错误：%s - %s" % (str(err), traceback.format_exc()))
+                # 异常同样要记账：否则「既没成功也没失败」会被收尾当成处理成功
+                success_flag = False
+                failed_count += 1
+                alert_count += 1
+                _exc_message = "处理异常：%s" % str(err)
+                if _exc_message not in alert_messages:
+                    alert_messages.append(_exc_message)
         # 循环结束
         # 统计完成情况，发送通知
         if message_medias:
@@ -969,6 +995,22 @@ class FileTransfer:
                     and not PathUtils.get_dir_files(in_path=in_path, exts=['.!qb', '.part']):
                 log.info("【Rmt】目录下已无媒体文件及正在下载的文件，移动模式下删除目录：%s" % in_path)
                 shutil.rmtree(in_path)
+        # 汇总总数/成功数/未转移数，把结果如实返回给调用方 ——
+        # 避免出现「界面显示 26 个文件、实际只转移了 5 个却仍当成功」。
+        # 未转移数以「清单数 - 实际成功数」为准，比单独累加的 failed_count 更可靠：
+        # 任何一条记账分支被漏掉，也不会再被误判成「全部成功」。
+        _not_transferred = max(0, len(file_list) - success_count)
+        if _not_transferred > 0:
+            # 这里**不改** success_flag：「目的文件已存在、大小一致」属于
+            # 「没转移但不算失败」，必须保持成功返回 —— 否则下载器监控
+            # （downloader.py 在 not done_flag 时不登记账本、下轮重试）
+            # 会每 300s 把这些任务重复整理一次。真正的失败点
+            # （未识别 / 拼不出季集 / 转移失败 / 异常）已各自置 False。
+            _reason = "、".join(alert_messages) if alert_messages else (error_message or "详见日志")
+            error_message = "共 %s 个文件需要处理，成功 %s 个，未转移 %s 个（%s）" % (
+                len(file_list), success_count, _not_transferred, _reason)
+        elif not error_message:
+            error_message = "共 %s 个文件需要处理，全部处理成功" % len(file_list)
         return __finish_transfer(success_flag, error_message)
 
     def transfer_manually(self, s_path, t_path, mode):
