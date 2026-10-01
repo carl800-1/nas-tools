@@ -3,6 +3,83 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.5 (2026-10-01) — 连接诊断闭环：首页给原因 + 诊断脚本前置体检 + 保存后回读
+
+## 背景
+
+v6.2.3 / v6.2.4 解决的是「配置没落盘」与「报错被覆盖」两个具体缺陷。但真机上仍可能出现
+「测试失败 / 首页连接失败」而**信息不足**：报错文案写死的是 Emby/Jellyfin/Plex、且不给原因；
+诊断脚本只有接口层，一旦 DNS / 端口 / 证书 / 反向代理这条链断了，它给出的仍然只是一句「请求异常」。
+
+本版把这三处补上，目标是**把「猜」换成「读」**。不涉及任何协议改动，零新依赖。
+
+## 一、首页报错文案：动态名称 + 真实原因
+
+| 文件 | 改动 |
+|---|---|
+| `web/action.py::get_library_mediacount` | 失败时优先读客户端的 `last_error`，拼成 `媒体库服务器连接失败：<原因>` |
+| `web/main.py::index` | 新增 `ServerError` / `MediaServerName` 两个模板上下文 |
+| `web/templates/index.html` | 报错文案改为由上下文的名称与原因拼装 |
+
+显示名取自 `ModuleConf.MEDIASERVER_CONF[<type>]["name"]`，即「飞牛影视 / 绿联影视 / Emby …」，
+与「设置 → 媒体服务器」卡片上写的一致。
+
+`last_error` 只有实现了该属性的客户端（飞牛影视）才有，用 `getattr(client, "last_error", None)`
+读取；Emby / Jellyfin / Plex / 绿联影视 走原路径，文案与以前完全一致（已验证）。
+
+## 二、诊断脚本：四段前置体检
+
+`scripts/diagnose_trimemedia.py` 新增 `preflight()`，在每个候选地址做接口探测**之前**执行：
+
+| 段落 | 判据 | 失败时的提示 |
+|---|---|---|
+| DNS | `socket.getaddrinfo` | 改用 IP；或给容器配 DNS / 写 hosts |
+| TCP | `socket.create_connection(timeout=5)` + 计时 | 端口、服务、容器网络、防火墙 |
+| TLS | 先不校验证书取 `getpeercert()`，再单独跑一次真校验 | 自签名 / 主机名不匹配 ⇒ 关「校验SSL证书」 |
+| 反向代理 | 不带签名裸探 `{根}/` 与 `{根}/v/`，看 Server 头 / 3xx / 5xx | 重定向 = 网关页；502/504 = 后端不可达；401/403 = 网关鉴权 |
+
+体检不通过就**跳过接口探测**（省掉 10s 超时等待），新增 `--no-preflight` 可关闭。
+
+## 三、保存后回读
+
+`config.py` 新增 `read_config_file()`（从磁盘重读，不改变内存配置）；
+`web/action.py::__update_config`：
+
+1. `save_config` 包 `try/except`，写失败返回 `{"code": 1, "msg": "配置文件写入失败：…"}`（此前会 500）；
+2. 写成功后调用 `__verify_config_saved(cfgs)` 逐键回读。
+
+**误报控制**（本节最需要小心的地方）：只校验「提交了非空标量值」的键，且只在磁盘上
+「找不到 / 是 None / 是空串」时才报；值不同但都存在则不报（后端有密码散列、代理包装等正常转换）。
+`app.login_password` 与 `app.proxies` 直接跳过。回读结果不是 dict、或读取抛异常，都只给提示不抛。
+返回 `{"code": 0, "msg": ...}` —— `code` 语义不变，其它调用方不受影响。
+
+前端 `mediaserver.html` 在「保存」与「测试」两条回调里都会把 `msg` 弹出来。
+
+## 四、验证
+
+`_verify_bump_625.py`：**48 项断言全绿**。被测逻辑一律用 AST 从真实文件抽源码来跑，
+只有 `Config` / `MediaServer` / `log` 等外部依赖做桩。
+
+踩到的两个**测试自身**的坑（已记入技能）：
+
+- `MediaServer.server` 是 `@property`，桩若写成 `@staticmethod`，`instance.server` 拿到的是
+  **函数对象**而不是客户端实例 ⇒ 测试假红。这是「桩必须从真实模块派生」的又一变体。
+- `ruamel.yaml` 要用 `import ruamel.yaml`，只 `__import__("ruamel")` 拿不到 `.yaml` 属性 ⇒ 测试假红。
+
+## 五、附带修正：log API 守卫的假阳性
+
+`_verify_log_api_usage.py` 的 [B] 段原先用文本正则找 `for n in ("info", ...)`，而
+`_patch_bump_624.py` 的发布说明里**贴了一段含 `"warning"` 的示例代码**，被误判成「桩造了不存在的名字」。
+现改为 AST 识别（`ast.For` + `ast.Tuple` + 邻近 `setattr(`），并加两条反向注入：
+真桩要能识别、贴在文档字符串里的同款样例不能识别。
+
+## 六、其它
+
+- `_check_anchors_625_bump.py`（只读锚点核对）在本版实测拦下一个错锚点：
+  `index.html` 里 `MediaServerName` 我写 want=3，实际是同一行出现 2 次。
+- 灰度结论：本版**不承诺「改完就能连上」**。「连不上」的成因可能在地址 / 网络 / 反代侧，
+  本版的作用是把它**指出来**。协议层报文与上游 MoviePilot 的比对仍是 40/40 一致。
+
 # v6.2.4 (2026-09-30) — 修复 log.warning 越界调用 + 加固测试桩
 
 ## 用户可见的问题

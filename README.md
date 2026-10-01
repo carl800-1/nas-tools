@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -761,6 +761,31 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：只影响日志调用与错误提示，不改变任何协议行为；已升级到 v6.2.3 的用户建议直接升到 v6.2.4。
 
+#### 2.36 连接失败「看得见原因」+ 保存后回读（v6.2.5）
+
+**问题**：媒体服务器连接失败时，首页只给一句「请确认Emby/Jellyfin/Plex配置是否正确」——
+既没提你实际用的服务器（比如飞牛影视），也不给失败原因；诊断脚本也只在接口层，
+一旦 DNS / 端口 / 证书 / 反向代理这条链断了，它只能报一句「请求异常」。
+
+**改进后**：
+
+- **首页按实际服务器报错**：文案改为动态名称 + 真实原因，例如
+  `当前无法连接「飞牛影视」获取数据（媒体库服务器连接失败：无法连接 http://192.168.3.3:5666/v（连接超时））`；
+- **诊断脚本新增四段前置体检**：DNS → TCP → TLS（含证书 / 自签名判定）→ 反向代理，
+  体检不通过会给出可执行建议，并跳过无谓的接口等待：
+
+  ```bash
+  docker exec -it nas-tools python /nas-tools/scripts/diagnose_trimemedia.py
+  ```
+
+  想跳过体检直接打接口，加 `--no-preflight`。
+
+- **保存后回读**：保存配置后会从磁盘重新读一遍校验，若「提交了却没落盘」
+  （配置目录只读、磁盘写满等）会明确提示是哪些项。
+
+**说明**：本版不改变任何协议行为、无新依赖。「连接失败」的成因可能在本机网络 / 地址侧，
+本版的作用是把它指出来。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1381,7 +1406,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.4   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.5   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1484,4 +1509,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-09-30 ｜ 当前版本 v6.2.4_
+_Last updated: 2026-10-01 ｜ 当前版本 v6.2.5_
