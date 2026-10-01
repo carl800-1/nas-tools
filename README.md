@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -811,6 +811,24 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：Emby / Jellyfin / Plex / 绿联影视不受影响（它们的图片不需要凭证，钩子默认返回空）。
 
+#### 2.39 媒体服务器图标统一走配置（v6.2.8）
+
+**问题**：点「媒体库同步」后，弹窗左侧的图标对**绿联影视**用户显示为空白。
+
+**原因**：该图标是按**内部代号拼文件名**的（`ugreen.png`），而绿联影视复用的是 `emby.png`
+—— 磁盘上根本没有 `ugreen.png`，所以必然加载失败。Emby / Jellyfin / Plex / 飞牛影视
+恰好都有同名图片，才一直没被发现。
+
+**修复后**：图标改为与「设置 → 媒体服务器」同一口径，一律取配置里的图标地址：
+
+| 媒体服务器 | 改前 | 改后 |
+|---|---|---|
+| 绿联影视 | 空白（`ugreen.png` 不存在） | ✅ 正常显示 |
+| Jellyfin | `jellyfin.png` | `jellyfin.jpg`（与设置页统一） |
+| Emby / Plex / 飞牛影视 | 正常 | 不变 |
+
+**说明**：未新增静态资源、未改任何内部命名；无协议、配置或依赖变更。
+
 #### 2.38 「媒体库同步」弹窗标题改显示名（v6.2.7）
 
 **问题**：v6.2.6 改了「我的媒体库」的页面标题，但点「媒体库同步」弹出的那个完成弹窗顶部
@@ -1451,7 +1469,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.7   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.8   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1554,4 +1572,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-01 ｜ 当前版本 v6.2.7_
+_Last updated: 2026-10-01 ｜ 当前版本 v6.2.8_

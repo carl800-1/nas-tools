@@ -3,6 +3,82 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.8 (2026-10-01) — 修复：媒体服务器图标改走配置（绿联影视图标 404）
+
+## 背景
+
+「媒体库同步」弹窗的图标一直是**按内部代号硬拼文件名**的：
+
+```jinja
+style="background-image: url('../static/img/mediaserver/{{ MediaServerType }}.png')"
+```
+
+emby / jellyfin / plex / trimemedia 恰好都有同名 `.png`，所以问题一直没暴露；
+但**绿联影视复用的是 emby.png**：
+
+| 类型 | 配置里的 `img_url` | 硬拼出的文件 | 磁盘是否存在 |
+|---|---|---|---|
+| emby | `.../emby.png` | `emby.png` | ✓ |
+| jellyfin | `.../jellyfin.jpg` | `jellyfin.png` | ✓（侥幸，且与设置页图标不一致） |
+| plex | `.../plex.png` | `plex.png` | ✓ |
+| **ugreen** | **`.../emby.png`** | **`ugreen.png`** | **✗ 不存在 ⇒ 404 空白** |
+| trimemedia | `.../trimemedia.png` | `trimemedia.png` | ✓ |
+
+## 根因
+
+同一个语义（「这台媒体服务器的图标」）在**两处用了两套取法**：
+设置页 `setting/mediaserver.html:22` 取 `MediaServer.img_url`（读配置，正确），
+首页弹窗按 `MediaServerType` 拼文件名（猜文件名，错）。
+
+## 改动（2 文件 / +7 −1）
+
+1. `web/main.py::index()` 新增模板变量 `MediaServerImg`，与已有 `MediaServerName` 同族：
+
+```python
+MediaServerImg = (
+    (ModuleConf.MEDIASERVER_CONF.get(str(MSType).lower()) or {}).get("img_url")
+    or f"../static/img/mediaserver/{MSType}.png"
+)
+```
+
+   末尾的 `or ...` 是**兜底**：配置里查不到该类型时，行为与改前**完全一致**（仍按代号拼），
+   不引入新分支。
+
+2. `web/templates/index.html`：图标表达式改为 `url('{{ MediaServerImg }}')`。
+
+   前缀 `../static/img/mediaserver/` 与改前逐字符相同 ⇒ **相对路径解析基准不变**，
+   未新增 / 删除任何静态资源。
+
+## 已知副作用（正向）
+
+Jellyfin 的弹窗图标从 `jellyfin.png` 变为 `jellyfin.jpg`（配置里本就是这个），
+结果与设置页**看齐**，两处图标从此一致。
+
+## 刻意未改
+
+`web/main.py` 仍照旧传 `MediaServerType=MSType`。模板已不再引用它，但保留传参属
+**零风险保留**（避免影响任何潜在的其它引用）。
+
+## 验证
+
+- `_verify_bump_628.py` 全部通过。判据全部从**真实源码派生**：`MEDIASERVER_CONF` 用
+  `ast.literal_eval` 从 `moduleconf.py` 抽真字典，`MediaServerImg` 表达式用
+  `ast.get_source_segment` 从 `main.py` 抽真实源码，模板行为用**真实 Jinja 渲染**比对。
+- **新增一条磁盘守卫**：断言 5 种类型配置的 `img_url` 指向的文件**必须真实存在**
+  —— 防的正是「将来再加媒体服务器时又指向不存在的文件」这类复发。
+- 含 **4 条反向注入**（旧表达式复现 `ugreen.png` / 磁盘守卫报红 / 变量回退 / 模板回退）。
+- 存量回归：飞牛全套 + 媒体同步 + 排版守卫全绿。
+
+## 附带改动：发布说明标题去掉「（MoviePilot 风格）」
+
+`CHANGELOG.md` 第 1 行就是 GitHub Release 的正文标题 —— CI `.github/workflows/build.yml`
+用 `body_path: CHANGELOG.md` 把**整份文件**作为 Release body，所以那行会出现在
+**每个** Release 页面的最顶部。本次一并改为 `# 发布说明`，历史 Release 的正文也通过
+API 同步清理。
+
+正文里**技术性**的 MoviePilot 引用（「参照上游实现」「报文逐字节对齐」这类溯源说明）
+一概保留 —— 那是实现依据，与标题措辞是两回事。
+
 # v6.2.7 (2026-10-01) — 补齐：同步弹窗标题也走显示名
 
 ## 背景
