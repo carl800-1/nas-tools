@@ -3,6 +3,147 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.1 — 修复：文件转移只处理了一部分（整批提前中断）
+
+## 现象
+
+「文件管理」页面顶部点「转移」（整理当前目录），列表显示「共 26 个文件」，
+实际只有前几个被转移，后面的**一个都没动**，界面也不报错。
+
+## 调用链
+
+```
+web/templates/rename/mediafile.html
+  「转移」按钮 → mediafile_transfer_all()
+             → show_manual_transfer_modal(3, 当前目录, ...)   # manual_type=3 = 自定义识别
+             → manual_media_transfer() 提交 cmd="rename_udf"
+web/action.py
+  __rename_udf → __manual_transfer → FileTransfer().transfer_media(..., udf_flag=True)
+app/filetransfer.py
+  transfer_media 的 for 循环
+```
+
+## 根因：循环体内有 8 处 `return __finish_transfer(...)`
+
+`transfer_media` 的主体是一个
+
+```python
+for file_item, media in Medias.items():
+    try:
+        ...
+    except Exception as err:
+        log.error(...)
+```
+
+循环体里有 **8 处 `return __finish_transfer(...)`**，其中 **7 处带 `if udf_flag:` 前缀**
+——「文件管理 → 转移」走的正是 `udf_flag=True` 这条路径，于是：
+
+| 位置 | 触发条件 | 原行为 |
+|---|---|---|
+| 未识别 | `not media.tmdb_info` 等 | `udf_flag` 时整批 return |
+| 目的目录不存在 | `os.path.exists(dist_path)` 为假 | **无条件** return（不分模式） |
+| 蓝光原盘目录已存在 | `dir_exist_flag and bluray_disk_dir` | `udf_flag` 时整批 return |
+| 覆盖转移失败 | `__transfer_file(...) != 0` | `udf_flag` 时整批 return |
+| 拼不出季集目录 | `not ret_dir_path` | `udf_flag` 时整批 return |
+| 拼不出集数文件名 | `not ret_file_path` | `udf_flag` 时整批 return |
+| 蓝光目录转移失败 | `__transfer_bluray_dir(...) != 0` | `udf_flag` 时整批 return |
+| 文件转移失败 | `__transfer_file(...) != 0` | `udf_flag` 时整批 return |
+
+只要其中任意一个文件命中，`__finish_transfer()` 就会把进度条推到 100% 并结束整批，
+**后面排队的文件全部不会被遍历到**。
+
+### 实测复现（修复前）
+
+`artifacts/_repro_transfer_batch.py`：26 个真实文件、真实 `MetaInfo`、真实 COPY，
+只桩掉 TMDB 网络查询；让第 6 个文件识别不出：
+
+```
+返回状态        status  = False
+返回消息        message = 无法识别媒体信息
+入库历史条数    = 5
+目标目录实际文件数 = 5
+>>> 判定：整批在中间被【提前中断】
+```
+
+第 6 个文件（`S02E06`）一失败，`S02E07`~`S02E26` 全被丢弃。
+
+## 另外两处同类缺陷（一并修掉）
+
+### 1. 识别阶段的静默丢文件
+
+`Media.get_media_info_on_files()` 内部对识别不出的文件是 `continue`：这些文件
+**不会出现在 `Medias` 里**，循环根本看不到它们，也不会留下任何记录 ——
+界面显示 26 个、实际处理 25 个，用户没有任何线索。
+
+修法：在循环前用 `missed_files = [f for f in file_list if f not in Medias]` 对比出差额，
+逐个登记到「未识别」表并计入失败/告警。
+
+### 2. `except` 分支不记账 → 「没成功也没失败」被当成成功
+
+循环体的 `except` 只打日志，不 `failed_count += 1` 也不进 `alert_messages`。
+收尾时 `success_flag` 仍是 `True` ⇒ 接口返回成功、界面弹「处理成功」，但文件没转。
+
+修法：`except` 里补记账（`success_flag=False` + `failed_count` + `alert_messages`）。
+
+## 改动清单（1 文件 13 处，`app/filetransfer.py`）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| M1 | 循环前 | 新增 `success_count`；新增 `missed_files` 记账（识别阶段漏网文件） |
+| M2 | 未识别 | 删掉 `if udf_flag: return` |
+| M3 | 目的目录不存在 | 由**无条件 return** 改为「记账 + continue」 |
+| M4 | 蓝光原盘目录已存在 | 删掉 `if udf_flag: return` |
+| M5 | 覆盖转移失败 | 删掉 `if udf_flag: return` |
+| M6 | 拼不出季集目录 | 删掉 `if udf_flag: return` |
+| M7 | 蓝光目录转移失败 | 删掉 `if udf_flag: return` |
+| M8 | 拼不出集数文件名 | 删掉 `if udf_flag: return` |
+| M9 | 文件转移失败 | 删掉 `if udf_flag: return` |
+| M10 | 转移成功处 | 新增 `success_count += 1` |
+| M11 | 收尾 | 汇总「共 N 个 / 成功 X 个 / 未转移 Y 个（原因）」 |
+| N1 | `except` | 补记账（异常不再被当成成功） |
+| N2 | 收尾 | 未转移数以 `len(file_list) - success_count` 为准 |
+
+## 一个必须小心的边界：不要把「没转移」当成「失败」
+
+`app/downloader/downloader.py` 的下载器监控（每 300s 一轮）里有：
+
+```python
+done_flag, done_msg = self.filetransfer.transfer_media(...)
+if not done_flag:
+    log.warn(...)
+    # 失败不登记账本，下轮会重试
+    continue
+self.__ledger_add(...)      # 登记转移账本，避免下轮重复整理
+```
+
+而「目的文件已存在、大小一致」属于**没转移但不算失败**（原代码不置 `success_flag=False`）。
+如果收尾用「清单数 − 成功数 > 0」去强行把 `success_flag` 翻成 `False`，
+这些任务就会**每 300s 被重复整理一次**。
+
+因此收尾**只改返回消息、不改 `success_flag`**；`success_flag` 仍只由真正的失败点置 `False`
+（未识别 / 拼不出季集 / 转移失败 / 异常）。已加场景 E 专门守住这条：
+同一批文件连跑两轮，第二轮返回仍为 `True` 且不产生重复入库。
+
+## 验证
+
+- `artifacts/_verify_transfer_batch_631.py` —— **21 / 21 全绿**（真实 `FileTransfer`、
+  真实 `MetaInfo`、真实文件复制）：
+
+  | 场景 | 构造 | 断言 |
+  |---|---|---|
+  | A | 26 个文件，第 6 个识别不出 | 成功 25、未识别记录 1、落盘 25、消息含「成功 25 个 / 未转移 1 个」 |
+  | B | 26 个文件，第 6 个文件名拼不出季集 | 成功 25、落盘 25、消息含具体原因 |
+  | C | 26 个文件，第 6 个转移动作返回非 0 | 成功 25、落盘 25 |
+  | D | 26 个文件全部正常 | 成功 26、落盘 26、返回 `True` |
+  | E | 同批文件连跑两轮（第二轮文件均已存在） | 仍返回 `True`、不产生重复入库 |
+
+- **结构判据（AST 级）**：`transfer_media` 的 `for` 循环体内 `Return` 节点数 = **0**，
+  从语法层面保证「单文件失败不再中断整批」。
+- **接线判据**：`web/action.py` 的 `__rename_udf` 确实以 `udf_flag=True` 调用；
+  `mediafile.html` 的「转移」按钮确实走 `manual_type=3`。
+- 存量回归（9 个历史脚本）全绿；`py_compile` 通过；AST 顶层 `MatMult` = 0；
+  `git ls-files --eol` 仍为 `i/lf`（索引存储未变）。
+
 # v6.3.0 — 重做：种子管理模式（三模式语义 / 参数下发 / 报警 / 界面显隐）
 
 ## 背景
