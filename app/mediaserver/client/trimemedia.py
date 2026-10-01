@@ -23,6 +23,22 @@ def _norm_bool(value, default=True):
     return str(value).strip().lower() not in ("false", "0", "no", "off")
 
 
+def _norm_int(value, default, minimum=0, maximum=10):
+    """
+    配置项里的整数可能是字符串（表单提交一律是字符串），统一归一化为 int
+
+    非法值（空 / 非数字 / 超范围）一律回落 default，绝不抛异常 ——
+    这个函数跑在客户端初始化路径上，抛异常会让整个客户端建不起来。
+    """
+    if value is None or value == "":
+        return default
+    try:
+        num = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(num, maximum))
+
+
 def _split_origin(url):
     """拆出 (scheme, host, port)；非 http(s) 或没有主机名时返回 None"""
     try:
@@ -93,12 +109,30 @@ class _TrimeApi:
     # 目录递归最大页数保护
     MAX_PAGES = 500
 
-    def __init__(self, host, access_code=None, timeout=10, ssl_verify=True):
+    # 登录态失效（401/403）时自动重新登录的次数上限，0 = 关闭自动重登
+    MAX_RELOGIN = 2
+    # 两次自动重登之间的最小间隔（秒）：批量请求同时失效时避免把登录接口打爆
+    RELOGIN_COOLDOWN = 30
+    # 连续重登失败达到上限后的冷静期（秒）：期间不再尝试，避免密码错误时刷日志
+    RELOGIN_RETRY_INTERVAL = 600
+    # 视为「登录态失效」的错误码（HTTP 状态码与响应体业务码通用）
+    AUTH_ERROR_CODES = (401, 403)
+
+    def __init__(self, host, access_code=None, timeout=10, ssl_verify=True,
+                 max_relogin=2):
         self._host = self._normalize_base_url(host)
         self._apikey = self.API_KEY
         self._access_code = access_code
         self._api_path = "/api/v1"
         self._token = None
+        # 自动重登次数上限（来自配置项 trimemedia.relogin，0 = 关闭）
+        self._max_relogin = _norm_int(max_relogin, self.MAX_RELOGIN)
+        # 登录凭据 —— 登录态失效时靠它自动重登，故必须留存
+        self._username = None
+        self._password = None
+        # 连续重登失败次数（有一次成功即清零）与上次重登时间戳
+        self._relogin_fail_count = 0
+        self._last_relogin_at = 0.0
         self._version = {}
         self._timeout = timeout
         self._ssl_verify = _norm_bool(ssl_verify)
@@ -222,7 +256,7 @@ class _TrimeApi:
         return str(obj)
 
     def request(self, api, method=None, params=None, data=None,
-                base_path=None, suppress_log=False):
+                base_path=None, suppress_log=False, allow_relogin=True):
         """
         请求飞牛影视 API
 
@@ -232,6 +266,8 @@ class _TrimeApi:
         :param data: 请求体（dict）
         :param base_path: 接口路径前缀（如 /api/v2），默认 /api/v1
         :param suppress_log: 是否抑制错误日志
+        :param allow_relogin: 登录态失效时是否允许自动重登后重放本次请求。
+                              登录 / 登出接口自身必须传 False，否则会递归重登。
         :return: {'success': bool, 'code': int, 'msg': str, 'data': any} 或 None
         """
         if not self._host or not api:
@@ -287,6 +323,15 @@ class _TrimeApi:
                     log.error(f"【飞牛影视】请求接口 {url} 失败，无响应")
                 return None
             if not res.ok:
+                # 401/403 = 登录态失效（服务端重启 / token 过期 / 改了密码）。
+                # 先自动重登再把本次请求重放一遍，成功即静默恢复 —— 不这么做的话，
+                # 失效之后的每个请求都会刷一条 error，用户看到的是「满屏报错」。
+                if allow_relogin and self.__is_auth_error(res.status_code) \
+                        and self.__auto_relogin():
+                    return self.request(api, method=method, params=params,
+                                        data=data, base_path=base_path,
+                                        suppress_log=suppress_log,
+                                        allow_relogin=False)
                 # 非 2xx：典型是地址写错、路径少了 /v、被反代/访问码拦截
                 snippet = (res.text or "")[:200]
                 self.last_error = (
@@ -317,6 +362,13 @@ class _TrimeApi:
             code = int(resp.get("code", -1))
             msg = resp.get("msg")
             if code:
+                # 有些网关把 401 塞在响应体里（HTTP 仍是 200），同样按登录态失效处理
+                if allow_relogin and self.__is_auth_error(code) \
+                        and self.__auto_relogin():
+                    return self.request(api, method=method, params=params,
+                                        data=data, base_path=base_path,
+                                        suppress_log=suppress_log,
+                                        allow_relogin=False)
                 self.last_error = f"错误码 {code}：{msg}（{url}）"
                 if not suppress_log:
                     log.error(f"【飞牛影视】请求接口 {url} 失败，错误码：{code} {msg}")
@@ -329,6 +381,62 @@ class _TrimeApi:
                 ExceptionUtils.exception_traceback(e)
                 log.error(f"【飞牛影视】请求接口 {url} 异常：" + str(e))
             return None
+
+    # ------------------------------------------------------------ 自动重登
+
+    def __is_auth_error(self, code):
+        """判断状态码 / 业务码是否表示「登录态失效」"""
+        try:
+            return int(code) in self.AUTH_ERROR_CODES
+        except (TypeError, ValueError):
+            return False
+
+    def __auto_relogin(self):
+        """
+        登录态失效时自动重新登录
+
+        三道护栏，避免「自愈」本身变成新故障：
+          1. 冷却 —— 两次重登至少间隔 RELOGIN_COOLDOWN 秒。批量同步时几十个请求会
+             同时拿到 401，没有冷却就会并发打几十次登录接口；
+          2. 上限 —— 连续失败达 MAX_RELOGIN 次后停止，密码错时不刷日志；
+          3. 冷静期 —— 停止后隔 RELOGIN_RETRY_INTERVAL 秒再重开一轮，否则
+             「服务端临时不可用」会让自愈能力永久失效，只能重启容器。
+
+        :return: 重登成功返回 True
+        """
+        if self._max_relogin <= 0:
+            return False
+        if not (self._username and self._password):
+            # 还没成功登录过（例如地址探测阶段），没有凭据可重登
+            return False
+        now = time.time()
+        if now - self._last_relogin_at < self.RELOGIN_COOLDOWN:
+            return False
+        if self._relogin_fail_count >= self._max_relogin:
+            if now - self._last_relogin_at < self.RELOGIN_RETRY_INTERVAL:
+                return False
+            self._relogin_fail_count = 0
+        self._last_relogin_at = now
+        log.warn(
+            f"【飞牛影视】登录态已失效，尝试自动重新登录"
+            f"（第 {self._relogin_fail_count + 1}/{self._max_relogin} 次）")
+        old_token = self._token
+        self._token = None
+        if self.login(self._username, self._password):
+            self._relogin_fail_count = 0
+            log.info("【飞牛影视】自动重新登录成功，会话已恢复")
+            return True
+        # 重登失败必须把原 token 放回去：留成 None 会让 __is_ready() 恒为 False，
+        # 上层每个方法都直接短路返回空、连请求都不发，
+        # 自愈从此再无机会触发（连服务端已经恢复都不知道）。
+        self._token = old_token
+        self._relogin_fail_count += 1
+        if self._relogin_fail_count >= self._max_relogin:
+            log.error(
+                f"【飞牛影视】自动重新登录连续失败 {self._relogin_fail_count} 次，"
+                f"已暂停自动重试；请检查 设置 → 媒体服务器 → 飞牛影视 里的"
+                f"用户名 / 密码 / 访问码")
+        return False
 
     # ---------------------------------------------------------------- 认证
 
@@ -343,6 +451,9 @@ class _TrimeApi:
         """
         if not username or not password:
             return None
+        # 留存凭据：登录态失效时 __auto_relogin 靠它自动重登
+        self._username = username
+        self._password = password
         # 开启访问码后需先通过访问码校验，否则无法访问登录接口
         if not self.verify_access_code():
             return None
@@ -357,6 +468,8 @@ class _TrimeApi:
             },
             base_path="/api/v2",
             suppress_log=True,
+            # 登录请求自身禁止触发重登，否则会递归
+            allow_relogin=False,
         )
         if res and res.get("success"):
             self._token = (res.get("data") or {}).get("token")
@@ -373,6 +486,7 @@ class _TrimeApi:
                 "password": password,
                 "app_name": "trimemedia-web",
             },
+            allow_relogin=False,
         )
         if res and res.get("success"):
             self._token = (res.get("data") or {}).get("token")
@@ -382,7 +496,8 @@ class _TrimeApi:
         """退出登录"""
         if not self._token:
             return True
-        res = self.request("/user/logout", method="post")
+        # 登出时 token 本就即将作废，重登没有意义
+        res = self.request("/user/logout", method="post", allow_relogin=False)
         if res and res.get("success"):
             self._token = None
             return True
@@ -563,6 +678,8 @@ class TrimeMediaClient(_IMediaClient):
     _sync_libraries = []
     _scan_mode = None
     _ssl_verify = True
+    # 自动重登次数（配置项 trimemedia.relogin，空 / 非法值回落 2）
+    _max_relogin = 2
 
     _api = None
     _userinfo = None
@@ -602,6 +719,8 @@ class TrimeMediaClient(_IMediaClient):
         self._access_code = conf.get("access_code")
         self._scan_mode = conf.get("scan_mode")
         self._ssl_verify = conf.get("ssl_verify", True)
+        # 登录态失效后的自动重登次数（表单提交的是字符串，必须归一化）
+        self._max_relogin = _norm_int(conf.get("relogin"), 2)
 
         sync_library = conf.get("sync_library")
         if isinstance(sync_library, list):
@@ -694,6 +813,7 @@ class TrimeMediaClient(_IMediaClient):
                     host=cand,
                     access_code=self._access_code,
                     ssl_verify=self._ssl_verify,
+                    max_relogin=self._max_relogin,
                 )
             except Exception as e:
                 ExceptionUtils.exception_traceback(e)

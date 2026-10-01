@@ -1172,6 +1172,14 @@ class ModuleConf(object):
                         "full": "覆盖扫描"
                     }
                 },
+                "relogin": {
+                    "id": "trimemedia.relogin",
+                    "required": False,
+                    "title": "自动重新登录次数",
+                    "tooltip": "登录态失效时（会话过期 / 服务端重启 / 修改密码）自动重新登录的次数，0 表示关闭；留空默认 2 次",
+                    "type": "text",
+                    "placeholder": "2"
+                },
                 "ssl_verify": {
                     "id": "trimemedia.ssl_verify",
                     "required": False,
