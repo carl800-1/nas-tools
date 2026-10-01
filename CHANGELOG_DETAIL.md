@@ -3,6 +3,115 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.2.9 (2026-10-01) — 新增：飞牛影视登录态失效自动重登
+
+## 背景
+
+飞牛影视是**登录型**鉴权（`/user/loginByPassword` 取 token，之后每个请求带 `Authorization`），
+而登录只在 `TrimeMediaClient.init_config() -> _connect()` 里做**一次**；`init_config()` 只有两个
+触发点：**进程启动** 与 **用户登录 NAStool**。于是服务端一旦作废会话，就再也回不来：
+
+| 失效场景 | 后果 |
+|---|---|
+| NAS / 飞牛影视服务重启 | token 失效 |
+| 登录会话过期 | token 失效 |
+| 修改飞牛密码 | token 失效 |
+
+而 `__is_ready()` 只检查**本地存的 token 字符串是否非空** —— 服务端早已废弃会话，它照样返回
+「就绪」；`request()` 遇到 401 只写日志然后返回失败，**没有「重登再试一次」这条路径**。
+
+症状（会一直持续、不会自愈，只能重启容器）：首页媒体库列表变空、封面不显示、
+「媒体库同步」失败或同步出 0 条、入库前的「媒体是否已存在」判断失真（可能重复下载）。
+
+对比：Emby / Jellyfin / Plex 用长期 API Key，不依赖短期会话；绿联影视虽同为登录型，
+但登录时带 `keepalive: True` 向服务端申请长会话。**飞牛这两样都没有**。
+
+## 改动（2 文件 / +131 −3）
+
+### 1. `app/mediaserver/client/trimemedia.py`（LF）
+
+**`request()` 新增 `allow_relogin` 参数 + 两个失败出口自愈**：
+
+```python
+if not res.ok:
+    if allow_relogin and self.__is_auth_error(res.status_code) \
+            and self.__auto_relogin():
+        return self.request(..., allow_relogin=False)   # 重登成功后重放，且只重放一次
+```
+
+响应体 `code` 分支同理（有些网关把 401 塞在 body 里，HTTP 仍是 200）。
+
+**新增 `__auto_relogin()`，三道护栏**：
+
+| 护栏 | 常量 | 默认 | 作用 |
+|---|---|---|---|
+| 冷却 | `RELOGIN_COOLDOWN` | 30s | 批量同步时几十个请求会同时拿到 401，没有冷却会并发打几十次登录接口 |
+| 上限 | `MAX_RELOGIN` | 2 | 连续失败达上限即停止，密码错时不刷日志 |
+| 冷静期 | `RELOGIN_RETRY_INTERVAL` | 600s | 停止后隔 10 分钟重开一轮，否则「服务端临时不可用」会让自愈永久失效 |
+
+`__is_auth_error()` 只认 **401 / 403**（HTTP 状态码与响应体业务码通用）。刻意**不猜**
+「哪个业务错误码代表未登录」—— 飞牛未登录时返回什么业务码没有可靠依据，乱猜会把正常业务
+错误也拿去重登。日后实测到其它未登录码，加进 `AUTH_ERROR_CODES` 即可。
+
+**`login()` / `logout()` 内部的请求一律传 `allow_relogin=False`** —— 否则登录接口自身 401 时会递归重登。
+
+**⚠️ 一个必须踩对的细节：重登失败要把原 token 放回去。**
+
+最初的写法是 `self._token = None` 后再尝试重登。这会踩雷：`__is_ready()` 读的正是这个 token，
+置空后它恒为 `False`，而 `TrimeMediaClient` 的 20+ 个方法**第一句就是
+`if not self.__is_ready(): return`** —— 连请求都不发，自愈从此再没有机会触发，
+连「服务端已经恢复」都不知道。故失败路径必须恢复原值：
+
+```python
+old_token = self._token
+self._token = None
+if self.login(...):
+    ...
+self._token = old_token      # ← 失败也要放回去
+```
+
+**新增 `_norm_int()`**（与 `_norm_bool` 同族）：表单提交一律是字符串，`relogin` 读出来可能是
+`"3"` / `""` / `"abc"`，统一归一化并夹在 [0, 10]，非法值回落默认值，**绝不抛异常**
+（该函数跑在客户端初始化路径上，抛异常会让整个客户端建不起来）。
+
+### 2. `app/conf/moduleconf.py`（CRLF）
+
+`MEDIASERVER_CONF["trimemedia"]["config"]` 新增字段：
+
+```python
+"relogin": {
+    "id": "trimemedia.relogin",
+    "title": "自动重新登录次数",
+    "type": "text",
+    "placeholder": "2"
+},
+```
+
+**不需要改任何模板**：设置页表单由 `macro/form.html::gen_form_config_elements` 按该字典
+**动态渲染**，前端 `input_select_GetVal()` 按 input 的 `id` 自动收集 —— 加一个字段就够了。
+这与「下载目录设置」那类需要手写控件、且**控件放错容器就永远存不上**的表单完全不同。
+
+## 已知边界（本版刻意不做）
+
+`__is_ready()` 为 False（即**从来没连上过**，例如容器启动时飞牛还没起来）时不走本机制 ——
+那时连 token 都没有，没有凭据可重登。这属于「断线重连」，入口是 `_api is None`，
+与本版覆盖的「连过、之后失效」是两条不同路径，留待后续。
+
+## 验证
+
+- `_verify_bump_629.py` **65/65 通过**（用托管 venv 跑）。
+- 判据全部从真实源码派生：`log` 桩的公开面从真实 `log.py` 的 AST 抽取并**双向断言**
+  （桩 ⊆ 真实、产品代码引用 ⊆ 真实）；产品代码传给 `requests.Session.request` 的 kwargs
+  必须 ⊆ 真实签名（防「桩比真实更宽容」）；配置项从真实 `moduleconf.py` 取，
+  并用**真实 Jinja 模板**渲染（含整页 `setting/mediaserver.html`）。
+- 真跑 `_TrimeApi`（只把 HTTP 会话换成假 handler），覆盖 11 组场景：401 自愈重放、
+  重放仍 401 不递归、登录接口自身 401 不递归、30s 冷却下连续 5 个请求只重登 1 次、
+  连续失败达上限停止、冷静期后重开一轮、响应体 `code=401`、HTTP 500 不动重登、
+  `max_relogin=0` 关闭、`logout` 不重登、重登失败后 token 被恢复。
+- **3 条反向注入**：`__is_auth_error` 边界值（0 / None / `"abc"`）；把自愈代码从源码里
+  删掉后 401 **不再**重登（证明判据确实在测这段新代码）；行尾与装饰器粘连
+  （AST 顶层 `MatMult`）体检。
+
 # v6.2.8 (2026-10-01) — 修复：媒体服务器图标改走配置（绿联影视图标 404）
 
 ## 背景

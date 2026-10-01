@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.2.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.2.9** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -811,6 +811,31 @@ v6.0.6 把「保存目录」上移到与「标签 / 任务时长」同行（`col
 
 **说明**：Emby / Jellyfin / Plex / 绿联影视不受影响（它们的图片不需要凭证，钩子默认返回空）。
 
+#### 2.40 飞牛影视登录态失效自动重登（v6.2.9）
+
+**问题**：NAS 或飞牛影视服务重启、登录会话过期、改了飞牛密码之后，NAStool 里飞牛影视这一路
+就「哑了」—— 首页媒体库列表变空、封面不显示、「媒体库同步」失败或同步出 0 条，
+而且**不会自己恢复**，只能重启容器。
+
+**原因**：飞牛影视是登录型鉴权（token 有有效期），而 NAStool 只在**启动时**登录一次；
+token 失效后每个请求都返回 401，旧代码只记日志、不会重新登录。
+
+**修复后**：检测到登录态失效（401 / 403）时**自动重新登录，并把刚才那次请求重放一遍**，
+页面无感恢复。可在「设置 → 媒体服务器 → 飞牛影视」里设置重登次数：
+
+| 配置项 | 说明 |
+|---|---|
+| 自动重新登录次数 | 默认 **2** 次；填 **0** 表示关闭自动重登 |
+
+三重保护，避免「自愈」变成新麻烦：
+
+- 同一批请求 **30 秒内只重登一次**（批量同步时几十个请求会同时失效，否则会并发打爆登录接口）；
+- 连续失败到设定次数就停止（密码填错时不会反复刷日志）；
+- 停止后 **10 分钟**自动重开一轮（服务端临时不可用不会让自愈能力永久失效）。
+
+**说明**：仅飞牛影视适用（Emby / Jellyfin / Plex 用长期密钥，绿联影视自带长会话保活）；
+无新增依赖、无协议或数据结构变更。
+
 #### 2.39 媒体服务器图标统一走配置（v6.2.8）
 
 **问题**：点「媒体库同步」后，弹窗左侧的图标对**绿联影视**用户显示为空白。
@@ -1469,7 +1494,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.2.8   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.2.9   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1572,4 +1597,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-01 ｜ 当前版本 v6.2.8_
+_Last updated: 2026-10-01 ｜ 当前版本 v6.2.9_
