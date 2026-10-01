@@ -13,6 +13,112 @@ from app.utils.tags import Tags
 from app.utils.types import DownloaderType, DIR_CATEGORY_AUTO
 
 
+# 「种子管理模式」的三种取值（与 app/conf/moduleconf.py 的下拉选项一一对应）
+TORRENT_MANAGEMENT_DEFAULT = "default"
+TORRENT_MANAGEMENT_MANUAL = "manual"
+TORRENT_MANAGEMENT_AUTO = "auto"
+TORRENT_MANAGEMENT_MODES = (TORRENT_MANAGEMENT_DEFAULT,
+                            TORRENT_MANAGEMENT_MANUAL,
+                            TORRENT_MANAGEMENT_AUTO)
+
+# 下发计划里的提示级别，None 表示「该模式下什么都不提示」
+NOTICE_NONE = None
+NOTICE_INFO = "info"
+NOTICE_WARN = "warn"
+
+
+def resolve_torrent_management(mode, save_path, category):
+    """
+    按「种子管理模式」决定下发给 qBittorrent 的参数，以及该不该提示
+
+    **本函数是三种模式语义的唯一实现**：参数下发（``Qbittorrent.add_torrent``）与
+    日志提示（``Downloader.download``）都从这里取结果，所以「模式切换 / 参数下发 /
+    报警」三者之间不可能各说各话。
+
+    ===========  ==============  =============  ==========  ==============================
+    模式           save_path       category       autoTMM     行为
+    ===========  ==============  =============  ==========  ==============================
+    ``default``   不传            不传           不传         完全沿用下载器自身的设置与行为
+    ``manual``    传（NAStool 定）不传           ``False``    目录由 NAStool 决定，强制手动管理
+    ``auto``      无分类时才传     有分类才传     有分类 True  有分类 → 下载器按分类落盘；
+                                                             无分类 → 按 NAStool 目录；
+                                                             都没有 → 什么都不传
+    ===========  ==============  =============  ==========  ==============================
+
+    「不传」= 该键传 ``None``。``qbittorrent-api`` 把 ``data`` 里每个值写成
+    ``(占位值, 实际值)`` 元组，而 ``requests`` 编码表单时**会跳过元组里的 None**
+    （见其 ``torrents.py`` 的 ``data`` 构造 + requests ``_encode_params``）——
+    因此传 ``None`` 就等于**不下发这个参数**，下载器会用它自己的设置。
+    这一点按 ``qbittorrent-api==2023.9.53`` 的真实源码核对，不是推测。
+
+    提示级别只在该模式下真的缺少必要信息时才给 ``warn``：
+    ``default`` 什么都不下发 ⇒ **结构上不可能误报**；``manual`` 没有目录是真故障；
+    ``auto`` 分类与目录都没有才是真故障。
+
+    :param mode: ``default`` / ``manual`` / ``auto``；其它取值按 ``default`` 处理
+    :param save_path: 「下载目录设置」匹配到的那一行的「下载保存目录」（可能为空）
+    :param category: 同一行推导出的 qB 分类名（可能为空）
+    :return: dict —— ``save_path`` / ``category`` / ``auto_tmm`` / ``level`` / ``reason``
+    """
+    if mode not in TORRENT_MANAGEMENT_MODES:
+        mode = TORRENT_MANAGEMENT_DEFAULT
+    save_path = save_path or None
+    category = category or None
+
+    if mode == TORRENT_MANAGEMENT_DEFAULT:
+        return {
+            "save_path": None,
+            "category": None,
+            "auto_tmm": None,
+            "level": NOTICE_NONE,
+            "reason": "default_mode",
+        }
+
+    if mode == TORRENT_MANAGEMENT_MANUAL:
+        # 手动模式只认「下载保存目录」：分类是「自动模式」的落盘依据，这里不下发。
+        # 目录为空时仍然强制 autoTMM=False —— 手动模式的定义就是「不让下载器自动管理」。
+        if save_path:
+            return {
+                "save_path": save_path,
+                "category": None,
+                "auto_tmm": False,
+                "level": NOTICE_INFO,
+                "reason": "manual_dir",
+            }
+        return {
+            "save_path": None,
+            "category": None,
+            "auto_tmm": False,
+            "level": NOTICE_WARN,
+            "reason": "manual_no_dir",
+        }
+
+    # 自动模式：先分类、后目录，两者都没有才什么都不下发
+    if category:
+        return {
+            "save_path": None,
+            "category": category,
+            "auto_tmm": True,
+            "level": NOTICE_INFO,
+            "reason": "auto_category",
+        }
+    if save_path:
+        return {
+            "save_path": save_path,
+            "category": None,
+            "auto_tmm": False,
+            "level": NOTICE_INFO,
+            "reason": "auto_dir",
+        }
+    return {
+        "save_path": None,
+        "category": None,
+        "auto_tmm": None,
+        "level": NOTICE_WARN,
+        "reason": "auto_nothing",
+    }
+
+
 class Qbittorrent(_IDownloadClient):
     # 下载器ID
     client_id = "qbittorrent"
@@ -102,15 +208,18 @@ class Qbittorrent(_IDownloadClient):
 
     def init_torrent_management(self):
         """
-        根据设置的标签，自动管理模式下自动创建QB分类
+        自动管理模式下，根据「下载目录设置」创建 / 更新下载器里的 qB 分类
+
+        **只有「自动」模式会写入下载器**：
+
+        * 「默认」模式完全沿用下载器自身的设置，NAStool 不做任何干预 —— 既不改
+          分类，也不改分类的保存路径；
+        * 「手动」模式的目录由 NAStool 逐任务下发，同样不需要维护分类；
+        * 「自动」模式的落盘位置依赖分类，所以必须保证分类存在，且其保存路径与
+          「下载目录设置」里的一致。
         """
-        # 手动
-        if self._torrent_management == "manual":
+        if self._torrent_management != TORRENT_MANAGEMENT_AUTO:
             return
-        # 默认则查询当前下载器管理模式
-        if self._torrent_management == "default":
-            if not self.__get_qb_auto():
-                return
         # 获取下载器目前的分类信息
         categories = self.__get_qb_category()
         # 更新下载器中分类设置
@@ -141,16 +250,6 @@ class Qbittorrent(_IDownloadClient):
             return {}
         return self.qbc.torrent_categories.categories or {}
 
-    def __get_qb_auto(self):
-        """
-        查询下载器是否开启自动管理
-        :return: 
-        """
-        if not self.qbc:
-            return {}
-        preferences = self.qbc.app_preferences() or {}
-        return preferences.get("auto_tmm_enabled")
-
     def __update_category(self, name, save_path, is_edit=False):
         """
         更新分类
@@ -165,22 +264,14 @@ class Qbittorrent(_IDownloadClient):
         except Exception as err:
             log.error(f"【{self.client_name}】{self.name} 设置分类：{name}，路径：{save_path} 错误：{str(err)}")
 
-    def __check_category(self, save_path=""):
+    def get_torrent_management(self):
         """
-        自动种子管理模式下检查和设置分类
+        返回「种子管理模式」（``default`` / ``manual`` / ``auto``）
+
+        ``Downloader.download()`` 按它决定下发哪些参数、要不要提示 ——
+        判定逻辑见模块级函数 :func:`resolve_torrent_management`。
         """
-        # 没有保存目录分类为None，不改变现状
-        if not save_path:
-            return None
-        # 获取下载器中的分类信息，查询是否有匹配该目录的分类
-        categories = self.__get_qb_category()
-        for category_name, category_item in categories.items():
-            catetory_path = category_item.get("savePath")
-            if not catetory_path:
-                continue
-            if os.path.normpath(catetory_path) == os.path.normpath(save_path):
-                return category_name
-        return None
+        return self._torrent_management
 
     def get_torrents(self, ids=None, status=None, tag=None):
         """
@@ -521,6 +612,7 @@ class Qbittorrent(_IDownloadClient):
                     download_limit=None,
                     ratio_limit=None,
                     seeding_time_limit=None,
+                    auto_tmm=None,
                     cookie=None
                     ):
         """
@@ -535,6 +627,9 @@ class Qbittorrent(_IDownloadClient):
         :param download_limit: 下载限速 Kb/s
         :param ratio_limit: 分享率限制
         :param seeding_time_limit: 做种时间限制
+        :param auto_tmm: 是否使用下载器的「自动种子管理」（True / False / None）。
+            由调用方按「种子管理模式」算出（见 resolve_torrent_management），
+            None 表示不下发该参数、由下载器用它自身的设置
         :param cookie: 站点Cookie用于辅助下载种子
         :return: bool
         """
@@ -546,12 +641,11 @@ class Qbittorrent(_IDownloadClient):
         else:
             urls = None
             torrent_files = content
-        if download_dir:
-            save_path = download_dir
-            is_auto = False
-        else:
-            save_path = None
-            is_auto = None
+        # save_path 与 auto_tmm 都由调用方按「种子管理模式」算好传进来（见
+        # resolve_torrent_management）。这里不再自行按模式改判 —— 旧实现一旦
+        # 拿到非空 download_dir 就把 is_auto 钉成 False，导致「自动模式」在填了
+        # 「下载保存目录」的行上静默退化成手动。
+        save_path = download_dir or None
         if not category:
             category = None
         if tag:
@@ -578,21 +672,6 @@ class Qbittorrent(_IDownloadClient):
             seeding_time_limit = None
 
         try:
-            # 读取设置的管理模式
-            if is_auto is None:
-                match self._torrent_management:
-                    case "default":
-                        if self.__get_qb_auto():
-                            is_auto = True
-                    case "auto":
-                        is_auto = True
-                    case "manual":
-                        is_auto = False
-
-            # 自动管理模式没有分类时，根据保存目录获取
-            if is_auto and not category:
-                category = self.__check_category(save_path)
-
             # 添加下载
             qbc_ret = self.qbc.torrents_add(urls=urls,
                                             torrent_files=torrent_files,
@@ -605,7 +684,7 @@ class Qbittorrent(_IDownloadClient):
                                             download_limit=download_limit,
                                             ratio_limit=ratio_limit,
                                             seeding_time_limit=seeding_time_limit,
-                                            use_auto_torrent_management=is_auto,
+                                            use_auto_torrent_management=auto_tmm,
                                             cookie=cookie)
             return self.__parse_add_torrent_response(qbc_ret)
         except Exception as err:

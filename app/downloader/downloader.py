@@ -737,6 +737,17 @@ class Downloader:
             ratio_limit = download_attr.get("ratio_limit")
             # 做种时间
             seeding_time_limit = download_attr.get("seeding_time_limit")
+            # 下载器类型（后面按类型分流，且「种子管理模式」只有 qBittorrent 有）
+            downloader_type = downloader.get_type()
+            # 实际下发给下载器的下载目录：默认就是传进来的那个
+            add_dir = download_dir
+            # qBittorrent 的「自动种子管理」开关，None = 不下发该参数
+            auto_tmm = None
+            if download_dir and downloader_type == DownloaderType.QB:
+                # 调用方（刷流 / IYUU / 转移 / 订阅）显式指定了下载目录 —— 这是明确的
+                # 指令，不是从「下载目录设置」推出来的，因此不走种子管理模式：
+                # 目录照发，并强制关闭自动种子管理，避免下载器按分类把文件搬走。
+                auto_tmm = False
             # 下载目录设置
             if not download_dir:
                 log.info(f"【Downloader】下载器 before, down_dir: {download_dir}, media: {media_info}, "
@@ -746,26 +757,36 @@ class Downloader:
                 container_path = download_info.get('container_path')
                 # 从下载目录中获取分类标签
                 log.info(f"【Downloader】下载器 after, down_dir: {download_dir}")
-                if not download_dir:
-                    # 目录为空不算错误：下载器会落到它自己的默认保存路径。
-                    # 但必须提示出来 —— 否则「种子下到哪去了」「转移为什么找不到文件」
-                    # 「手动选择下载目录的下拉框为什么是空的」全部只能靠猜。
-                    log.warn(f"【Downloader】下载器 {downloader_conf.get('name')} 没有可用的下载目录"
-                             f"（未配置，或没有匹配当前类型的目录），本次交给下载器默认保存路径："
-                             f"{media_info.get_title_string()}")
                 if not category:
                     category = download_info.get('category')
+                # 「下载目录设置」有两个用途，必须分开看：
+                #   ① 内部用途：download_dir / container_path 用于「下载历史」登记、
+                #      站点字幕目录（get_download_visit_dir）与转移链路的路径映射；
+                #   ② 下发用途：真正传给下载器的 save_path / category。
+                # 只有 qBittorrent 有「种子管理模式」，由它决定 ② 到底下发什么；
+                # 其它下载器（TR / 其它）维持原样，①② 都用表格里解析出来的目录。
+                add_dir = download_dir
+                if downloader_type == DownloaderType.QB:
+                    # 延迟导入：qbittorrent.py 依赖第三方库 qbittorrentapi，而下载器客户端
+                    # 是运行期动态加载的（不是安装依赖）。放到模块顶层会让「没装这个库」
+                    # 从「某一个下载器不可用」放大成「整个应用起不来」。
+                    from app.downloader.client.qbittorrent import resolve_torrent_management
+                    plan = resolve_torrent_management(downloader.get_torrent_management(),
+                                                      download_dir, category)
+                    self.__log_torrent_management(plan, downloader_name, media_info)
+                    add_dir = plan.get("save_path")
+                    category = plan.get("category")
+                    auto_tmm = plan.get("auto_tmm")
             # 添加下载
             print_url = content if isinstance(content, str) else url
             if is_paused:
                 log.info(f"【Downloader】下载器 {downloader_name} 添加任务并暂停：%s，目录：%s，Url：%s" % (
-                    title, download_dir, print_url))
+                    title, add_dir, print_url))
             else:
                 log.info(f"【Downloader】下载器 {downloader_name} 添加任务：%s，目录：%s，Url：%s" % (
-                    title, download_dir, print_url))
+                    title, add_dir, print_url))
             # 下载ID
             download_id = None
-            downloader_type = downloader.get_type()
             if downloader_type == DownloaderType.TR:
                 ret = downloader.add_torrent(content,
                                              is_paused=is_paused,
@@ -790,7 +811,7 @@ class Downloader:
                 # 布局默认原始
                 ret = downloader.add_torrent(content,
                                              is_paused=is_paused,
-                                             download_dir=download_dir,
+                                             download_dir=add_dir,
                                              tag=tags,
                                              category=category,
                                              content_layout="Original",
@@ -798,6 +819,7 @@ class Downloader:
                                              download_limit=download_limit,
                                              ratio_limit=ratio_limit,
                                              seeding_time_limit=seeding_time_limit,
+                                             auto_tmm=auto_tmm,
                                              cookie=site_info.get("cookie"))
                 if ret:
                     download_id = downloader.get_torrent_id_by_tag(torrent_tag)
@@ -1858,6 +1880,43 @@ class Downloader:
                            attr.get("save_path")]
         visit_path_list.sort()
         return list(set(visit_path_list))
+
+    @staticmethod
+    def __log_torrent_management(plan, downloader_name, media_info):
+        """
+        按「种子管理模式」的回答输出一行日志
+
+        判定全部来自 :func:`app.downloader.client.qbittorrent.resolve_torrent_management`，
+        三种模式只在自己该说话的时候说话：
+
+        * 默认模式 —— 不向下载器下发任何参数，因此**只记 info、绝不 warn**：
+          「沿用下载器自身设置」是用户明确选的，没有任何「NAStool 的判断」需要报警。
+        * 手动模式 —— 目录已下发记 info；没匹配到目录是真故障，记 warn。
+        * 自动模式 —— 按分类 / 按目录都是正常路径，记 info；
+          分类与目录都没有（只能用下载器默认保存路径）记 warn。
+        """
+        title = media_info.get_title_string()
+        reason = plan.get("reason")
+        if reason == "default_mode":
+            log.info(f"【Downloader】下载器 {downloader_name} 种子管理模式为「默认」，"
+                     f"不下发下载目录与分类，沿用下载器自身的设置：{title}")
+        elif reason == "manual_dir":
+            log.info(f"【Downloader】下载器 {downloader_name} 种子管理模式为「手动」，"
+                     f"下发下载目录：{plan.get('save_path')} —— {title}")
+        elif reason == "manual_no_dir":
+            log.warn(f"【Downloader】下载器 {downloader_name} 种子管理模式为「手动」，"
+                     f"但「下载目录设置」没有匹配到可用的「下载保存目录」，"
+                     f"本次下载将落在下载器默认保存路径：{title}")
+        elif reason == "auto_category":
+            log.info(f"【Downloader】下载器 {downloader_name} 种子管理模式为「自动」，"
+                     f"下发分类「{plan.get('category')}」，由下载器按该分类的保存路径落盘：{title}")
+        elif reason == "auto_dir":
+            log.info(f"【Downloader】下载器 {downloader_name} 种子管理模式为「自动」，"
+                     f"本次没有解析出分类，改为下发下载目录：{plan.get('save_path')} —— {title}")
+        else:
+            log.warn(f"【Downloader】下载器 {downloader_name} 种子管理模式为「自动」，"
+                     f"但既没有解析出分类、也没有匹配到「下载保存目录」，"
+                     f"本次下载将落在下载器默认保存路径：{title}")
 
     def get_download_visit_dir(self, download_dir, downloader_id=None):
         """

@@ -349,10 +349,11 @@
             </div>
           </div>
         </div>
-        <details class="dl-details mb-3 mt-2" open>
+        <details class="dl-details mb-3 mt-2" open id="dl_dir_details">
           <summary class="summary required">
             <span class="dl-details-title">下载目录设置</span>
             <span class="badge bg-blue-lt dl-dir-count" id="dl_dir_count" title="当前规则条数">0</span>
+            <span class="text-secondary small dl-dir-mode-text" id="dl_dir_mode_text"></span>
             <span class="dl-note-tip d-none" id="dl_auto_note" role="button" tabindex="0"
                   aria-label="查看说明">!</span>
             <span class="form-help" title="根据类型及二级分类自动选择下载目录，按优先级从前往后依次匹配，直到找到符合条件及空间要求的目录下载；二级分类从基础设置->二级分类策略的配置中读取，如未配置二级分类则无法配置下载目录二级分类"
@@ -696,6 +697,7 @@
     $(`#path_label_${level}`).val(dir_category[1]);
     refresh_dir_auto_state(level);
     refresh_dir_count();
+    refresh_dir_mode_ui();
     CURRENT_DIRDIV_LEVEL = CURRENT_DIRDIV_LEVEL + 1;
   }
 
@@ -746,6 +748,43 @@
       container: "body",
       title: html
     });
+  }
+
+  // 按「种子管理模式」显隐「下载目录设置」里与当前模式无关的填写项。
+  // 三种模式各自只下发一部分参数（见后端 resolve_torrent_management），界面上不展示
+  // 用不到的项，避免「填了却没生效」：
+  //   默认 —— 不下发任何参数 ⇒ 整表折叠 + 一行说明（表仍用于路径映射/自动分类）
+  //   手动 —— 只下发「下载保存目录」⇒ 隐藏「分类标签」列
+  //   自动 —— 分类与目录都可能下发 ⇒ 全部展示
+  // 非 qBittorrent 下载器没有「种子管理模式」这个概念，一律按现状展示整表。
+  function refresh_dir_mode_ui() {
+    let details = $("#dl_dir_details");
+    if (!details.length) {
+      return;
+    }
+    let type = $("input:radio[name=downloader_type]:checked").val();
+    let mode = $("#qbittorrent_torrent_management").val();
+    let text = $("#dl_dir_mode_text");
+    if (type !== "qbittorrent") {
+      details.prop("open", true);
+      text.text("");
+      $("[id^='dl_dir_catbox_']").show();
+      return;
+    }
+    if (mode === "default") {
+      details.prop("open", false);
+      text.text("默认模式：不向下载器下发任何参数，本表仅用于路径映射与自动分类");
+      $("[id^='dl_dir_catbox_']").show();
+      return;
+    }
+    details.prop("open", true);
+    if (mode === "manual") {
+      text.text("手动模式：只下发「下载保存目录」，「分类标签」不参与下发");
+      $("[id^='dl_dir_catbox_']").hide();
+      return;
+    }
+    text.text("自动模式：有分类时下发分类，没有分类时下发「下载保存目录」");
+    $("[id^='dl_dir_catbox_']").show();
   }
 
   // 「自动分类」与「种子管理模式」的联动说明。
@@ -799,9 +838,11 @@
         + "<ul><li>当前种子管理模式为<b>手动</b>：NAStool 不会改动下载器里的分类与保存路径，"
         + "自动分类只在运行期给任务写分类名 —— 两者各管一段，不会互相干扰。</li></ul>";
     } else {
-      html = "<b>未指定种子管理模式</b>（已配置 " + rows + " 行）"
-        + "<ul><li>「默认」表示沿用 qB 自身的设置。若 qB 里开启了「自动种子管理」，"
-        + "分类会被绑定保存路径、新任务会带上自动管理标记，上面第一条说明同样适用。</li></ul>";
+      html = "<b>种子管理模式为「默认」，不下发任何参数</b>（已配置 " + rows + " 行）"
+        + "<ul><li>下载目录与分类都不会发给下载器，完全沿用下载器自身的设置，"
+        + "因此 NAStool 不会介入落盘位置，也不会为此报警。</li>"
+        + "<li>上面这些行只用于<b>路径映射</b>（下载历史 / 转移）与<b>自动分类</b>扫描，"
+        + "不影响下载位置。</li></ul>";
     }
     note.removeClass("d-none dl-note-tip-info dl-note-tip-warn").addClass(cls).text(glyph);
     set_note_tip(note[0], html);
@@ -841,9 +882,10 @@
     show_downloader_type(this.value);
   });
 
-  // 种子管理模式会决定「自动分类」的实际效果，变化时同步刷新提示
+  // 种子管理模式既决定「自动分类」的实际效果，也决定「下载目录设置」里哪些列生效
   $("#qbittorrent_torrent_management").change(function () {
     refresh_auto_category_hint();
+    refresh_dir_mode_ui();
   });
 
   // 说明角标位于 <summary> 内：点它会连带把整段折叠/展开，这里拦掉冒泡，
@@ -857,6 +899,7 @@
   $("#modal-downloader").on("shown.bs.modal", function () {
     refresh_dir_count();
     refresh_auto_category_hint();
+    refresh_dir_mode_ui();
   });
 
   // 下载器类型类型
@@ -879,8 +922,9 @@
       default:
         break;
     }
-    // 类型会决定「自动分类」是否可用，切换时同步刷新提示
+    // 类型会决定「自动分类」是否可用、以及「种子管理模式」是否存在，切换时同步刷新
     refresh_auto_category_hint();
+    refresh_dir_mode_ui();
   }
 
   // 设置默认下载器
@@ -926,7 +970,7 @@
           <option value="" selected>全部</option>
         </select>
       </div>
-      <div class="col-12 col-lg-6">
+      <div class="col-12 col-lg-6" id="dl_dir_catbox_{DIRDIV_LEVEL}">
         <label class="form-label dl-dir-label" for="dir_auto_{DIRDIV_LEVEL}">分类标签<span class="dl-dir-label-note">QB</span><span
                 class="form-help" data-bs-toggle="tooltip" data-bs-html="true"
                 data-bs-original-title="qBittorrent 的分类名，仅 QB 有效。<br>· <b>自动判定</b>：参与自动分类扫描 —— 按种子名称判定「电影 / 电视剧 / 其它」，判定结果与本行「类型」一致的任务归入该分类（本行类型为「全部」则任意类型都归入）；下载新任务时也按媒体类型推导分类名<br>· <b>自定义</b>：填写固定分类名（不能填「自动」，那是「自动判定」的保留值），<b>不参与自动分类扫描</b>，只在下载新任务时归入该分类<br>· <b>输入留空</b>：这一行不启用 —— 既不参与扫描，下载时也不写分类名">?</span></label>
@@ -938,7 +982,7 @@
           <input type="text" value="" id="path_label_{DIRDIV_LEVEL}" class="form-control form-control-sm dl-cat-name" placeholder="qB 分类名" autocomplete="off">
         </div>
       </div>
-      <div class="col-12 col-lg-6">
+      <div class="col-12 col-lg-6" id="dl_dir_savebox_{DIRDIV_LEVEL}">
         <label class="form-label dl-dir-label" for="save_path_{DIRDIV_LEVEL}">下载保存目录或 ID<span class="form-help" data-bs-toggle="tooltip"
                data-bs-original-title="下载器侧的保存目录（在 qB 里就是分类的保存路径）">?</span></label>
         <input type="text" value="" id="save_path_{DIRDIV_LEVEL}" class="form-control form-control-sm" placeholder="下载保存目录或 ID" autocomplete="off">
