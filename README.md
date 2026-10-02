@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -935,6 +935,26 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 **修复后**：方括号里是**片名**就保留、是**发布组 / 字幕组**（`[VCB-Studio]`、`[喵萌奶茶屋]`…）
 才删掉，识别结果与打开「增强识别V2」时一致。**打开「增强识别V2」的用户不受影响。**
 
+#### 2.44 文件转移「只处理了几个」的根因：最小文件大小；新增「测试」预检（v6.3.3）
+
+**问题**：在「文件管理」里点「转移」，界面显示目录里有 26 个文件，最后只转移了 5 个，
+而且「失败 0」、没有任何提示。
+
+**原因**：「手动识别」弹窗里的「最小文件大小」**留空**时，会悄悄套用
+「基础设置 → 媒体库 → 转移最小文件大小(MB)」（默认 150MB）。小于这个值的文件
+**在扫描阶段就被丢掉** —— 既不算成功、也不算失败，所以看不到任何提示。
+（v6.3.1 已经把「识别阶段」被跳过的文件记账了；这次补上「扫描阶段」这最后一个口子。）
+
+**修复后**：
+
+- 「最小文件大小」**默认填 0**（不限制大小），需要限制时自己填；
+- 「转移」旁边新增**「测试」按钮**：只统计不转移，直接给出
+  **可识别 N 个 / 预计转移 M 个**，以及目录文件数、扫描通过数，
+  和被过滤 / 被忽略 / 识别不出的明细与原因；
+- 扫描阶段被丢弃的文件会写进日志（数量 + 文件名 + 原因）。
+
+**建议**：参数不确定时，**先点「测试」再点「转移」**。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1555,7 +1575,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.2   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.3   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1658,4 +1678,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-02 ｜ 当前版本 v6.3.2_
+_Last updated: 2026-10-02 ｜ 当前版本 v6.3.3_

@@ -3,6 +3,145 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.3 — 文件转移「只处理了几个」根因收敛：最小文件大小 + 转移预检
+
+## 现象
+
+用户报告：在「文件管理 → 转移」里整理一个目录，界面显示 **`总数: 5`**、**`失败: 0`**，
+但该目录下**实际有 26 个视频文件，且都大于 150M**。
+
+紧接着又发现关键事实：**在「手动识别」弹窗里把「最小文件大小」填成 `0` 之后就正常了**，
+26 个全部进入识别。
+
+—— 这就是根因所在。
+
+## 根因：留空 ⇒ 静默套用配置里的 150MB
+
+配置项与代码路径：
+
+```
+config/config.yaml:92          media.min_filesize: 150                       # 默认 150MB
+web/templates/setting/basic.html  「基础设置 → 转移最小文件大小(MB)」，placeholder 写 200
+app/conf/... -> config.py:27   RMT_MIN_FILESIZE = 150 * 1024 * 1024
+app/filetransfer.py:48         _min_filesize = RMT_MIN_FILESIZE（类默认值）
+app/filetransfer.py:117-121    init_config() 里用 media.min_filesize 覆盖 self._min_filesize
+```
+
+弹窗参数进入 `transfer_media` 后的判定（`app/filetransfer.py:589-595` 一带）：
+
+```python
+if str(min_filesize) == "0":
+    now_filesize = 0
+else:
+    now_filesize = self._min_filesize if not str(min_filesize).isdigit() \
+        else int(min_filesize) * 1024 * 1024
+```
+
+**留空时 `min_filesize` 是空字符串**，而 `str("").isdigit() == False`
+⇒ 走前半支，直接把配置里的 `_min_filesize`（150MB）当成阈值。
+
+于是扫描阶段 `app/utils/path_utils.py:30`：
+
+```python
+if filesize and os.path.getsize(cur_path) < filesize:
+    continue          # ← 文件在这里被丢弃，且不留任何痕迹
+```
+
+## 为什么「失败: 0」—— 丢弃发生在记账之外
+
+`get_dir_files` 有 4 道过滤：**非法路径 / 集数格式 / 后缀 / 大小**。
+在这 4 道之前被 `continue` 掉的文件，**既不在 `Medias` 里、也不在 `file_list` 里**，
+而 v6.3.1 新增的 `missed_files`（`app/filetransfer.py:655` 一带）是
+`[f for f in file_list if f not in Medias]` —— 它看得见「识别阶段被跳过」的，
+**看不见「扫描阶段就被丢掉」的**。所以界面上只剩「失败: 0」，一个提示都没有。
+
+`总数` 的语义也一并证实：`total_count` 在 `for file_item, media in Medias.items()` 内
+（`app/filetransfer.py:678` 附近）逐条 +1，全仓只此一处写出 `总数`
+⇒ **`总数: 5` ⟺ `len(Medias) == 5`**。
+
+### 排除掉的错误假设
+
+上一轮曾怀疑「扫描阶段静默丢文件是别的规则」。用 `artifacts/_probe_transfer_scan_633.py`
+以真实 `PathUtils` / `EpisodeFormat` 建 26 个临时文件跑完整扫描链，结论：
+
+> 扫描阶段**只能产出 26 或 0**，绝不可能给 5。
+> —— `EpisodeFormat.match()`（`app/utils/episode_format.py:50-52`）首行是
+> `if not self._format: return True`；**任何非空的集数格式**都会让
+> `parse.parse(self._format, file)` 整串匹配失败，把 26 个全部挡掉；
+> 空格式则 26 个全放行。`is_invalid_path` 在同一目录内也是同判据，同样只会「全合法 / 全非法」。
+
+所以「26 → 5」这种**部分丢弃**只能来自**逐文件的大小判据**，与用户实测完全吻合。
+
+## 改动清单（6 文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/utils/path_utils.py` | `get_dir_files` 增加 `detail=False` 参数；`detail=True` 时返回 `(命中列表, [(路径, 原因)])`。**默认行为与旧版逐字节一致**（14 个调用点均未受影响） |
+| `app/media/media.py` | 新增 `get_local_media_info(file_path)`：把「文件名 → 上级目录 → 上上级目录」的本地识别**逐行等价**抽为独立方法；`get_media_info_on_files` 改为调用它 |
+| `app/filetransfer.py` | ① 扫描改用 `detail=True`，对被过滤文件写 `log.warn`（数量+文件名+原因）；② 新增 `preview_transfer()`（只读预检） |
+| `web/action.py` | 注册 `preview_transfer` 路由 + 新增 `__preview_transfer`（路径来源与 `__rename` 完全一致：`logid` → `unknown_id` → `inpath`） |
+| `web/static/js/functions.js` | 「最小文件大小」默认填 `0`；弹窗打开时重置结果区；新增 `preview_media_transfer()` / `rename_preview_escape()` / `render_rename_preview()` |
+| `web/templates/navigation.html` | 问号说明重写（`data-bs-html`）、placeholder 改 `0 = 不限制大小`、footer 新增「测试」按钮、body 末尾新增结果区 |
+
+### 为什么把本地识别**抽出来**而不是重写一遍
+
+预检必须与真实转移**同口径**，否则「测试说 26 个、转移还是 5 个」会二次伤害用户。
+所以 `media.py` 的这段识别是**原样搬运**（`artifacts/_verify_preview_633.py` 的 B 段
+把备份与当前的核心识别段**逐行比对**，证明 22 行完全相同），两处共用同一方法。
+
+### 预检为什么**不能**走 TMDB
+
+`get_media_info_on_files` 在搜不到时会写缓存 `{media_key: {'id': 0}}`
+（`media.py:992` 一带，表示「这条已确认搜不到」）。预检若触发这条路径，
+**会毒化随后的真实转移** —— 用户点完「测试」再点「转移」，
+反而因为缓存被判「未识别」而失去 TMDB 补全。所以预检只做**纯本地识别**，
+命中判据取 `get_media_info_on_files` 里完全相同的那一句：
+
+```python
+if not meta_info.get_name() or not meta_info.type:
+    continue        # 不计入 Medias → 也不计入预检的 recognized
+```
+
+### 预检口径与界面「文件总数」严格同义（含疑似预告片）
+
+复核时发现一处**一度写错**的地方并已修正：`transfer_media` 里
+
+```python
+for file_item, media in Medias.items():
+    total_count = total_count + 1          # ← 第一句，先计数
+    if not udf_flag:
+        if re.search(r'[./\s\[]+Sample[/.\s\]]+', file_item, re.IGNORECASE):
+            continue                        # ← 之后才跳过疑似预告片
+```
+
+即**界面「总数」包含疑似预告片**。若预检把 Sample 从 `recognized` 里剔除，
+数字就会比真实界面少。现在的口径：
+
+* `recognized` = 本地识别通过的文件数 = `len(Medias)` = 界面「总数」（**含**疑似预告片）；
+* `sample_skipped` = 其中疑似预告片（仅在 `udf_flag=False` 时才会被跳过，与 `transfer_media` 同条件）；
+* `bluray_skipped` = `get_media_info_on_files` 会跳过的「非目录但带蓝光原盘特征」的路径；
+* `will_transfer` = `recognized - len(sample_skipped)`。
+
+## 验证
+
+`artifacts/_verify_preview_633.py` —— **45 / 45 全绿**：
+
+| 组 | 内容 | 结果 |
+|---|---|---|
+| A | `get_dir_files` 向后兼容（`detail=False` 与旧版一致；守恒不变量「命中 + 被过滤 == 目录文件总数」） | 11/11 |
+| B | 抽取等价性（备份 vs 当前，核心识别段**逐行相同**） | 4/4 |
+| C | 真实本地识别 `[诛仙].Jade...` 能取到 name / type | 2/2 |
+| D | AST/结构判据（`preview_transfer` 未写库未转移、路由、按钮、默认值 0 等） | 16/16 |
+| E | 端到端真实调用：不限大小 → `scanned=26 recognized=26`；150MB 阈值 → `scanned=0 dropped=26`，原因全部指向「最小文件大小」 | 5/5 |
+| F | **口径实证**：用**真实 `get_media_info_on_files`**（TMDB 全部桩掉）跑同一目录，证明 `recognized == len(Medias) == 26`；Sample 目录证明预告片计入 `recognized` 但不计入 `will_transfer` | 7/7 |
+
+> 环境说明：本机 Python 3.13 + `guessit 3.7.1` 有两个与项目无关的适配点
+> （`metavideov2.py` 内联 `(?i)` 不在表达式开头、`guessit` 用
+> `with files('guessit.data') as d:` 的旧式上下文管理器）—— 验证脚本内做兼容处理，
+> **未改动项目源码**。
+
+存量回归：`artifacts/_regress_633.py` 复用 v6.3.2 的回归清单，失败 0 个。
+
 # v6.3.2 — 修复：关闭「增强识别V2」时，[片名] 开头的中文资源识别错误
 
 ## 现象
