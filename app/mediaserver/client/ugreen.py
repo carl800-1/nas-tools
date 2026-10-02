@@ -194,6 +194,9 @@ class _UgreenApi:
         self._ug_agent = ug_agent
         self._timeout = timeout
         self._verify_ssl = verify_ssl
+        # 最近一次失败原因（网络异常 / 非 JSON / 业务码 / 公钥为空 / 未返回 token），
+        # 供上层「测试连接」把真实原因回显到页面上
+        self.last_error = None
         self._init_session()
 
     def _init_session(self):
@@ -269,6 +272,9 @@ class _UgreenApi:
             "Client-Id": self._client_id,
             "Client-Version": self._client_version,
             "UG-Agent": self._ug_agent,
+            # 新版登录客户端标识，与 Client-Id 同值（对齐 MoviePilot 上游 _common_headers）；
+            # 只在登录阶段的明文请求里带，加密请求头不需要
+            "UG-Client-Id": self._client_id,
             "X-Specify-Language": self._language,
         }
 
@@ -287,9 +293,25 @@ class _UgreenApi:
                     url=url, headers=headers, params=params,
                     timeout=self._timeout, verify=self._verify_ssl,
                 )
-            return resp.json()
         except Exception as err:
+            # 网络层失败（连接被拒 / 超时 / DNS / SSL 校验）—— Errno 就在这里，
+            # 113=找不到主机（IP 错/设备离线/跨 VLAN）111=端口无监听 110=被 DROP，
+            # 这是排障的第一线索，必须原样回传
+            self.last_error = f"请求 {url} 失败：{type(err).__name__}: {err}"
             log.error(f"请求绿联接口失败：{url} {err}")
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            # HTTP 已返回但不是 JSON（反代 HTML / 404 页 / 登录页）。只报
+            # 「Expecting value」根本定位不了，必须打出状态码与响应片段
+            snippet = (resp.text or "")[:200]
+            self.last_error = (
+                f"返回非 JSON 响应（HTTP {resp.status_code}，{url}），"
+                f"Content-Type：{resp.headers.get('Content-Type')}，响应：{snippet}")
+            log.error(
+                f"请求绿联接口返回非 JSON：{url} HTTP {resp.status_code}，"
+                f"Content-Type：{resp.headers.get('Content-Type')}，响应片段：{snippet!r}")
             return None
 
     @staticmethod
@@ -310,29 +332,52 @@ class _UgreenApi:
 
     def login(self, username, password, keepalive=True):
         """登录绿联账号并初始化加密上下文"""
+        self.last_error = None
         if not username or not password:
+            self.last_error = "未填写用户名或密码"
             return None
         headers = self._common_headers()
+        check_url = f"{self._host}/ugreen/v1/verify/check"
         try:
             import requests as req_lib
             session = self._session or req_lib
             check_resp = session.post(
-                url=f"{self._host}/ugreen/v1/verify/check",
+                url=check_url,
                 headers=headers, json={"username": username},
                 timeout=self._timeout, verify=self._verify_ssl,
             )
-            check_json = check_resp.json()
         except Exception as err:
-            log.error(f"绿联获取登录公钥失败：{err}")
+            # 网络层失败 —— Errno 113/111/110 是「地址或端口不对」的确证，
+            # 此时协议、路径、签名、账号全都还没轮到
+            self.last_error = (
+                f"获取登录公钥失败：请求 {check_url} 无响应或异常"
+                f"（{type(err).__name__}: {err}）")
+            log.error(f"绿联{self.last_error}")
+            return None
+        try:
+            check_json = check_resp.json()
+        except Exception:
+            # HTTP 已返回但不是 JSON（端口连到了别的服务 / 反代 HTML / 404 页）。
+            # 只报「Expecting value」定位不了，必须打出状态码与响应片段
+            snippet = (check_resp.text or "")[:200]
+            self.last_error = (
+                f"获取登录公钥失败：返回非 JSON 响应"
+                f"（HTTP {check_resp.status_code}，{check_url}），"
+                f"Content-Type：{check_resp.headers.get('Content-Type')}，响应：{snippet}")
+            log.error(f"绿联{self.last_error}")
             return None
         check_result = self._build_result(check_json)
         if not check_result["code"] == 200:
-            log.error(f"绿联获取登录公钥失败：{check_result['msg']}")
+            self.last_error = (
+                f"获取登录公钥失败："
+                f"{check_result['msg'] or ('code=%s' % check_result['code'])}（{check_url}）")
+            log.error(f"绿联{self.last_error}")
             return None
         rsa_token = self._extract_rsa_token(check_json, check_resp.headers)
         login_public_key = self._decode_public_key(rsa_token)
         if not login_public_key:
-            log.error("绿联获取登录公钥失败：公钥为空")
+            self.last_error = "获取登录公钥失败：服务端未返回 RSA 公钥（接口版本可能已变更）"
+            log.error(f"绿联{self.last_error}")
             return None
         encrypted_password = _UgreenCrypto(public_key=login_public_key).rsa_encrypt_long(password)
         login_json = self._request_json(
@@ -347,15 +392,22 @@ class _UgreenApi:
             },
         )
         if not login_json:
+            # _request_json 已把网络层 / 非 JSON 的具体原因写进 self.last_error
+            self.last_error = self.last_error or "登录失败：登录接口无响应"
+            log.error(f"绿联{self.last_error}")
             return None
         login_result = self._build_result(login_json)
         if not login_result["code"] == 200 or not isinstance(login_result["data"], dict):
-            log.error(f"绿联登录失败：{login_result['msg']}")
+            self.last_error = (
+                f"登录失败："
+                f"{login_result['msg'] or ('code=%s' % login_result['code'])}")
+            log.error(f"绿联{self.last_error}")
             return None
         token = str(login_result["data"].get("token") or "").strip()
         public_key = self._decode_public_key(str(login_result["data"].get("public_key") or ""))
         if not token or not public_key:
-            log.error("绿联登录失败：未返回 token/public_key")
+            self.last_error = "登录失败：服务端未返回 token/public_key（接口版本可能已变更）"
+            log.error(f"绿联{self.last_error}")
             return None
         self._token = token
         static_token = str(login_result["data"].get("static_token") or "").strip()
@@ -368,6 +420,7 @@ class _UgreenApi:
             ug_agent=self._ug_agent, language=self._language,
         )
         self._username = username
+        self.last_error = None
         return self._token
 
     def logout(self):
@@ -393,6 +446,7 @@ class _UgreenApi:
     def request(self, path, method="GET", params=None, data=None):
         """统一请求入口"""
         if not self._crypto:
+            self.last_error = "未登录（加密上下文未初始化，请先完成登录）"
             return {"code": -1, "msg": "未登录", "data": None}
         api_path = path.strip("/")
         url, headers, req_params, req_json, aes_key = self._crypto.build_encrypted_request(
@@ -404,9 +458,16 @@ class _UgreenApi:
             params=req_params, json_data=req_json,
         )
         if payload is None:
+            # _request_json 已写具体原因（网络异常 / 非 JSON 响应），这里只兜底
+            self.last_error = self.last_error or f"接口请求失败（{url}）"
             return {"code": -1, "msg": "接口请求失败", "data": None}
         decrypted = self._crypto.decrypt_response(payload, aes_key)
-        return self._build_result(decrypted)
+        result = self._build_result(decrypted)
+        if result["code"] == 200:
+            self.last_error = None
+        else:
+            self.last_error = f"接口 {api_path} 返回 code={result['code']}：{result['msg']}"
+        return result
 
     def current_user(self):
         result = self.request("v1/user/current/user")
@@ -548,6 +609,9 @@ class UgreenClient(_IMediaClient):
     _api = None
     _userinfo = None
     _video_info_cache = {}
+    # 最近一次失败原因 —— 「测试连接」失败时由 web 层直接回显到页面上
+    # （web/action.py::__test_connection 已支持读该属性，飞牛影视在用）
+    last_error = None
 
     def __init__(self, config=None):
         if config:
@@ -576,11 +640,26 @@ class UgreenClient(_IMediaClient):
             self._password = self._client_config.get('password')
             if self._host and self._username and self._password:
                 self._connect()
+            else:
+                missing = []
+                if not self._host:
+                    missing.append("地址")
+                if not self._username:
+                    missing.append("用户名")
+                if not self._password:
+                    missing.append("密码")
+                self.last_error = "配置不完整，缺少：" + "、".join(missing)
+                log.error(f"【{self.client_name}】配置不完整，缺少：{'、'.join(missing)}")
+        else:
+            self.last_error = (
+                "未读到「绿联影视」配置：请先在 设置 → 媒体服务器 → 绿联影视 里"
+                "填好地址/用户名/密码，并点「确定」保存")
 
     def _connect(self):
         """使用绿联加密 API 登录"""
         if not HAS_CRYPTO:
-            log.error(f"【{self.client_name}】缺少 cryptography 库，请安装：pip install cryptography")
+            self.last_error = "缺少 cryptography 库（镜像内未安装），请重装镜像或执行 pip install cryptography"
+            log.error(f"【{self.client_name}】{self.last_error}")
             return
         try:
             # 关闭旧会话
@@ -592,15 +671,29 @@ class UgreenClient(_IMediaClient):
                 self._api = None
             api = _UgreenApi(host=self._host)
             token = api.login(self._username, self._password)
-            if token:
-                self._api = api
-                self._userinfo = api.current_user()
-                log.info(f"【{self.client_name}】登录成功，用户：{self._username}")
-            else:
-                log.error(f"【{self.client_name}】登录失败，请检查用户名和密码")
+            if not token:
+                # api.last_error 里是登录环节的具体原因，且自身已带
+                # 「获取登录公钥失败：」/「登录失败：」前缀，不要再套一层
+                self.last_error = api.last_error or "登录失败：用户名或密码不正确"
+                log.error(f"【{self.client_name}】{self.last_error}")
+                api.close()
+                return
+            self._api = api
+            self._userinfo = api.current_user()
+            if self._userinfo is None:
+                self.last_error = (
+                    f"登录成功但获取用户信息失败："
+                    f"{api.last_error or 'token 未被服务端接受'}")
+                log.error(f"【{self.client_name}】{self.last_error}")
+                self._api = None
+                api.close()
+                return
+            self.last_error = None
+            log.info(f"【{self.client_name}】登录成功，用户：{self._username}")
         except Exception as e:
+            self.last_error = f"登录异常：{type(e).__name__}: {e}"
             ExceptionUtils.exception_traceback(e)
-            log.error(f"【{self.client_name}】登录异常：" + str(e))
+            log.error(f"【{self.client_name}】{self.last_error}")
 
     @classmethod
     def match(cls, ctype):
@@ -613,12 +706,34 @@ class UgreenClient(_IMediaClient):
         """
         测试连通性
         """
-        if not self._host or not self._api:
+        if not self._host:
+            self.last_error = "未填写服务端地址（请在 设置 → 媒体服务器 → 绿联影视 里填写并保存）"
+            log.error(f"【{self.client_name}】{self.last_error}")
+            return False
+        if not self._username or not self._password:
+            self.last_error = "用户名或密码未填写（请补全后保存再测试）"
+            log.error(f"【{self.client_name}】{self.last_error}")
+            return False
+        if not self._api:
+            # init_config/_connect 已把更具体的原因写进 last_error，优先用它；
+            # 注意「未建立连接」的真正原因通常在上一句，不要在这里覆盖掉
+            self.last_error = self.last_error or (
+                f"未建立连接（地址 {self._host}），请检查地址、端口、用户名与密码")
+            log.error(f"【{self.client_name}】{self.last_error}")
             return False
         try:
             user = self._api.current_user()
-            return user is not None
-        except Exception:
+            if user is None:
+                self.last_error = (
+                    f"连接中断：{self._api.last_error or 'token 未被服务端接受'}")
+                log.error(f"【{self.client_name}】{self.last_error}")
+                return False
+            self.last_error = None
+            return True
+        except Exception as e:
+            self.last_error = f"测试连接出错：{type(e).__name__}: {e}"
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】{self.last_error}")
             return False
 
     def get_user_id(self):
