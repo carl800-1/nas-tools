@@ -895,8 +895,8 @@
 
           <div class="col-lg-4" id="rename_min_filesize_div">
             <div class="mb-3">
-              <label class="form-label">最小文件大小 <span class="form-help" title="留空将使用基础设置中的转移最小文件大小设置，如不限制大小需输入0" data-bs-toggle="tooltip">?</span></label>
-              <input type="text" id="rename_min_filesize" class="form-control" placeholder="最小文件大小(MB)">
+              <label class="form-label">最小文件大小 <span class="form-help" title="小于该大小的文件会被忽略、不参与转移。填 0 表示不限制大小（当前默认）。<br>注意：留空会套用「基础设置 → 转移最小文件大小」，该值大于实际文件时会静默丢弃文件。" data-bs-toggle="tooltip" data-bs-html="true">?</span></label>
+              <input type="text" id="rename_min_filesize" class="form-control" placeholder="0 = 不限制大小">
             </div>
           </div>
           <div class="col-lg-8" id="rename_specify_episode_div">
@@ -935,9 +935,16 @@
             </div>
           </div>
         </div>
+        <div class="mb-3 d-none" id="rename_preview_result_div">
+          <div class="alert mb-0" id="rename_preview_result"></div>
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
+        <button type="button" id="identification_test_btn" class="btn btn-outline-primary"
+                onclick="preview_media_transfer()"
+                title="只统计不转移：先看能识别多少个、需要转移多少个">测试
+        </button>
         <button type="button" id="identification_action_btn" class="btn btn-primary"
                 onclick="manual_media_transfer()">转移
         </button>

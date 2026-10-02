@@ -1693,7 +1693,10 @@ function show_manual_transfer_modal(manual_type, inpath, syncmod, media_type, un
   $("#ignore_download_his_div").show();
 
   // 清空输入框
-  $("#rename_min_filesize").val("");
+  // 「最小文件大小」默认填 0（不限制大小）：留空会静默套用「基础设置 → 转移最小文件大小(MB)」，
+  // 该值大于实际文件时，文件会在扫描阶段被无提示地丢弃（表现为「目录里有 26 个，只转移了 5 个」）。
+  // 需要限制大小时由用户显式填写。
+  $("#rename_min_filesize").val("0");
   $("#rename_specify_episode").val("");
   $("#rename_specify_part").val("");
   $("#rename_episode").val("");
@@ -1701,6 +1704,10 @@ function show_manual_transfer_modal(manual_type, inpath, syncmod, media_type, un
   $("#rename_episode_offset").val("");
   $("#rename_season").val("");
   $("#rename_tmdb").val("");
+
+  // 重置预检结果区（不保留上一次的统计结果）
+  $("#rename_preview_result_div").addClass("d-none");
+  $("#rename_preview_result").empty();
 
   // 显示窗口
   $("#modal-media-identification").modal("show");
@@ -1856,6 +1863,153 @@ function manual_media_transfer() {
       });
     }
   });
+}
+
+// 「测试」按钮：转移预检（只统计、不转移）
+// 用与「转移」完全相同的扫描 + 识别口径，先告诉用户
+// 「识别出多少个、需要转移多少个」，以及哪些文件被过滤掉、为什么。
+function preview_media_transfer() {
+  let syncmod;
+  const manual_type = $("#rename_manual_type").val();
+  const type = $('input:radio[name=rename_type]:checked').val();
+  const path = $("#rename_path").val();
+  const inpath = $("#rename_inpath").val();
+  const outpath = $("#rename_outpath").val();
+  const ignore_download_history = $("#ignore_download_his").val();
+  if (manual_type == '3') {
+    syncmod = $("#rename_syncmod_customize").val();
+  } else {
+    syncmod = $("#rename_syncmod_manual").val();
+  }
+  const tmdb = $("#rename_tmdb").val();
+  const season = $("#rename_season").val();
+  const specify_episode = $("#rename_specify_episode").val();
+  const specify_episode_part = $("#rename_specify_part").val();
+  const episode_format = $("#rename_episode").val();
+  const episode_details = $("#rename_episode_details").val();
+  const episode_offset = $("#rename_episode_offset").val();
+  const min_filesize = $("#rename_min_filesize").val();
+  const logid = $("#transferlog_id").val();
+  const unknown_id = $('#unknown_id').val();
+
+  // 必填校验：与 manual_media_transfer 保持一致
+  if (manual_type == '1' && !unknown_id) {
+    return;
+  }
+  if (manual_type == '2' && !logid) {
+    return;
+  }
+  if (manual_type == '3') {
+    if (!inpath) {
+      $("#rename_inpath").addClass("is-invalid");
+      return;
+    } else {
+      $("#rename_inpath").removeClass("is-invalid");
+    }
+  } else {
+    if (!path) {
+      $("#rename_path").addClass("is-invalid");
+      return;
+    } else {
+      $("#rename_path").removeClass("is-invalid");
+    }
+  }
+  if (min_filesize && isNaN(min_filesize)) {
+    $("#rename_min_filesize").addClass("is-invalid");
+    return;
+  } else {
+    $("#rename_min_filesize").removeClass("is-invalid");
+  }
+
+  const data = {
+    "inpath": inpath,
+    "outpath": outpath,
+    "syncmod": syncmod,
+    "type": type,
+    "tmdb": tmdb,
+    "season": season,
+    "episode_format": episode_format,
+    "episode_details": spaceTrim(specify_episode) === '' ? episode_details : specify_episode,
+    "episode_part": specify_episode_part,
+    "episode_offset": episode_offset,
+    "min_filesize": min_filesize,
+    "unknown_id": unknown_id,
+    "path": path,
+    "logid": logid,
+    "ignore_download_history": ignore_download_history,
+  };
+
+  const result_div = $("#rename_preview_result_div");
+  result_div.removeClass("d-none");
+  $("#rename_preview_result")
+      .removeClass("alert-success alert-warning alert-danger")
+      .addClass("alert-info")
+      .html('<span class="spinner-border spinner-border-sm me-1"></span>正在统计，请稍候…');
+
+  ajax_post("preview_transfer", data, function (ret) {
+    render_rename_preview(ret);
+  }, true, false);
+}
+
+// 预检结果里的文本转义（文件名可能含 < > & 等字符）
+function rename_preview_escape(text) {
+  return String(text === undefined || text === null ? '' : text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+}
+
+// 渲染预检结果
+function render_rename_preview(ret) {
+  const box = $("#rename_preview_result");
+  box.removeClass("alert-info alert-success alert-warning alert-danger");
+  if (!ret || ret.retcode !== 0) {
+    box.addClass("alert-danger").html("预检失败：" + rename_preview_escape((ret && ret.retmsg) || "未知错误"));
+    return;
+  }
+  const d = ret.data || {};
+  const esc = rename_preview_escape;
+  let html = '<div class="fw-bold mb-1">可识别 <span class="text-green">' + (d.recognized || 0) +
+      '</span> 个，预计转移 <span class="text-green">' + (d.will_transfer || 0) + '</span> 个</div>';
+  html += '<div class="text-muted">目录内文件 ' + (d.dir_total || 0) + ' 个' +
+      '　扫描通过 ' + (d.scanned || 0) + ' 个';
+  if (d.min_filesize) {
+    html += '　最小文件大小限制 ' + esc(d.min_filesize);
+  }
+  html += '</div>';
+
+  const dropped = d.dropped || [];
+  if (dropped.length) {
+    const shown = dropped.slice(0, 8).map(function (x) {
+      return esc(x.name) + "（" + esc(x.reason) + "）";
+    });
+    html += '<div class="mt-1 text-orange">被过滤 ' + dropped.length + ' 个：' +
+        shown.join('、') + (dropped.length > 8 ? ' …' : '') + '</div>';
+  }
+  if (d.ignored) {
+    html += '<div class="mt-1 text-orange">被忽略词过滤 ' + d.ignored + ' 个</div>';
+  }
+  const un = d.unrecognized || [];
+  if (un.length) {
+    const shown2 = un.slice(0, 8).map(esc);
+    html += '<div class="mt-1 text-orange">识别不出片名 ' + un.length + ' 个：' +
+        shown2.join('、') + (un.length > 8 ? ' …' : '') + '</div>';
+  }
+  // 「可识别」与「预计转移」的差额来源：识别得到但会被跳过的文件
+  if (d.sample_skipped && d.sample_skipped.length) {
+    html += '<div class="mt-1 text-muted">其中 ' + d.sample_skipped.length +
+        ' 个疑似预告片（文件名含 Sample），转移时会跳过</div>';
+  }
+  if (d.bluray_skipped) {
+    html += '<div class="mt-1 text-muted">其中 ' + d.bluray_skipped +
+        ' 个蓝光原盘子文件，转移时会跳过</div>';
+  }
+  if (d.error) {
+    html += '<div class="mt-1 text-orange">提示：' + esc(d.error) + '</div>';
+  }
+  box.addClass(d.will_transfer > 0 ? "alert-success" : "alert-warning").html(html);
 }
 
 // 查示查询TMDBID的对话框

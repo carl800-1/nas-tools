@@ -991,6 +991,50 @@ class Media:
         else:
             self.meta.update_meta_data({media_key: {'id': 0}})
 
+    def get_local_media_info(self, file_path):
+        """
+        仅用「文件名 → 上级目录名 → 上上级目录名」做本地名称识别，
+        不查 TMDB、不写缓存、不访问数据库。
+
+        返回的 MetaInfo 只要 name 与 type 均非空，就代表该文件能通过
+        get_media_info_on_files 的有效性判定（即会被计入「文件总数」）。
+
+        该方法由 get_media_info_on_files 与「文件转移预检」共用，
+        以保证两处的识别口径完全一致 —— 预检不能走 TMDB，
+        否则搜不到时会写入 {'id': 0} 的「未识别」缓存，反而毒化随后的真实转移。
+
+        :param file_path: 媒体文件路径
+        :return: MetaInfo 对象
+        """
+        file_name = os.path.basename(file_path)
+        parent_name = os.path.basename(os.path.dirname(file_path))
+        parent_parent_name = os.path.basename(PathUtils.get_parent_paths(file_path, 2))
+        # 先用自己的名称
+        meta_info = MetaInfo(title=file_name, filePath=file_path)
+        # 识别不到则使用上级的名称
+        if not meta_info.get_name() or not meta_info.year:
+            parent_info = MetaInfo(parent_name)
+            if not parent_info.get_name() or not parent_info.year:
+                parent_parent_info = MetaInfo(parent_parent_name)
+                parent_info.type = parent_parent_info.type if parent_parent_info.type and parent_info.type != MediaType.TV else parent_info.type
+                parent_info.cn_name = parent_parent_info.cn_name if parent_parent_info.cn_name else parent_info.cn_name
+                parent_info.en_name = parent_parent_info.en_name if parent_parent_info.en_name else parent_info.en_name
+                parent_info.year = parent_parent_info.year if parent_parent_info.year else parent_info.year
+                parent_info.begin_season = NumberUtils.max_ele(parent_info.begin_season,
+                                                               parent_parent_info.begin_season)
+            if not meta_info.get_name():
+                meta_info.cn_name = parent_info.cn_name
+                meta_info.en_name = parent_info.en_name
+            if not meta_info.year:
+                meta_info.year = parent_info.year
+            if parent_info.type and parent_info.type == MediaType.TV \
+                    and meta_info.type != MediaType.TV:
+                meta_info.type = parent_info.type
+            if meta_info.type == MediaType.TV:
+                meta_info.begin_season = NumberUtils.max_ele(parent_info.begin_season,
+                                                             meta_info.begin_season)
+        return meta_info
+
     def get_media_info_on_files(self,
                                 file_list,
                                 tmdb_info=None,
@@ -1032,8 +1076,6 @@ class Media:
                 # 解析媒体名称
                 # 先用自己的名称
                 file_name = os.path.basename(file_path)
-                parent_name = os.path.basename(os.path.dirname(file_path))
-                parent_parent_name = os.path.basename(PathUtils.get_parent_paths(file_path, 2))
                 # 过滤掉蓝光原盘目录下的子文件
                 if not os.path.isdir(file_path) \
                         and PathUtils.get_bluray_dir(file_path):
@@ -1041,30 +1083,9 @@ class Media:
                     continue
                 # 没有自带TMDB信息
                 if not tmdb_info:
-                    # 识别名称
-                    meta_info = MetaInfo(title=file_name, filePath=file_path)
-                    # 识别不到则使用上级的名称
-                    if not meta_info.get_name() or not meta_info.year:
-                        parent_info = MetaInfo(parent_name)
-                        if not parent_info.get_name() or not parent_info.year:
-                            parent_parent_info = MetaInfo(parent_parent_name)
-                            parent_info.type = parent_parent_info.type if parent_parent_info.type and parent_info.type != MediaType.TV else parent_info.type
-                            parent_info.cn_name = parent_parent_info.cn_name if parent_parent_info.cn_name else parent_info.cn_name
-                            parent_info.en_name = parent_parent_info.en_name if parent_parent_info.en_name else parent_info.en_name
-                            parent_info.year = parent_parent_info.year if parent_parent_info.year else parent_info.year
-                            parent_info.begin_season = NumberUtils.max_ele(parent_info.begin_season,
-                                                                           parent_parent_info.begin_season)
-                        if not meta_info.get_name():
-                            meta_info.cn_name = parent_info.cn_name
-                            meta_info.en_name = parent_info.en_name
-                        if not meta_info.year:
-                            meta_info.year = parent_info.year
-                        if parent_info.type and parent_info.type == MediaType.TV \
-                                and meta_info.type != MediaType.TV:
-                            meta_info.type = parent_info.type
-                        if meta_info.type == MediaType.TV:
-                            meta_info.begin_season = NumberUtils.max_ele(parent_info.begin_season,
-                                                                         meta_info.begin_season)
+                    # 识别名称（本地识别：文件名 → 上级目录 → 上上级目录；不查 TMDB。
+                    # 与「文件转移预检」共用同一方法，保证两处口径一致。）
+                    meta_info = self.get_local_media_info(file_path=file_path)
                     if not meta_info.get_name() or not meta_info.type:
                         log.warn("【Rmt】%s 未识别出有效信息！" % meta_info.org_string)
                         continue

@@ -97,6 +97,7 @@ class WebAction:
             "del_unknown_path": self.__del_unknown_path,
             "rename": self.__rename,
             "rename_udf": self.__rename_udf,
+            "preview_transfer": self.__preview_transfer,
             "delete_history": self.delete_history,
             "version": self.__version,
             "update_site": self.__update_site,
@@ -947,6 +948,52 @@ class WebAction:
                                                                udf_flag=True,
                                                                ignore_download_history=ignore_download_history)
         return succ_flag, ret_msg
+
+    def __preview_transfer(self, data):
+        """
+        文件转移预检（只读，不转移文件、不入库、不写识别缓存）。
+
+        供「手动识别」弹窗的「测试」按钮使用：用与真实转移**完全相同**的
+        「扫描 + 本地识别」口径，先告诉用户识别出多少个文件、预计转移多少个，
+        以及目录里有多少个文件被哪条规则过滤掉 —— 避免点「转移」后才发现
+        大部分文件被静默丢弃（如「目录 26 个、只处理 5 个」）。
+        """
+        path = None
+        logid = data.get("logid")
+        if logid:
+            transinfo = FileTransfer().get_transfer_info_by_id(logid)
+            if transinfo:
+                path = os.path.join(transinfo.SOURCE_PATH, transinfo.SOURCE_FILENAME)
+            else:
+                return {"retcode": -1, "retmsg": "未查询到转移日志记录"}
+        else:
+            unknown_id = data.get("unknown_id")
+            if unknown_id:
+                inknowninfo = FileTransfer().get_unknown_info_by_id(unknown_id)
+                if inknowninfo:
+                    path = inknowninfo.PATH
+                else:
+                    return {"retcode": -1, "retmsg": "未查询到未识别记录"}
+        # 自定义识别（文件管理页面）直接传 inpath
+        if not path:
+            path = data.get("inpath")
+        if not path:
+            return {"retcode": -1, "retmsg": "输入路径有误"}
+        succ_flag, result = FileTransfer().preview_transfer(
+            in_path=path,
+            episode=(EpisodeFormat(data.get("episode_format"),
+                                   data.get("episode_details"),
+                                   data.get("episode_part"),
+                                   data.get("episode_offset")),
+                      False),
+            min_filesize=data.get("min_filesize"),
+            # 与 __manual_transfer 一致：手工转移恒为 udf_flag=True
+            udf_flag=True)
+        if not succ_flag:
+            return {"retcode": 2,
+                    "retmsg": result.get("error") or "预检失败",
+                    "data": result}
+        return {"retcode": 0, "retmsg": "预检完成", "data": result}
 
     def delete_history(self, data):
         """

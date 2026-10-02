@@ -4,30 +4,40 @@ import os
 class PathUtils:
 
     @staticmethod
-    def get_dir_files(in_path, exts="", filesize=0, episode_format=None):
+    def get_dir_files(in_path, exts="", filesize=0, episode_format=None, detail=False):
         """
         获得目录下的媒体文件列表List ，按后缀、大小、格式过滤
+
+        :param detail: 为 True 时返回 (命中列表, 被过滤明细)，
+               明细形如 [(文件路径, 原因)]。用于「文件转移预检」向用户解释
+               「目录里有 N 个文件，为什么只有 M 个会被处理」。
+               默认为 False，返回值与旧版完全一致。
         """
         if not in_path:
-            return []
+            return ([], []) if detail else []
         if not os.path.exists(in_path):
-            return []
+            return ([], []) if detail else []
         ret_list = []
+        dropped = []
         if os.path.isdir(in_path):
             for root, dirs, files in os.walk(in_path):
                 for file in files:
                     cur_path = os.path.join(root, file)
                     # 检查路径是否合法
                     if PathUtils.is_invalid_path(cur_path):
+                        dropped.append((cur_path, "路径不合法（隐藏目录/回收站/@eaDir）"))
                         continue
                     # 检查格式匹配
                     if episode_format and not episode_format.match(file):
+                        dropped.append((cur_path, "不匹配「高级集数定位」中填写的格式"))
                         continue
                     # 检查后缀
                     if exts and os.path.splitext(file)[-1].lower() not in exts:
+                        dropped.append((cur_path, "不是支持的媒体文件后缀"))
                         continue
                     # 检查文件大小
                     if filesize and os.path.getsize(cur_path) < filesize:
+                        dropped.append((cur_path, "小于「最小文件大小」限制"))
                         continue
                     # 命中
                     if cur_path not in ret_list:
@@ -35,18 +45,18 @@ class PathUtils:
         else:
             # 检查路径是否合法
             if PathUtils.is_invalid_path(in_path):
-                return []
+                return ([], [(in_path, "路径不合法（隐藏目录/回收站/@eaDir）")]) if detail else []
             # 检查后缀
             if exts and os.path.splitext(in_path)[-1].lower() not in exts:
-                return []
+                return ([], [(in_path, "不是支持的媒体文件后缀")]) if detail else []
             # 检查格式
             if episode_format and not episode_format.match(os.path.basename(in_path)):
-                return []
+                return ([], [(in_path, "不匹配「高级集数定位」中填写的格式")]) if detail else []
             # 检查文件大小
             if filesize and os.path.getsize(in_path) < filesize:
-                return []
+                return ([], [(in_path, "小于「最小文件大小」限制")]) if detail else []
             ret_list.append(in_path)
-        return ret_list
+        return (ret_list, dropped) if detail else ret_list
 
     @staticmethod
     def get_dir_level1_files(in_path, exts=""):

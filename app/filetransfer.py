@@ -594,11 +594,25 @@ class FileTransfer:
                         now_filesize = self._min_filesize if not str(min_filesize).isdigit() else int(
                             min_filesize) * 1024 * 1024
                     # 查找目录下的文件
-                    file_list = PathUtils.get_dir_files(in_path=in_path,
-                                                        episode_format=episode[0],
-                                                        exts=RMT_MEDIAEXT,
-                                                        filesize=now_filesize)
+                    # detail=True：一并取回被扫描规则（非法路径/集数格式/后缀/大小）
+                    # 过滤掉的文件与原因。这些文件不会进入 file_list，因而也不会
+                    # 进入后续任何记账 —— 旧版属「静默丢弃」，表现为
+                    # 「目录里 26 个文件，实际只处理了 5 个」却没有任何提示。
+                    file_list, _dropped = PathUtils.get_dir_files(in_path=in_path,
+                                                                 episode_format=episode[0],
+                                                                 exts=RMT_MEDIAEXT,
+                                                                 filesize=now_filesize,
+                                                                 detail=True)
                     log.debug("【Rmt】文件清单：" + str(file_list))
+                    if _dropped:
+                        _dropped_names = [os.path.basename(_p) for _p, _ in _dropped]
+                        if len(_dropped_names) > 10:
+                            _dropped_names = _dropped_names[:10] + ["...等共 %s 个" % len(_dropped)]
+                        _reasons = {_r for _, _r in _dropped}
+                        log.warn("【Rmt】%s 目录下有 %s 个文件被扫描规则过滤，未纳入处理（%s）：%s"
+                                 % (in_path, len(_dropped),
+                                    _reasons.pop() if len(_reasons) == 1 else "多种原因",
+                                    "、".join(_dropped_names)))
                     if len(file_list) == 0:
                         log.warn("【Rmt】%s 目录下未找到媒体文件，当前最小文件大小限制为 %s"
                                  % (in_path, StringUtils.str_filesize(now_filesize)))
@@ -1012,6 +1026,132 @@ class FileTransfer:
         elif not error_message:
             error_message = "共 %s 个文件需要处理，全部处理成功" % len(file_list)
         return __finish_transfer(success_flag, error_message)
+
+    def preview_transfer(self,
+                         in_path,
+                         rmt_mode=None,
+                         target_dir=None,
+                         media_type=None,
+                         season=None,
+                         episode=None,
+                         min_filesize=None,
+                         tmdb_info=None,
+                         udf_flag=False):
+        """
+        文件转移预检（只读）。
+
+        不转移文件、不入库、不写识别缓存；用与 transfer_media **完全相同**的
+        「扫描 + 本地识别」口径，回答用户最关心的两个数：
+
+          * 识别出多少个（recognized）—— 与 transfer_media 界面上的「文件总数」**同义**，
+            即 len(Medias)，**包含**疑似预告片（transfer_media 是先计入总数、再跳过预告片）；
+          * 预计需要转移多少个（will_transfer）—— recognized 扣掉会被跳过的疑似预告片。
+
+        同时给出「目录里一共多少个、分别被哪条规则过滤掉」，
+        让「26 个文件只处理了 5 个」这类问题一眼可见。
+
+        :param in_path: 待转移的目录或文件
+        :param episode: (EpisodeFormat, need_fix_all) 与 transfer_media 同构
+        :param min_filesize: 同 transfer_media；空值会套用配置的最小文件大小
+        :return: (ok, result_dict)
+        """
+        episode = (None, False) if not episode else episode
+        result = {
+            "in_path": in_path,
+            "exists": False,
+            "is_dir": False,
+            "dir_total": 0,
+            "min_filesize": "",
+            "scanned": 0,
+            "dropped": [],
+            "ignored": 0,
+            "sample_skipped": [],
+            "bluray_skipped": 0,
+            "recognized": 0,
+            "unrecognized": [],
+            "will_transfer": 0,
+            "error": "",
+        }
+
+        if not in_path or not os.path.exists(in_path):
+            result["error"] = "目录或文件不存在"
+            return False, result
+        result["exists"] = True
+        result["is_dir"] = os.path.isdir(in_path)
+
+        if result["is_dir"]:
+            # 回收站及隐藏的文件不处理
+            if PathUtils.is_invalid_path(in_path):
+                result["error"] = "回收站或者隐藏文件夹"
+                return False, result
+            # 目录下全部文件数（含非媒体），用于说明「目录里到底有多少个」
+            _all = 0
+            for _root, _dirs, _files in os.walk(in_path):
+                _all += len(_files)
+            result["dir_total"] = _all
+
+            bluray_disk_dir = PathUtils.get_bluray_dir(in_path)
+            if bluray_disk_dir:
+                file_list = [bluray_disk_dir]
+            else:
+                if str(min_filesize) == "0":
+                    now_filesize = 0
+                else:
+                    now_filesize = self._min_filesize if not str(min_filesize).isdigit() \
+                        else int(min_filesize) * 1024 * 1024
+                result["min_filesize"] = StringUtils.str_filesize(now_filesize)
+                file_list, dropped = PathUtils.get_dir_files(in_path=in_path,
+                                                             episode_format=episode[0],
+                                                             exts=RMT_MEDIAEXT,
+                                                             filesize=now_filesize,
+                                                             detail=True)
+                result["dropped"] = [{"name": os.path.basename(_p), "path": _p, "reason": _r}
+                                     for _p, _r in dropped]
+        else:
+            if os.path.splitext(in_path)[-1].lower() not in RMT_MEDIAEXT:
+                result["error"] = "不支持的媒体文件格式"
+                return False, result
+            bluray_disk_dir = PathUtils.get_bluray_dir(in_path)
+            file_list = [bluray_disk_dir] if bluray_disk_dir else [in_path]
+
+        # 与 transfer_media 一致的忽略词过滤
+        _before_ignore = len(file_list)
+        file_list, msg = self.check_ignore(file_list=file_list)
+        result["ignored"] = _before_ignore - len(file_list)
+        result["scanned"] = len(file_list)
+        if not file_list:
+            result["error"] = msg or "没有需要处理的文件"
+            return True, result
+
+        # 本地识别（与 transfer_media / get_media_info_on_files 同一方法，口径一致）
+        #
+        # 口径说明：transfer_media 里 `total_count += 1` 是循环第一句，而「疑似预告片跳过」
+        # 的 continue 在它之后 —— 所以界面「总数」= len(Medias) 是**包含**预告片的。
+        # 这里必须同样把预告片计入 recognized，否则预检数字会比真实界面少。
+        for _f in file_list:
+            try:
+                if not os.path.exists(_f):
+                    result["unrecognized"].append(os.path.basename(_f))
+                    continue
+                # 与 get_media_info_on_files 一致：非目录但带蓝光原盘特征 → 不计入 Medias
+                if not os.path.isdir(_f) and PathUtils.get_bluray_dir(_f):
+                    result["bluray_skipped"] += 1
+                    continue
+                _meta = self.media.get_local_media_info(file_path=_f)
+                if not _meta.get_name() or not _meta.type:
+                    result["unrecognized"].append(os.path.basename(_f))
+                    continue
+                result["recognized"] += 1
+                # 计入总数之后，再标出「会因疑似预告片而被跳过」的那部分
+                if not udf_flag and re.search(r'[./\s\[]+Sample[/.\s\]]+', _f, re.IGNORECASE):
+                    result["sample_skipped"].append(os.path.basename(_f))
+            except Exception as err:
+                ExceptionUtils.exception_traceback(err)
+                result["unrecognized"].append(os.path.basename(_f))
+
+        # 预计真正会被转移的数量 = 识别出的总数 - 会被跳过的疑似预告片
+        result["will_transfer"] = result["recognized"] - len(result["sample_skipped"])
+        return True, result
 
     def transfer_manually(self, s_path, t_path, mode):
         """
