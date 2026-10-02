@@ -1223,7 +1223,7 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 - 优化新手刷流体验；
 - 页脚仅展示版本号（不再附带提交短哈希，v3.8.0 起）。
 
-> 历史增量说明见 [diff.md](diff.md)，版本变更见 [CHANGELOG.md](CHANGELOG.md)。
+> 历史增量说明见 [diff.md](diff.md)，版本变更见 [CHANGELOG.md](CHANGELOG.md)，各版本发布日期见 [CHANGELOG_DATES.md](CHANGELOG_DATES.md)。
 
 ## 功能总览
 
@@ -1666,7 +1666,7 @@ docker compose up -d
   ```
 
 - **CI/CD**：推送 `version.py` 变更即触发 [`.github/workflows/build.yml`](.github/workflows/build.yml)，自动构建 `linux/amd64` + `linux/arm64` 镜像并推送到 GHCR（标签：版本号 + `latest`），同时基于 `CHANGELOG.md` 创建 GitHub Release。
-- **发版流程**：改 `version.py` → 更新 `CHANGELOG.md` → 提交推送，镜像与 Release 由 CI 产出。
+- **发版流程**：改 `version.py` → 更新 `CHANGELOG.md` → 在 [CHANGELOG_DATES.md](CHANGELOG_DATES.md) 补一行发布日期 → 提交推送，镜像与 Release 由 CI 产出。
 
 ## 免责声明与许可
 
