@@ -32,6 +32,20 @@ class MetaVideo(MetaBase):
     _effect_re = r"^REMUX$|^UHD$|^SDR$|^HDR\d*$|^DOLBY$|^DOVI$|^DV$|^3D$|^REPACK$"
     _resources_type_re = r"%s|%s" % (_source_re, _effect_re)
     _name_no_begin_re = r"^\[.+?]"
+    # 发布组/字幕组关键词（与 metavideov2.py::__fix_release_group 保持同一口径）
+    _release_group_keywords = (
+        "raws", "raw", "sub", "studio", "搬运组", "搬運組", "字幕组", "字幕組", "漢化組", "汉化组",
+        "发布组", "發佈組", "字幕团", "字幕社", "工作室", "制作组", "制作組", "Team",
+        "LoliHouse", "ANi", "喵萌", "c.c動漫", "c.c动漫", "压制", "MagicStar",
+        "芝士动物朋友", "招募", "丸子家族", "LoveEcho!", "VCB-Studio", "虹咲学园烤肉同好会",
+        "練習組", "练习组", "夜莺家族", "APTX4869", "事务所", "新番", "合集", "连载",
+        "日剧", "美剧", "电视剧", "动画片", "动漫", "欧美", "西德", "日韩", "超高清", "高清", "蓝光",
+        "翡翠台", "梦幻天堂", "毀片黨", "毁片党", "论坛", "ViuTV", "PTS", "JADE", "AOD", "CHC",
+        "周年", "纪念版", "白金", "特效", "首发", "原盘", "❀拨雪寻春❀", "喵萌奶茶屋", "熔岩动画",
+        "Xrip", "AKito秋人", "智械尚未危机制作", "jibaketa", "亿次研同好会", "VARYG", "B站小鱼儿呼唤爱",
+        "hchcsen", "niizk", "Xeon晚生", "氢气烤肉架", "7³ACG", "LittleBakas", "FSD粉羽社", "一只出格君",
+        "OPFans枫雪动漫",
+    )
     _name_no_chinese_re = r".*版|.*字幕"
     _name_se_words = ['共', '第', '季', '集', '话', '話', '期']
     _name_nostring_re = r"^PTS|^JADE|^AOD|^CHC|^[A-Z]{1,4}TV[\-0-9UVHDK]*" \
@@ -81,8 +95,17 @@ class MetaVideo(MetaBase):
             self.begin_episode = int(os.path.splitext(title)[0])
             self.type = MediaType.TV
             return
-        # 去掉名称中第1个[]的内容
-        title = re.sub(r'%s' % self._name_no_begin_re, "", title, count=1)
+        # 去掉名称中第1个[]的内容 —— 但**仅当它确实是「发布组/字幕组」、
+        # 且删掉后剩下的部分仍能提供片名**时才删。分词器本来就按 [ ] 切分，
+        # 原实现无条件删除，等于把写在方括号里的片名（[剧名][集数][分辨率]，
+        # 中文资源极常见）整个丢掉，随后要么识别出空名、要么把年份当成片名。
+        # 该现象只出现在「关闭增强识别V2」这条分支上（增强识别V2 走 metavideov2.py）。
+        m_begin = re.match(r'%s' % self._name_no_begin_re, title)
+        while m_begin \
+                and self.__is_release_group_token(m_begin.group(0)) \
+                and self.__has_name_like_token(title[m_begin.end():]):
+            title = title[m_begin.end():]
+            m_begin = re.match(r'%s' % self._name_no_begin_re, title)
         # 把xxxx-xxxx年份换成前一个年份，常出现在季集上
         title = re.sub(r'([\s.]+)(\d{4})-(\d{4})', r'\1\2', title)
         # 把大小去掉
@@ -152,6 +175,81 @@ class MetaVideo(MetaBase):
         self.resource_team = ReleaseGroupsMatcher().match(title=original_title) or None
         # 自定义占位符
         self.customization = CustomizationMatcher().match(title=original_title) or None
+
+    def __is_release_group_token(self, token):
+        """
+        判断标题开头这一截 [...] 是「发布组/字幕组」（True）还是「片名本身」（False）。
+        判据与「增强识别V2」同口径（见 metavideov2.py::__fix_release_group），
+        另加两条更保守的补判，避免把未收录的组名当成片名。
+        """
+        content = token.strip().strip("[]【】").strip()
+        if not content:
+            return True
+        # 1) 命中内置的站点发布组名单，如 [CHD]、[WiKi]、[FRDS]
+        if ReleaseGroupsMatcher().match(title="%s " % token):
+            return True
+        # 2) 无空格的纯 ASCII 短串（含纯数字）—— 典型组名/参数形态；
+        #    片名极少长这样（中文片名含中文，英文片名一般带空格或用 . 分隔）
+        if len(content) <= 20 \
+                and re.fullmatch(r"[A-Za-z0-9@._+\-&'!]+", content) \
+                and (re.search(r"[A-Za-z]", content) or content.isdigit()):
+            return True
+        # 3) 含中文时只认「含中文的组名标志词」，绝不把 [诛仙]、[斗罗大陆] 这类片名删掉
+        if re.search(r"[\u4e00-\u9fff]", content):
+            return any(kw in content for kw in self._release_group_keywords
+                       if re.search(r"[\u4e00-\u9fff]", kw))
+        # 4) 其它（英数混合、含空格等），沿用增强识别V2 的全量关键词表
+        low = content.lower()
+        return any(kw.lower() in low for kw in self._release_group_keywords)
+
+    def __has_name_like_token(self, text):
+        """
+        判断一段文本里是否还有「能当片名」的 token。
+        全是年份/分辨率/来源/编码/扩展名之类的垃圾 → False。
+        用于避免把 [片名] 里的片名删掉（[Oppenheimer].2023.2160p.WEB-DL.H265.mkv）。
+        """
+        if not text:
+            return False
+        tokens = Tokens(text)
+        token = tokens.get_next()
+        while token:
+            if self.__looks_like_name_token(token):
+                return True
+            token = tokens.get_next()
+        return False
+
+    def __looks_like_name_token(self, token):
+        """
+        单个 token 是否「像片名」（而不是年份/季集/分辨率/来源/编码/扩展名/干扰词）。
+        """
+        if not token:
+            return False
+        # 扩展名
+        if (".%s" % token).lower() in RMT_MEDIAEXT:
+            return False
+        # 纯数字（年份、集数等）
+        if token.isdigit():
+            return False
+        # 季 / 集
+        if re.search(r"%s" % self._season_re, token, re.IGNORECASE) \
+                or re.search(r"%s" % self._episode_re, token, re.IGNORECASE):
+            return False
+        # 分辨率 / 来源 / 效果
+        if re.search(r"(%s)" % self._resources_type_re, token, re.IGNORECASE) \
+                or re.search(r"%s" % self._resources_pix_re, token, re.IGNORECASE) \
+                or re.search(r"%s" % self._resources_pix_re2, token, re.IGNORECASE):
+            return False
+        # 视频 / 音频编码
+        if re.search(r"(%s)" % self._video_encode_re, token, re.IGNORECASE) \
+                or re.search(r"(%s)" % self._audio_encode_re, token, re.IGNORECASE):
+            return False
+        # 名称里本来就要过滤掉的干扰词
+        if re.search(r"%s" % self._name_nostring_re, token, re.IGNORECASE):
+            return False
+        # 必须看得出是个「词」：含小写字母或中文（排除 DL / AAC / XXX 这类缩写）
+        if not re.search(r"[a-z\u4e00-\u9fff]", token):
+            return False
+        return True
 
     def __fix_name(self, name):
         if not name:
