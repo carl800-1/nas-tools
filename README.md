@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -955,6 +955,28 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 
 **建议**：参数不确定时，**先点「测试」再点「转移」**。
 
+#### 2.45 绿联影视「测试连接」失败时会显示真实原因了（v6.3.4）
+
+**问题**：绿联影视点「测试」，只显示一句笼统的「测试失败！」，看不出是地址错、
+端口错、密码错，还是绿联系统升级后接口变了。
+
+**原因**：页面本来就支持把客户端记录的失败原因显示出来（飞牛影视一直在用），
+但绿联客户端**从未实现**这个字段，失败原因只写进了容器日志，
+页面上就只剩一句「测试失败！」。
+
+**修复后**：点「测试」会直接显示真实原因，例如
+
+- 「请求 `http://192.168.1.10:9999/ugreen/v1/verify/check` 无响应或异常
+  （`ConnectionError: ... [WinError 10061] 由于目标计算机积极拒绝`）」
+  —— **地址或端口不对**；
+- 「返回非 JSON 响应（HTTP 200 … Content-Type：text/html，响应：`<html>…`）」
+  —— **端口连到了别的服务**（反代 / 别的网页）；
+- 「获取登录公钥失败：用户名不存在」—— **用户名不对**；
+- 「登录失败：密码错误」—— **密码不对**。
+
+排查顺序：**先看这条原因**，再决定改地址、改端口、改账号还是改密码。
+另：登录请求补了 `UG-Client-Id` 头，兼容新版绿联登录客户端标识。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1575,7 +1597,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.4   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1678,4 +1700,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-02 ｜ 当前版本 v6.3.3_
+_Last updated: 2026-10-02 ｜ 当前版本 v6.3.4_

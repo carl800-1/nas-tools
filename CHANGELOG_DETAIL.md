@@ -3,6 +3,121 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.4 — 绿联影视「测试连接」失败原因回显（last_error 诊断闭环）+ UG-Client-Id
+
+## 现象
+
+在「设置 → 媒体服务器 → 绿联影视」点「测试」，只显示一句 **「测试失败！」**，
+没有任何原因，无法判断是地址错、端口错、密码错还是接口变更。
+
+## 根因
+
+「测试」按钮走的是：
+
+```
+test_command = app.mediaserver.client.ugreen|UgreenClient
+  → UgreenClient() → init_config() → _connect()      # 真正去登录
+  → get_status()
+```
+
+而 `web/action.py::__test_connection` 早在 **v6.2.5** 就支持把客户端的 `last_error`
+回显到页面 —— 但当时只覆盖了飞牛影视：
+
+| 客户端 | 文件内 `last_error` 出现次数 |
+|---|---|
+| 飞牛影视 `trimemedia.py` | 38 |
+| 绿联影视 `ugreen.py` | **0** |
+
+且 `UgreenClient.get_status()` 是：
+
+```python
+if not self._host or not self._api:
+    return False
+try:
+    user = self._api.current_user()
+    return user is not None
+except Exception:
+    return False                      # ← 异常被吞掉，连日志都没有
+```
+
+⇒ 失败原因只写进容器日志，页面上只剩一句「测试失败！」。
+
+## 改动（对齐 MoviePilot 上游 `app/modules/ugreen`）
+
+### 1. 补 `last_error`，覆盖全部失败出口
+
+`UgreenClient` 与 `_UgreenApi` 都增加 `last_error`，每次失败都写具体原因：
+
+| 出口 | 页面显示的原因 |
+|---|---|
+| 没读到配置 | 未读到「绿联影视」配置：请先在 设置 → 媒体服务器 → 绿联影视 里… |
+| 配置不完整 | 配置不完整，缺少：地址、用户名 |
+| 缺 cryptography | 缺少 cryptography 库（镜像内未安装）… |
+| 地址/端口不通 | 获取登录公钥失败：请求 `<url>` 无响应或异常（`ConnectionError: …`） |
+| 端口连到了别的服务 | 获取登录公钥失败：返回非 JSON 响应（HTTP 200，`<url>`），Content-Type：text/html，响应：`<html>…` |
+| 取公钥失败（业务码） | 获取登录公钥失败：`<msg>`（`<url>`） |
+| 服务端未给公钥 | 获取登录公钥失败：服务端未返回 RSA 公钥（接口版本可能已变更） |
+| 密码错 / 登录被拒 | 登录失败：`<msg>` |
+| 未返回 token | 登录失败：服务端未返回 token/public_key（接口版本可能已变更） |
+| token 不被接受 | 连接中断：`<api.last_error>` |
+| 业务接口 code 非 200 | 接口 `<path>` 返回 code=`<code>`：`<msg>` |
+
+`get_status()` 改成三段式（地址 → 账号 → 未建立连接），并且**优先保留**
+`_connect()` 写入的更具体原因，不被通用文案覆盖 —— 否则「地址填错」会被
+一句「未建立连接，请检查地址、端口、用户名与密码」盖掉。
+
+### 2. 「网络层失败」与「非 JSON 响应」拆成两段
+
+`login()` 的取公钥请求与 `_request_json()` 原先都是：
+
+```python
+check_json = check_resp.json()      # 网络异常和非 JSON 都落进同一个 except
+```
+
+只报 `JSONDecodeError: Expecting value` —— 既没有状态码，也没有 Content-Type，
+更没有响应片段，拿到这句话没法定位。现在拆成：
+
+- 网络层异常 → 原样带上 `type(err).__name__` 与 `err`（**Errno 113/111/110 就在这里**）；
+- HTTP 已返回但非 JSON → 打出状态码 + Content-Type + 响应前 200 字。
+
+**Errno 判读**：`113` = 连机器都没找到（IP 错 / 设备离线 / 跨 VLAN）；
+`111` = 端口没人监听（服务没起）；`110` = 被防火墙 DROP。
+出现 Errno 时协议、路径、签名、账号全都还没轮到 —— 别去改代码。
+
+### 3. 补 `UG-Client-Id` 请求头
+
+上游 `_common_headers()` 里 `Client-Id` 与 `UG-Client-Id` **同值**，
+但只有登录阶段的明文请求带（`crypto.build_headers()` 里没有）。本仓原缺这一行，
+照上游补齐。**加密请求头不加** —— 与上游逐字节对齐。
+
+### 4. 修掉重复文案
+
+`_connect()` 原先把 `api.last_error` 又套了一层 `f"登录失败：{...}"`，
+而 `api.last_error` 在「密码错误 / 未返回 token」这两条路径上本身就带
+「登录失败：」前缀 ⇒ 页面显示「登录失败：登录失败：密码错误」。去掉外层前缀。
+
+## 验证
+
+- `_verify_ugreen_634.py`：**48/48**
+  - A 结构 15 项（含「无 `登录失败：登录失败：` 重复前缀」）
+  - B 与上游 `_common_headers` 键集合逐项一致、加密头不含 `UG-Client-Id`
+  - C 行为 18 项：**本地假服务端**真实跑登录链路，覆盖
+    端口无人监听 / check 业务码非 200 / 无公钥 / login 业务码非 200 /
+    无 token / 全通 / 非 JSON 响应 / 空 host / 缺账号 / 保留具体原因 / 业务接口 401
+  - D 请求头实证 5 项：`check`/`login` 带 `UG-Client-Id` 且与 `Client-Id` 同值；
+    加密请求不带但带三个安全头
+  - E 向后兼容 3 项：**62 个未改动方法逐字节相同**、方法总数不变
+- `_regress_633.py`：回归失败 0 个（含 `_verify_bracket_632.py` 21/21、
+  飞牛 4 个脚本全绿、`_verify_mediasync_clients_v608.py` 37/37）
+- `py_compile` 通过
+
+## 已知边界
+
+本次只做「让失败可见」，**没有**动协议、加密、接口路径。若真因是
+「地址端口填 9443」（绿联影视的 Emby 兼容端口），那属于**另一条通道**
+（上游按端口 9443 自动切到 `/emby/...` + `AuthenticateByName`，本仓未实现）
+—— 等这条原因显示出来后再决定是否补。
+
 # v6.3.3 — 文件转移「只处理了几个」根因收敛：最小文件大小 + 转移预检
 
 ## 现象
