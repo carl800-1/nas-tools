@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -921,6 +921,20 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 **说明**：目录里小于「基础设置 → 媒体库 → 最小文件大小」的文件本来就不会被处理（这是配置规则）；
 刷流 / IYUU / 订阅等自动整理链路的单文件失败行为也一并变得「不再牵连其它文件」。
 
+#### 2.43 关闭「增强识别V2」后，`[片名]` 开头的中文资源也能识别对了（v6.3.2）
+
+**问题**：在「基础设置」里**关闭**「增强识别V2」之后，片名写在方括号里的文件会识别错误 ——
+`[诛仙].Jade.Dynasty.2024.S02E01.2160p.WEB-DL.H265.AAC-AilMWeb` 被认成 **`Dynasty`**，
+`[斗罗大陆][第105集][1080p].mp4` 甚至**认不出片名**（点「识别」只得到「无法识别」）。
+打开「增强识别V2」时一切正常。
+
+**原因**：关闭「增强识别V2」时用的是另一套识别器，它会把文件名开头的第一个 `[...]`
+**无条件删掉**。片名写在方括号里（`[剧名][集数][分辨率]`，中文资源里很常见）时，
+等于把片名一起删了。
+
+**修复后**：方括号里是**片名**就保留、是**发布组 / 字幕组**（`[VCB-Studio]`、`[喵萌奶茶屋]`…）
+才删掉，识别结果与打开「增强识别V2」时一致。**打开「增强识别V2」的用户不受影响。**
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1541,7 +1555,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.2   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1644,4 +1658,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-02 ｜ 当前版本 v6.3.1_
+_Last updated: 2026-10-02 ｜ 当前版本 v6.3.2_

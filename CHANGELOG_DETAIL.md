@@ -3,6 +3,139 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.2 — 修复：关闭「增强识别V2」时，[片名] 开头的中文资源识别错误
+
+## 现象
+
+「基础设置」里**关闭**「增强识别V2」后，片名写在方括号里的资源识别错误：
+
+| 文件名 | 修复前 | 修复后 |
+|---|---|---|
+| `[诛仙].Jade.Dynasty.2024.S02E01.2160p.WEB-DL.H265.AAC-AilMWeb` | `Dynasty` | `诛仙` |
+| `[斗罗大陆][第105集][1080p].mp4` | 空（「无法识别」） | `斗罗大陆` |
+| `[电影名称] 2022 1080p WEB-DL H265.mkv` | `2022` | `电影名称` |
+| `[Oppenheimer].2023.2160p.WEB-DL.H265.mkv` | `2023` | `Oppenheimer` |
+
+打开「增强识别V2」时全部正确 —— 这两条路径用的是**两套**识别器。
+
+## 调用链
+
+```
+web/templates/setting/basic.html:962   # checkbox id = laboratory.recognize_enhance_enable（显示名「增强识别V2」）
+  → update_config → web/action.py:1313  set_config_value("laboratory.recognize_enhance_enable")
+app/media/meta/metainfo.py:55-66        # 全仓唯一的分支点
+  recognize_enhance_enable=True  → MetaVideoV2   （app/media/meta/metavideov2.py）
+  recognize_enhance_enable=False → MetaAnime / MetaVideo（app/media/meta/metavideo.py）   ← 出问题的是这条
+```
+
+**分支判断本身没错**，错在 `MetaVideo` 那条分支内部的实现。
+
+## 根因：一句无条件的 `re.sub` 把片名连同方括号一起删了
+
+`app/media/meta/metavideo.py::MetaVideo.__init__` 原第 84-85 行：
+
+```python
+# 去掉名称中第1个[]的内容
+title = re.sub(r'%s' % self._name_no_begin_re, "", title, count=1)   # _name_no_begin_re = r"^\[.+?]"
+```
+
+而分词器 `app/utils/tokens.py` 用的 `config.SPLIT_CHARS` **本来就包含 `[` `]` `【` `】`**：
+
+```
+SPLIT_CHARS = r"\.|\s+|\(|\)|\[|]|-|\+|【|】|/|～|;|&|\||#|_|「|」|~"
+```
+
+```python
+splited_text = re.split(r'%s' % SPLIT_CHARS, text)
+for sub_text in splited_text:
+    if sub_text:
+        self._tokens.append(sub_text)
+```
+
+也就是说 **`[Xxx]` 里的内容本来就会被单独切成一个 token**，这句删除并不是「为了能分词」，
+它唯一的作用是**把方括号里的东西丢掉**。对发布组（`[VCB-Studio]`）是对的，
+对「片名写在方括号里」的中文资源就是把片名一起吃掉了：
+
+```
+[诛仙].Jade.Dynasty.2024.S02E01.2160p.WEB-DL.H265.AAC-AilMWeb
+  --删掉 [诛仙]-->  .Jade.Dynasty.2024.S02E01.2160p.WEB-DL.H265.AAC-AilMWeb
+  token: Jade → Dynasty → 2024 → S02E01 → 2160p → WEB → DL → H265 → AAC → AilMWeb
+  en_name = "Jade Dynasty"
+  → __fix_name 里 `_name_nostring_re` 的 `^JADE`（翡翠台标签）把 "Jade" 又剥掉
+  → 片名 = "Dynasty"（错），cn_name = None
+```
+
+`[斗罗大陆][第105集][1080p].mp4` 更直接：删掉 `[斗罗大陆]` 后只剩 `[第105集][1080p]`，
+里面**没有任何能当片名的 token** ⇒ `get_name()` 为空。
+
+## 「识别流程停止」发生在哪
+
+`get_name()` 为空之后，下游 `app/media/media.py`：
+
+```python
+if not meta_info.get_name() or not meta_info.type:
+    log.warn("未识别出有效信息：%s" % ...)
+    return None        # 单个文件识别（文件管理页的「识别」按钮）→ 前端显示「无法识别」
+    # 批量整理时这里是 continue → 该文件被静默跳过
+```
+
+所以用户看到的「停止」在 `media.py`，但**根因在上面那句无条件删除** —— 只要片名能取到，
+这两个中止点都不会被触发。
+
+## 改动清单（1 文件，`app/media/meta/metavideo.py`，+5849 B）
+
+| 位置 | 改动 |
+|---|---|
+| 类属性 | 新增 `_release_group_keywords`（85 条，与 `metavideov2.py::__fix_release_group` 同一口径） |
+| `__init__`（原 84-85 行） | 由「无条件删第 1 个 `[...]`」改为 `while` 循环：**是发布组/字幕组、且删掉后剩下的部分仍有能当片名的 token** 才删（可连续剥多个前导垃圾方括号） |
+| 新增方法 | `__is_release_group_token` / `__has_name_like_token` / `__looks_like_name_token` |
+
+### 判据为什么是两条，而不是一条
+
+单看方括号里的内容**无法**区分 `[Oppenheimer]`（片名）和 `[Airota]`（组名）——
+两者都是「无空格的纯 ASCII 短串」。所以再加一条**看删除后果**的判据：
+
+> 删掉这一截之后，剩下的部分里还有没有「能当片名」的 token？
+> 如果只剩年份 / 分辨率 / 来源 / 编码 / 扩展名（`[Oppenheimer].2023.2160p.WEB-DL.H265.mkv`
+> 正是这种），那方括号里装的必然是片名，**不能删**。
+
+`__looks_like_name_token` 复用 `MetaVideo` 自己的正则（`_season_re` / `_episode_re` /
+`_resources_pix_re` / `_video_encode_re` / `_audio_encode_re` / `_name_nostring_re`），
+并要求 token 含小写字母或中文 —— 把 `DL`、`AAC` 这类编码缩写排除掉。
+
+含中文时另用一张更窄的表（只取关键词表里**含中文**的条目）：否则 `Jade` 这种英文词会命中
+关键词表里的 `JADE`（翡翠台），把 `[诛仙 Jade]` 整段删掉。
+
+顺带修好的一类：`[2024][1080p]Movie Title.mkv` —— 原先只剥第一个 `[2024]`，
+剩下的 `[1080p]` 仍会在 `__init_name` 里抢先把 `_stop_name_flag` 置真、把后面的片名全挡掉；
+现在 `while` 会连续剥干净，能正确得到 `Movie Title`。
+
+## 影响面
+
+- **只动 `MetaVideo`（关闭「增强识别V2」这条分支）**：不改 `metavideov2.py`、不改 `media.py`、
+  不改 `metainfo.py`。
+- 打开「增强识别V2」时行为**完全不变**。
+- 关闭时：不带前导方括号的命名（占绝大多数）**逐项不变**。
+
+## 验证
+
+`artifacts/_verify_bracket_632.py` —— **21 / 21 全绿**（真实 `MetaInfo` / `MetaVideo` /
+`MetaVideoV2`，修复前的类从 `git show HEAD:...` 取出做对照）：
+
+| 组 | 内容 | 结果 |
+|---|---|---|
+| A | 用户上报文件名，关闭 v2 走真实 `MetaInfo` | 路由到 `MetaVideo`；`get_name() == '诛仙'`；类型=电视剧；S02E01；2024；2160p；**不触发 `media.py` 中止** |
+| B | 同一文件开 v2 对照 | 走 `MetaVideoV2`，同样得到 `诛仙` |
+| C1 | 11 个无前导方括号的常规命名 | 修复前后**逐项一致** 11/11 |
+| C2 | 11 个「方括号里是片名」 | 全部识别正确 11/11 |
+| C3 | 8 个「方括号里是发布组/字幕组」 | 仍被正确剔除 8/8 |
+| D | AST 硬判据 | 已无不条件 `re.sub(_name_no_begin_re, "", title)`；`while` 同时调用两个新方法；关键词表 85 条（含 62 条中文条目） |
+| E | 批量健壮性 | 空名从 6 个降到 **0** 个 |
+
+对照探针 `artifacts/_probe_bracket_fix_632.py`（27 个语料 × 现状v1 / 补丁后v1 / v2 三方对照）：
+补丁改变结果 12 处、**全部为修复**；空名从 8 个降到 1 个（仅剩 `01.mp4` —— 纯数字命名，
+`MetaVideo` 里属专门设计的「纯数字命名」短路分支，v2 同样给不出名字）。
+
 # v6.3.1 — 修复：文件转移只处理了一部分（整批提前中断）
 
 ## 现象
