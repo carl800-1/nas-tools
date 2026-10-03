@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1056,6 +1056,27 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 
 > 封面地址在页面渲染时生成，若以后登录态变化导致图片失效，**刷新页面**即可恢复。
 
+#### 2.49 「蜜柑」搜不到番剧的问题修好了（v6.3.8）
+
+**问题**：用片名搜番剧时，**蜜柑**这个站点一条结果都出不来，日志还会提示
+「页面包含登录表单（name="username"），Cookie 可能已失效」。
+但蜜柑是**公开站、根本不用登录**，这个提示是**误报**。
+
+**原因**：蜜柑**改版了** —— 搜索结果的外面多包了一层容器、每行前面又多了一个勾选框。
+NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又被页面里那个
+**可选的登录入口**（页头页脚各一个，字段名 `UserName` 大小写不同但被当成同一个）
+误判成了「Cookie 失效」，于是排查方向被完全带偏。
+
+**修复后**：抓取规则改成按网页的**类名**定位，不再依赖层级和列序号 ——
+现在搜「诛仙」能正常取回结果（一次最多 100 条）。
+
+顺带加了一层保护：**以后这个站点（或任何内置站点）再改版**，提示会变成
+「该站结构可能已改版，需更新索引器定义」，**不会再误报成 Cookie 失效**，
+省得再去白折腾登录态。
+
+> 说明：这条修复对所有内置站点生效 —— 有正常内容页的站点，不会因为页面上
+> 存在可选的登录入口就被判成登录页。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1676,7 +1697,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.7   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.8   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1779,4 +1800,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-03 ｜ 当前版本 v6.3.7_
+_Last updated: 2026-10-03 ｜ 当前版本 v6.3.8_

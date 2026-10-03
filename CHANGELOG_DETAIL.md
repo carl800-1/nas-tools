@@ -3,6 +3,133 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.8 — 蜜柑「一条都搜不到」：站点改版 + 归因误判（两个成因叠加）
+
+## 现象
+
+用片名搜索番剧时，**蜜柑（mikanime.tv）**返回 0 条，日志里出现两行：
+
+```
+蜜柑 未解析到种子：页面包含登录表单（name="username"），Cookie 可能已失效
+蜜柑 抓取未成功[needLogin]：页面包含登录表单（name="username"），Cookie 可能已失效
+```
+
+而蜜柑是**公开站**，站点配置里根本没有 Cookie ⇒ 「Cookie 失效」这个结论本身就不可能成立。
+这正是本次要修的重点：**症状（报登录）与病因（站点改版）完全对不上**。
+
+## 根因（真机取证，两个成因缺一不可）
+
+### R12 · 站点改版 ⇒ 行选择器命中 0 条（主因）
+
+蜜柑搜索页的 DOM 变了。真机实测（NAS 生产容器直连，700490 B 页面 / 168 个 `<tr>`）：
+
+| 变化点 | 改版前 | 改版后（实测） |
+|---|---|---|
+| `div.central-container` 与 `table` 之间 | 直接子元素 | **新增一层 `div.episode-table`** |
+| 结果行 | `tr.js-search-results-row` | 同名，但层级深了一层 |
+| 每行首列 | 标题 + 磁链 | **新增勾选框列**（后续列序号整体 +1） |
+| 行内列序 | td1 标题 / td2 体积 / td3 时间 | **td1 勾选框 / td2 标题 / td3 体积 / td4 时间** |
+
+原规则是：
+`div.central-container > table > tbody > tr.js-search-results-row`
+—— `>` 要求**直接子元素**，多一层就命中 0 ⇒ 一条都解析不出来。
+
+### R13 · 归因误判 ⇒ 把「改版」报成「Cookie 失效」
+
+`classify_page_state()` 第 5 条规则是「页面里出现登录表单元素（`name="username"` 等）
+就判 `needLogin`」。这条规则**特异度太低**：
+
+- 蜜柑的**页头与页脚**各有一个「可选登录」浮层
+  （`action="/Account/Login?ReturnUrl=..."`，位置约在页面的 0.8% 与 99.3% 处）；
+- 字段名是 `name="UserName"`，**小写化后正好命中** `name="username"`。
+
+于是**任何一页**（包括正常的搜索结果页）都会被判成登录页 ——
+「站点改版」这一真因被彻底掩盖，排查方向被带偏到「去更新 Cookie」。
+
+## 改动
+
+### A. `web/backend/user.sites.bin`（mikanani 条目，恰 6 处选择器）
+
+| 路径 | 旧 | 新 |
+|---|---|---|
+| `torrents.list.selector` | `div.central-container > table > tbody > tr.js-search-results-row` | `div.central-container table > tbody > tr.js-search-results-row` |
+| `torrents.fields.title.selector` | `td:nth-child(1) > a.magnet-link-wrap` | `a.magnet-link-wrap` |
+| `torrents.fields.details.selector` | `td:nth-child(1) > a.magnet-link-wrap` | `a.magnet-link-wrap` |
+| `torrents.fields.download.selector` | `td:nth-child(1) > a.js-magnet.magnet-link` | `a.js-magnet.magnet-link` |
+| `torrents.fields.size.selector` | `td:nth-child(2)` | `td:nth-child(3)` |
+| `torrents.fields.date_added.selector` | `td:nth-child(3)` | `td:nth-child(4)` |
+
+选择策略改成**按类名定位**（`a.magnet-link-wrap` / `a.js-magnet.magnet-link`）
+而不是按列序号 —— 这样以后再插入/删除列也不会失效。
+
+> `user.sites.bin` 是 base64（无换行）包裹的紧凑 JSON（`separators=(",", ":")`，
+> `ensure_ascii=False`），顶层键 `version` / `indexer` / `conf`，共 111 条站。
+> 本次改动经**递归结构化 diff** 断言：仅 mikanani 这 6 处变化，
+> `version` 段、条目总数、`conf` 段**字节不变**；未改动的 dict 空跑一次
+> 序列化后与原字节**完全一致**（证明格式保真）。501924 B → 501848 B（−76 B）。
+
+### B. `app/indexer/client/_spider.py`（4 处）
+
+1. **新增 `_has_result_listing(html_text)`**：
+   `html_text.lower().count("<tr") >= 5` ⇒ 页面里存在「成规模的结果表格」。
+   阈值 5 的边界经实测标定：登录页 26 KB / 0 个 `<tr>`，0 结果页 17 KB / 0 个 `<tr>`，
+   167 结果页 700 KB / **168** 个 `<tr>`。
+2. **登录表单规则加内容排除**：只有**没有**成规模结果表格时，才用登录表单元素判 `needLogin`。
+3. **新增 `__last_selector_compound(selector)`** 与 **`__detect_selector_mismatch(html_doc)`**：
+   取行选择器末段（带 `.` 或 `#` 的复合选择器）；若**完整选择器命中 0、末段却能命中 >0**
+   ⇒ 判定「站点改版（层级或列序变化）」。末段形如 `tr`（无 class/id）时一律不采信（没有区分度）。
+4. **`parse()` 分流**：解析不出任何条目时，**先**跑选择器失配检测（报 `parseError` +
+   「该站结构可能已改版，需更新索引器定义」），**再**回落到反爬/登录态分类。
+   只有 `CFBlocked` / `needLogin` / `httpError` 才置 `is_error = True` 并打 WARNING。
+
+## 验证
+
+### 真机三层对照（NAS 生产容器 + 真实网络，走生产 `spider_search` 链路）
+
+| 组合 | 条数 | state | 判读 |
+|---|---|---|---|
+| 旧代码 + 旧规则 | **0** | `needLogin`（页面包含登录表单…Cookie 可能已失效） | ❌ 逐字复现用户上报 |
+| **新代码 + 旧规则** | 0 | `parseError`（该站结构可能已改版…需更新索引器定义） | ✅ 不再误报 |
+| **新代码 + 新规则** | **100** | `None`（正常） | ✅ 修复生效 |
+
+- 探针口径：`ProUser().get_indexer(url="https://mikanime.tv/")` 取索引器配置，
+  `spider_search(TorrentSpider(), indexer, keyword="诛仙")` —— 与「站点体检 L5」**同一条链路**。
+- 新规则的解析结果抽查：`size` 分别解析为 `549537710` / `244664238` / `1986422374` 字节
+  （= 524.08 MB / 233.33 MB / 1.85 GB，与页面显示一致），`pubdate` = `2026/09/19 15:36`，
+  `enclosure` 为完整磁链 —— 说明 `td:nth-child(3)` / `td:nth-child(4)` 取列正确。
+- 100 条是 `pt.site_search_result_num`（默认 100）的**正常截断**；页面上实际有 167 行。
+- 全程**零中断**：新文件只投放到容器 `/tmp`，用 `importlib` 动态加载新 `_spider.py`、
+  用新 bin 手工构造 `IndexerConf`，**未覆盖任何生产文件、未重启容器**；验证后已清理。
+
+### 真机只读探针（站点结构复核）
+
+| 判据 | 本地夹具 | NAS 真机 |
+|---|---|---|
+| 页面大小 | 700 KB | **700490 B** |
+| `<tr` 计数 | 168 | **168** |
+| 旧选择器命中 | 0 | **0** |
+| 新选择器命中 | 167 | **167** |
+| `div.episode-table` 存在 | 是 | **是** |
+| `name="username"` 存在（误判源） | 是 | **是** |
+
+### 离线
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| **端到端** | 真实加载新旧 `_spider.py` + 新旧 bin + 三个真实页面（搜索结果页 700 KB / 登录页 26 KB / 0 结果页 17 KB）；A 组新规则解析 100 行、字段零缺失；B 组旧规则报改版；C 组旧代码**逐字复现用户两行日志**；D/E 组阈值边界与末段取值 | **34/34** |
+| **回归** | A1 抓取状态分类 36 项 / A3 搜索流程 53 项 / v5.1.2 搜索链路 36 项 / PTZone 端到端 | **36/36 · 53/53 · 36/36 · 通过** |
+
+> 离线夹具全部取自**真实页面**，并按真机结构照抄；`num_filesize` 由 AST 从真实
+> `string_utils.py` 抽取后局部执行（不手写桩），避免「宽松夹具 = 假绿」。
+
+## 已知边界
+
+- 蜜柑首页搜索一次最多返回 100 条（`pt.site_search_result_num` 控制），与本次修复无关。
+- 选择器的**末段检测**只对「末段带类名/id」的站点有效；末段形如 `tr` 的站点不适用
+  （此时退化为原分类逻辑），这是刻意的：没有区分度就不该据此改判。
+- `browse`（无关键词列表浏览）不受影响：蜜柑的浏览页行类名为空，旧选择器本来也匹配不到。
+- 该修复**不改变**任何站点的 Cookie 使用方式；公开站继续无需 Cookie。
+
 # v6.3.7 — 绿联网页端「封面全黑」：错端点 getImageStream + 凭证走不了 header
 
 ## 现象
