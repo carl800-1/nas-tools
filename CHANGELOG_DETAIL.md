@@ -3,6 +3,125 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.7 — 绿联网页端「封面全黑」：错端点 getImageStream + 凭证走不了 header
+
+## 现象
+
+打开 **「我的媒体库 - 绿联影视」** 页面：六个媒体库卡片上方全是**黑色方块**；
+库内条目封面、「正在观看」「最近添加」的缩略图同样不显示。
+`<img>` 请求返回 HTTP 200，所以前端不报错，只是**画不出图** —— 典型的「200 但不是图片」。
+
+## 根因（真机取证，四个探针逐层钉死）
+
+### R8 · 网页端图片走的是错端点，且完全没带凭证
+
+绿联的图片接口需要**登录凭证**，而浏览器 `<img>` 带不上请求头 ⇒ 这类图片统一走
+NAStool 自己的 `/img` 中转（`get_nt_image_url()` 生成 `img?url=<内层地址>`）。
+内层地址由 `get_local_image_by_id(remote=False, inner=True)` 拼接，旧实现是：
+
+```python
+image_url = f"{self._host}ugreen/v1/video/getImageStream?name={path}&size=1"
+```
+
+两个问题叠加，真机实测：
+
+| 实测项 | 结果 |
+|---|---|
+| `getImageStream`（**少一个 a**，无凭证） | 200 + `{"code":9405,"msg":"","data":{},"err_data":{"app_id":"com.ugreen.videomgr"}}`，**77 字节 JSON** |
+| `getImaStream`（正确端点）**无凭证** | 200 + `{"code":9405,...}`（107 字节 JSON） |
+| `getImaStream` + **query `token`/`ugk`** | 200 + **真 JPEG**（`\xff\xd8\xff`，19155 字节起） |
+
+⇒ `/img` 中转拿到的是一段 JSON，原样吐给浏览器 ⇒ **画不出图 = 黑块**。
+这条链路同时服务**条目封面、媒体库封面、正在观看、最近添加**，
+所以症状是「整个网页端的封面全黑」，不是单个页面。
+
+### R9 · 凭证**只能走 query 参数**（不能照搬飞牛那套注入 header）
+
+`/img` 中转的既有机制是「客户端提供 Cookies → 中转时带上」（v6.2.6 为飞牛影视做的）。
+绿联**不适用** —— 实测把凭证放在 header / cookie 里全部无效：
+
+| 凭证传递方式 | 结果 |
+|---|---|
+| header `Ug-Token` / `Token` / `Authorization` / `x-token` | ❌ 均返回 9405 |
+| cookie `token=...` | ❌ 返回 9405 |
+| **query `token=` 或 `ugk=`** | ✅ 返回真 JPEG |
+
+⇒ 绿联必须把凭证**拼进 URL**（`get_image_stream_url()` 已按 `_is_ugk` 自动选参数名）。
+
+### R10 · 编码层数只能**一层**（踩过一次）
+
+`get_image_stream_url()` 内部用 `urlencode` 把 `name` 编码（空格→`+`、`/`→`%2F`），
+`get_nt_image_url()` 再整体 `quote` 一次。实测：
+
+- **单层**编码（即 `get_image_stream_url()` 的产出）：**5/5** 取到 JPEG
+- **双重**编码（外面再 `quote` 一次）：**0/5**（返回 201 + 155 字节，非图片）
+
+⇒ 正确做法就是**直接复用 `get_image_stream_url()`**，不要自己再拼一次 URL。
+
+### R11 · 「我的媒体库」卡片从来就没有封面数据
+
+`web/main.py:298` 把 `MediaServer().get_libraries()` 的返回直接喂给
+`web/templates/index.html`，模板逻辑是：
+
+```jinja
+{% if Library.image %}<custom-img img-src="{{ Library.image }}">
+{% else %}<custom-plex-library-img img-src-list='{{ Library.image_list }}'></custom-plex-library-img>{% endif %}
+```
+
+而绿联的 `get_libraries()` 返回的字典**只有 id / name / type / path / link** ——
+`image` 与 `image_list` **两个都没有**（`image_list` 是 Plex 专用多封面机制），
+于是渲染出一个空组件 ⇒ 黑块。与其他客户端（Emby/Jellyfin 都给 `image`）不一致。
+
+### 结构事实（本次实机探明）
+
+`v1/video/homepage/media_list` 的每条库**自带封面字段**：
+
+```
+{media_lib_set_id, media_name, video_count, order_sn,
+ poster_paths: [3 条], backdrop_paths: [3 条], custom_cover}
+```
+
+- `poster_paths` 的值有两种形态：**本地路径**（`/volume5/video/.../poster.jpg`）
+  与**云端地址**（`https://scraper.ugnas.com/...webp?auth_key=...`）。
+- ⚠️ 云端地址**带时效签名**，实测已过期 ⇒ **403**，不能直接用。
+- ⚠️ **有些库的 `poster_paths` 全是云端地址**（实测「动漫电视剧」），
+  这类库必须另找本地封面 —— 用 `poster_wall/media_lib/get_folder` 的
+  `folder_arr[].cover`（**本地路径**，实测可用）。
+- `folder_arr[]` 每条还带 `covers`（3 条）与 `backdrop_path`，本实现只取 `cover`。
+
+## 改动（`app/mediaserver/client/ugreen.py`，+130/−7）
+
+| 方法 | 状态 | 说明 |
+|---|---|---|
+| `_image_url_by_path` | 新增 | 按「本地图片路径 → 可用图片地址」统一构造（复用 `get_image_stream_url()`），`inner=True` 时包成 `/img` 中转地址 |
+| `_library_cover_path` | 新增 | 为媒体库挑一个**可用的本地**封面路径：`custom_cover` → `poster_paths` 首个本地 → `folder_arr[].cover` → `backdrop_paths` 首个本地；**跳过**所有 http(s) 云端地址 |
+| `get_local_image_by_id` | 修正 | inner 分支改用 `getImaStream` + query 凭证（此前是错端点 + 无凭证） |
+| `get_libraries` | 补充 | 返回里新增 `image` 字段（此前完全没有） |
+| `_load_library_paths` | 补充 | 在**同一次** `poster_wall_get_folder` 请求里顺带收集 `folder.cover`（零额外请求） |
+| `_lib_covers` / `init_config` | 新增 | 库封面缓存及其重置（与 `_lib_paths` 同生命周期） |
+
+## 验证
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| **真机** | NAS 容器内投放新代码，对**六个库的封面**逐个还原成 `/img` 真实请求，断言拿到真 JPEG（`\xff\xd8\xff` 且 >3KB）；六个库首条条目封面同样断言 | **22/22** |
+| **真机回归** | v6.3.6 的剧集查询/缺集判定/电影查重（宙斯之血 S1/S2、遗失的世界 3 季、反例） | **18/18** |
+| **离线** | 假绿联服务端（完整加密握手）+ **新增图片端点**：夹具照抄真机结构（库1 全本地 / 库2 本地+远程 / 库3 全远程），断言库封面逐一命中预期来源、端到端拿到 JPEG、兜底路径生效 | **43/43** |
+| **离线反向对照** | ① 换回错端点 `getImageStream` ⇒ 取不到图；② 剥掉凭证 ⇒ 取不到图；③ 清空 `folder.cover` ⇒ 全远程的库**彻底没有封面**（证明兜底确实在起作用） | 通过 |
+| **离线回归** | 原 v6.3.6 剧集链路（52 项）/ v6.3.5 采集链路（132 项）/ 大库 4200 条（6 项）/ 跨页重叠（23 项） | **52/52 · 132/132 · 6/6 · 23/23** |
+| **发版核验** | 四件套一致性、栏目结构、README 2.x 严格递增、行尾索引、改动面锚点、零丢失 | 见核验脚本 |
+
+## 已知边界
+
+- **凭证写在封面 URL 里**：这与 Emby/Jellyfin 的 `?api_key=` 做法一致（都是把长期
+  凭证拼进图片地址）。若绿联登录态失效，需**刷新页面**重新渲染地址；容器无需重启。
+- **「正在观看 / 最近添加」未端到端验证**：本机绿联该两个接口返回 0 条（无观看记录），
+  但走的是**同一条已修好的封面链路**，且离线夹具已覆盖。
+- 云端海报地址（`scraper.ugnas.com`，带 `auth_key`）**一律不使用**：实测已过期返回 403，
+  且签名会持续过期，不可靠。
+- 库封面取的是**该库内某一条目的海报**（绿联不提供「库专属封面图」，`custom_cover` 为空），
+  因此同一部片的海报可能同时出现在库封面与条目列表里 —— 这是绿联数据模型的固有现象。
+
 # v6.3.6 — 绿联影视「剧集查询 / 电影查重」恒为空：getTV 的真实键与被忽略的 search
 
 ## 现象

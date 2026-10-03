@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1034,6 +1034,28 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 **为什么要点一下「开始同步」才知道**：查重与缺集判定都依赖本地那份条目索引，
 升级镜像后需要重新点一次「开始同步」把索引建起来。
 
+#### 2.48 绿联影视的封面图终于显示了（v6.3.7）
+
+**问题**：打开 **「我的媒体库 - 绿联影视」**，六个媒体库卡片上方全是**黑色方块**；
+点进库里的**条目封面**、「正在观看」「最近添加」的小图，同样都显示不出来。
+
+**原因**：绿联的图片接口要求带登录凭证，而浏览器的 `<img>` 标签带不上，
+所以这类图片要**由 NAStool 代取再转发**给浏览器。而转发时用了两个错：
+① 请求的**接口地址写错了**（少一个字母，指向一个并不存在的接口）；
+② **没有带上登录凭证**。
+绿联对这种请求会回一段「授权失败」的**文字**，浏览器把它当图片解析失败
+⇒ 就显示成黑块了 —— 注意这时 HTTP 状态码其实是 200，所以不报错，只是画不出图。
+
+**修复后**：改用正确的接口地址，并把登录凭证随请求带给绿联，封面全部恢复。
+
+顺带修好了另一件事：「我的媒体库」卡片过去**从来就没有封面** ——
+绿联的媒体库列表接口其实**自带**每个库的海报，只是旧代码没取。
+现在优先用绿联自带的海报（**本地文件优先**，因为有些库的海报是云端地址、
+带时效签名、过期会失效），某个库若没有可用的本地海报，
+自动改用**该库目录下的封面图**兜底，保证六个卡片都有图。
+
+> 封面地址在页面渲染时生成，若以后登录态变化导致图片失效，**刷新页面**即可恢复。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1654,7 +1676,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.6   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.7   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1757,4 +1779,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-03 ｜ 当前版本 v6.3.6_
+_Last updated: 2026-10-03 ｜ 当前版本 v6.3.7_
