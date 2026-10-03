@@ -3,6 +3,105 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.3.6 — 绿联影视「剧集查询 / 电影查重」恒为空：getTV 的真实键与被忽略的 search
+
+## 现象
+
+v6.3.5 修好媒体库同步（956 条全部入库）之后，另外两处功能仍然查不到东西：
+
+1. **剧集缺失检测**：`get_no_exists_episodes()` 总是报「整季一集都没有」
+   ⇒ 已下载完的剧被判为缺集，可能**重复下载整季**。
+2. **电影下载查重**：`get_movies()` 恒返回空 ⇒ 媒体库里已有的电影被判为
+   「媒体库中不存在」，会被**重复下载**。
+
+回退验证：`get_tv_episodes(item_id=...)` 与 `get_tv_episodes(title=...)` 都返回 `[]`。
+
+## 根因（实机取证确证，非推测）
+
+### R5 · `get_tv_episodes` 恒空 —— 三个独立成因叠加
+
+| # | 成因 | 实机证据 |
+|---|---|---|
+| ① | `v1/video/all` 的 `search` 参数**被服务端完全忽略** | 传 `宙斯之血` / `宙斯之血 第 2 季` / `遗失的世界` / `宙斯`，返回的都是**同一批前 20 条**（`total_num=123` 全量默认序） |
+| ② | 条目名带「第 N 季」后缀，`vi_name == title` 精确比较恒不成立 | 条目名 `宙斯之血 第 2 季` vs TMDB 标题 `宙斯之血` |
+| ③ | 读**不存在的键** `episodes` / `episode_arr` | `getTV` 真实返回的顶层键是 `folder_paths / is_favorite / metadata_lock_status / play_status / season_info / select_folder / tv_info / ug_actor_arr / video_info` —— **没有** `episodes` |
+
+`v2/video/details/getTV` 的真实结构与旧实现假设完全不同：
+
+```
+season_info = [ {season_num, ug_video_info_id, category_id, name}, ... ]   ← 季列表
+tv_info     = [ {ug_television_episode_id, episode, ep_name,
+                 category_id, cover_path, file_info}, ... ]                 ← 集列表
+video_info  = { ug_video_info_id, name, season, type, media_lib_set_id, ... } ← 该季元数据
+```
+
+两条容易踩的细节：
+- `tv_info` 里**没有** `season_num` 字段（季节号只能从 `video_info.season` 或
+  `ep_name` 里的 `SxxExx` 解析）；
+- `folder_path` 参数（`ALL` / `''` / `'1'`）**不影响** `season_info` 与 `tv_info` 的返回。
+
+### R6 · `get_movies` 恒空 + 一处 `or` 误用
+
+- 与 R5 同根因：也靠被忽略的 `search` 参数 ⇒ 恒空 ⇒ 下载查重失效、重复下载。
+- 另有独立缺陷：命中判断写成
+
+  ```python
+  if name == title or (year and str(video_info.get("release_year")) == str(year)):
+  ```
+
+  用 `or` 连接「片名相同」与「年份相同」⇒ **年份相同但片名不同**的电影也会被判为
+  「已存在」（假阳性，会拦住本该下载的片子）。
+
+### R7 · 本次补丁自身引入的回归（真机实测抓到，已在发版前修掉）
+
+补丁的插入锚点漏掉了 `@staticmethod` 装饰器，于是原本属于 `_flatten_item` 的
+`@staticmethod` 被「吃掉」去装饰了新加的 `_normalize_title` ⇒ **`_flatten_item`
+退化成实例方法** ⇒ `self._flatten_item(video)` 把 client 实例当成了 `video` 参数
+⇒ `AttributeError`，**并连带打崩 `get_items`（媒体库同步）**。
+
+判据因此升级：**用 AST 逐方法比对「补丁前基线」**，断言
+「没有任何既有方法的装饰器集合发生变化 + 没有方法消失」—— 比字符串检查可靠得多。
+
+### 结构事实（本次实机探明，供后续参考）
+
+- `ug_video_info_id` 的粒度是**季**，不是「剧」：同一部剧每一季都是一条独立条目
+  （实测「宙斯之血 第 1 季」`id=681`、「第 2 季」`id=677`）。
+- 条目外层**没有** `season` 字段；季号要从条目名、`video_info.season` 或 `ep_name` 拿。
+- 「遗失的世界」`season_info` 有 3 季，逐季 `tv_info` 分别 20 / 22 / 21 集。
+
+## 改动（`app/mediaserver/client/ugreen.py`，+210/−75）
+
+| 方法 | 状态 | 说明 |
+|---|---|---|
+| `_normalize_title` | 新增 | 去掉「第 N 季」/「Season N」/尾部年份括号，用于片名比对 |
+| `_title_matches` | 新增 | 归一化后相等即视为同一部剧 |
+| `_parse_season_num` | 新增 | 从条目名解析季号（解析不到返回 0） |
+| `_parse_season_episode` | 新增 | 从 `ep_name` 的 `SxxExx` 解析 (季, 集)，作兜底 |
+| `_find_tv_candidates` | 新增 | **本地全量条目**里按片名找剧集候选（多季返回多条），year 只做排序偏好 |
+| `get_tv_episodes` | 重写 | 季列表取自 `season_info`、集列表取自 `tv_info`；季号优先 `video_info.season`；season 指定时先按条目名预筛再请求；返回 `[{season_num, episode_num}]` |
+| `get_movies` | 重写 | 本地全量条目里按片名（type=1）匹配；修掉 `or` 误用 |
+| `get_episode_image_by_id` | 修正 | 同源缺陷：改读 `tv_info`，集封面优先用 `cover_path` |
+
+## 验证
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| **真机** | NAS 容器内投放新代码跑真实绿联服务端：多季剧逐季（宙斯之血 S1=8 集/S2=8 集；遗失的世界 20/22/21）、item_id 直传、缺集判定（total=10 ⇒ 缺 [9,10]）、电影查重命中、反例不乱报 | **18/18** |
+| **真机回归** | v6.3.5 的媒体库同步（R7 曾打崩的那条链路）：956 条、逐库 451/85/17/17/365/21 | **21/21** |
+| **离线** | 假服务端按真机结构造多季夹具（`season_info`/`tv_info`/`video_info`），覆盖纯函数、多季取季、缺集判定、电影查重、反例、AST 装饰器、源码级判据 | **52/52** |
+| **离线反向对照** | 把夹具的 `getTV` 换回旧的 `episodes` 结构 ⇒ B/C 组 **15 项立即失败**，证明夹具不是「碰巧通过」 | 通过 |
+| **离线回归** | 原 v6.3.5 采集链路（132 项）/ 大库 4200 条（6 项）/ 跨页重叠（23 项） | **132/132 · 6/6 · 23/23** |
+| **发版核验** | 四件套一致性、栏目结构、README 2.x 严格递增、行尾索引、改动面锚点、零丢失 | 见核验脚本 |
+
+## 已知边界
+
+- 片名匹配是**归一化后相等**（与原实现同为精确匹配口径）。若绿联刮削名与 TMDB
+  标题有实质差异（例如带副标题），仍可能匹配不到 —— 这属于「匹配口径」议题，
+  不是本次的「读错字段 / 参数被忽略」缺陷。
+- `get_episode_image_by_id` 仅在 webhook 通知链路使用（绿联的
+  `get_webhook_message` 尚未实现），本次按同源缺陷一并修正，**未在真机走通完整链路**。
+- 多季剧中若库里只入库了某一季，查询其它季会**正确返回空**（不是缺陷）。
+
 # v6.3.5 — 绿联影视「媒体库同步数量 0」：条目采集按 media_lib_set_id 分桶重写
 
 ## 现象

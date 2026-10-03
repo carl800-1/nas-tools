@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.3.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1008,6 +1008,32 @@ token 失效后每个请求都返回 401，旧代码只记日志、不会重新�
 **为什么要点一下「开始同步」才知道**：同步是在你点按钮时执行的，升级镜像后
 需要重新点一次「开始同步」才会把条目写进库。
 
+#### 2.47 绿联影视「查剧集 / 下载查重」查不到的问题修好了（v6.3.6）
+
+**问题**：媒体库同步已经正常（v6.3.5 修好），但还有两处查不到东西：
+
+- **剧集**：查询「已经有哪些集」时总是报**整季一集都没有** —— 已经下完的剧会被
+  认为缺集，可能重复下载整季；
+- **电影**：下载前查重认为**媒体库里没有**这部片 —— 已入库的电影会被重复下载。
+
+**原因**：旧实现有两条死路 ——
+
+1. 用**接口的搜索参数**去库里找片名，而绿联这个参数在服务端**被忽略**
+   （传什么关键词都返回同一批默认条目）；
+2. 读**并不存在的返回字段**：剧集的真实返回里，集列表叫 `tv_info`、季列表叫
+   `season_info`，旧代码读的 `episodes` 字段在真实返回里根本没有。
+
+**修复后**：改为**在本地全量条目里按片名匹配**（复用同步时已拉取的索引，有缓存、
+不额外加请求），并读真实字段取季 / 集。
+
+多季剧也能正确区分了：绿联把每一季做成一条**独立条目**（「某某 第 1 季」
+「某某 第 2 季」，各季年份还可能不同），现在按「第 N 季」定位，查第 2 季不会再
+返回第 1 季的集；同时「年份」改为**软条件** —— 之前按首播年精确过滤会把第 2 季
+整条滤掉，除首季外全部误报「一集都没有」。
+
+**为什么要点一下「开始同步」才知道**：查重与缺集判定都依赖本地那份条目索引，
+升级镜像后需要重新点一次「开始同步」把索引建起来。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1628,7 +1654,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.5   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.3.6   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1731,4 +1757,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-03 ｜ 当前版本 v6.3.5_
+_Last updated: 2026-10-03 ｜ 当前版本 v6.3.6_
