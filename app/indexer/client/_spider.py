@@ -66,6 +66,28 @@ _LOGIN_FORM_MARKERS = (
     "type=\"password\"",
 )
 
+# 判定「页面里出现登录表单」前，先把「本身就是内容列表页」的情况排除掉。
+#
+# 登录表单元素属于**低特异**信号：不少站点把「可选登录浮层」写进公共页头/页脚，
+# 正常内容页里同样带着 name="username" / type="password" 这类字段。
+# 实测 mikanime.tv 的搜索结果页页头页脚各有一个 action="/Account/Login" 的表单，
+# 只看元素会把「站点改版导致选择器失配」误报成「Cookie 失效」。
+# 而真实的登录页不会有「成规模的结果表格」——用这一点做排除。
+_RESULT_LISTING_MIN_ROWS = 5
+
+
+def _has_result_listing(html_text):
+    """
+    页面里是否存在「成规模的结果表格」（至少 _RESULT_LISTING_MIN_ROWS 个 <tr>）
+
+    用于把「正常内容页」与「登录页 / 挑战页」区分开：真实的登录页不会有结果列表，
+    有结果列表说明内容其实已经取到了。
+
+    :param html_text: 页面文本
+    :return: True 表示页面像个内容列表页
+    """
+    return (html_text or "").lower().count("<tr") >= _RESULT_LISTING_MIN_ROWS
+
 
 def classify_page_state(html_text, status_code=None, final_url=None, headers=None):
     """
@@ -111,9 +133,14 @@ def classify_page_state(html_text, status_code=None, final_url=None, headers=Non
             return "needLogin", f"被重定向到登录页（{marker}），Cookie 可能已失效"
 
     # 5) 页面里出现登录表单元素 -> Cookie 失效
-    for marker in _LOGIN_FORM_MARKERS:
-        if marker in text_low:
-            return "needLogin", f"页面包含登录表单（{marker}），Cookie 可能已失效"
+    #    ⚠️ 这是**低特异**信号：很多站点把「可选登录浮层」写进公共页头/页脚，
+    #    正常内容页里同样带着这些字段。因此先排除「页面上有成规模结果表格」的
+    #    情况再据此判定，否则会把「站点改版导致选择器失配」误报成「Cookie 失效」
+    #    （实测 mikanime.tv 的搜索结果页有 167 行结果，页头页脚各一个登录表单）。
+    if not _has_result_listing(html_text):
+        for marker in _LOGIN_FORM_MARKERS:
+            if marker in text_low:
+                return "needLogin", f"页面包含登录表单（{marker}），Cookie 可能已失效"
 
     # 6) 其余按状态码归类
     if status_code == 401:
@@ -863,6 +890,50 @@ class TorrentSpider(feapder.AirSpider):
         return classify_page_state(html_text, status_code=status,
                                    final_url=url, headers=headers)
 
+    @staticmethod
+    def __last_selector_compound(selector):
+        """
+        取 CSS 选择器最后一个「复合选择器」段（按空白 / > / + / ~ 切分）
+
+        :param selector: CSS 选择器
+        :return: 最后一段（如 "tr.js-search-results-row"）；取不到返回空串
+        """
+        if not selector:
+            return ""
+        parts = re.split(r"\s*[>+~]\s*|\s+", str(selector).strip())
+        return (parts[-1] if parts else "").strip()
+
+    def __detect_selector_mismatch(self, html_doc):
+        """
+        「一条种子都没解析到」时，判断是不是本站规则的选择器与页面结构对不上（站点改版）
+
+        站点改版（外层多包一层 div、多插一列）会让行选择器命中 0 条，但页面内容其实取到了。
+        判据：行选择器的「末段」是一个带 class/id 的具体片段（如 tr.js-search-results-row），
+        它在页面上能命中、而完整行选择器命中 0 条 —— 这是「层级变了」的确定性证据。
+        只看末段是为了精度：末段若形如 "tr"（无 class/id）会命中任何页面，一律不采信。
+
+        :param html_doc: 已解析的 PyQuery 文档
+        :return: 命中说明（非空即判定为改版）；没有证据时返回空串
+        """
+        selector = str((self.list or {}).get("selector") or "")
+        tail = self.__last_selector_compound(selector)
+        # 末段必须带 class 或 id，否则没有区分度
+        if not tail or ("." not in tail and "#" not in tail):
+            return ""
+        if html_doc is None:
+            return ""
+        try:
+            if len(html_doc(selector)):
+                return ""
+            loose = len(html_doc(tail))
+        except Exception:
+            return ""
+        if loose <= 0:
+            return ""
+        return ("页面里能命中行选择器末段「%s」%d 次，但完整行选择器「%s」命中 0 条，"
+                "该站结构可能已改版（层级或列序变化），需更新索引器定义"
+                % (tail, loose, selector))
+
     def parse(self, request, response):
         """
         解析整个页面
@@ -889,13 +960,21 @@ class TorrentSpider(feapder.AirSpider):
             # 一条种子都没解析出来时，区分「站点真的没这个资源」与「被反爬/登录页顶掉了」。
             # 后者在老代码里同样只表现为「未搜索到数据」，是现场最容易误判的一类。
             if not self.torrents_info_array:
-                state, desc = self.__classify_block(response, html_text)
-                self.__set_search_state(state, desc)
-                if state in ("CFBlocked", "needLogin", "httpError"):
+                # 先排除「本站规则的选择器与页面结构对不上」（站点改版）：
+                # 这种情况页面内容其实取到了，却会被后面的登录表单特征误报成 Cookie 失效。
+                mismatch = self.__detect_selector_mismatch(html_doc)
+                if mismatch:
                     self.is_error = True
-                    log.warn(f"【Spider】{self.indexername} 未解析到种子：{desc}")
+                    self.__set_search_state("parseError", mismatch)
+                    log.warn(f"【Spider】{self.indexername} 未解析到种子：{mismatch}")
                 else:
-                    log.info(f"【Spider】{self.indexername} 未解析到种子：{desc}")
+                    state, desc = self.__classify_block(response, html_text)
+                    self.__set_search_state(state, desc)
+                    if state in ("CFBlocked", "needLogin", "httpError"):
+                        self.is_error = True
+                        log.warn(f"【Spider】{self.indexername} 未解析到种子：{desc}")
+                    else:
+                        log.info(f"【Spider】{self.indexername} 未解析到种子：{desc}")
         except Exception as err:
             self.is_error = True
             self.__set_search_state("parseError", f"解析异常：{err}")
