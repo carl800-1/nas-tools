@@ -3,6 +3,136 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.4.0 — 订阅：缺集可见 + 「补齐才退订」的完成判定重写
+
+## 需求
+
+1. 电视剧订阅后要能**看到缺的是哪几集**（原来只有进度条与 `(已/总)`，没有集号）；
+2. 订阅**补齐之后自动清除**（用户拍板口径：**等真的补齐才退订**，即媒体库查得到才算）。
+
+## 改前的链路（`Subscribe.subscribe_search_tv`）
+
+电视剧订阅有三条「完成订阅」出口，全部指向 `finish_rss_subscribe()` → `delete_subscribe()`：
+
+| 出口 | 触发条件 | 判读 |
+|---|---|---|
+| a | `check_exists_medias()` 返回 `exist_flag=True` 且无缺集 | ✅ 真的补齐了 |
+| b | `search_one_media()` 返回的 `search_result` 非空 | ⚠️ **只代表种子已提交给下载器** |
+| c | 缺集交集为空 / `no_exists` 无该 tmdb_id | ✅ 本轮无可做 |
+
+问题就在 **b**：`Searcher.search_one_media()` 的返回语义是
+
+```
+全部下完  -> return download_items[0], no_exists, ...
+有剩余缺失 -> return None, left_medias, ...
+```
+
+`search_result` 非空 = 「本批需要的集**都提交下载了**」，**不等于已入库**。
+一旦用户片单的种子下载失败（死种、磁盘满、下载器离线），订阅已被删，
+这一集就永远缺着，且没有任何提示。
+
+## 关键取证（都来自真实源码）
+
+- **`left_medias` 是就地修改的字典**：`Downloader.batch_download()` 的
+  `__update_episodes()` 会把**已提交下载的集从 `need_tvs` 里移除**，
+  所以它精确表示「本次没提交成功的集」。
+- **`check_exists_medias()` 的三态**：
+  `True` = 全部存在 / `False` = 有缺失 / **`None` = 无法查询**（拿不到总季数或查不到 TMDB 详情）。
+  原版 `if exist_flag:` 对 `None` 不成立，会一路走到 b 或 c ⇒ **媒体库不可用时可能被误清**。
+- **`library_no_exists` 就是媒体库当前真实缺集**，且「整季都缺」时是
+  `{"season": N, "episodes": [], "total_episodes": M}`（**空列表**表示整季，不是「没有缺失」）。
+- **`Torrent.get_intersection_episodes()` 对空 episodes 的行为**：
+  `source_info["episodes"]` 为空时直接 `continue`（不裁剪），
+  `target_info["episodes"]` 为空时取 source —— 即「缺集为空列表 = 整季」能被正确保留。
+  另外它的交集结果由 `list(set(...))` 产生 ⇒ **顺序不稳定**，展示前必须排序。
+- **`RSS_TV_EPISODES.EPISODES`** 就是缺集明细的落库载体（`RSSTVS.LACK` 存数量），
+  原来只在「本轮没搜到」的分支里被写；**数据本来就有，缺的只是出口**。
+- **扫描周期**：已订阅（state=`R`）由 `subscribe_search_all` 按
+  `pt.search_rss_interval` 小时扫描，代码里**下限 6 小时**；
+  新订阅（state=`D`）由 `RSS_CHECK_INTERVAL=300` 秒处理。⇒ 「保持订阅等入库」的实际重试
+  间隔是 ≥6h，不会打爆站点。
+
+## 改动
+
+### A. `app/subscribe.py`
+
+1. **显式的「订阅范围」**：新增 `subscribe_episodes = range(current_ep, total_ep+1)`
+   （无 `current_ep` 则 `range(1, total_ep+1)`），作为搜索目标的上限；
+   登记簿为空时退化为它。
+2. **`exist_flag is None` ⇒ 跳过本轮**：打日志 + `update_rss_tv_state(state='R')` + `continue`。
+   不退订、不搜索。
+3. **每轮用媒体库缺集刷新登记簿**：
+   `update_subscribe_tv_lack(seasoninfo=library_no_exists.get(tmdb_id) or [])`
+   ⇒ `LACK` 与 `EPISODES` 从此等于「媒体库当前真实缺集」，界面展示与用户感知一致。
+4. **搜索目标 = 订阅范围 ∩ 媒体库实际缺集**：
+   `Torrent.get_intersection_episodes(target={tmdb_id:[{season, episodes: subscribe_episodes, total_episodes}]}, source=library_no_exists, ...)`
+   ⇒ 已经入库的集**不会再被提交**（原版靠登记簿「只减不增」防重，现在靠媒体库实际状态，
+   下载失败也能在下一轮自然重试）。
+5. **删除出口 b**：`search_result` 非空时不再 `finish_rss_subscribe`，只打一行
+   「已提交下载，等待入库后自动完成订阅」，然后**恢复 `state='R'`**。
+   完成订阅从此**只有** `exist_flag=True` 一条路。
+6. **`update_subscribe_tv_lack()` 支持整季缺**：`episodes` 为空列表时用
+   `list(range(1, total_episodes+1))` 填充，保证 `LACK` 与明细都准确。
+7. **洗版分支收窄**：原写法 `if search_result or not no_exists or ...` 后无条件调
+   `update_subscribe_over_edition(media=search_result)`，`search_result=None` 时会在
+   `media.res_order` 上抛 `AttributeError`（被外层 `except` 吞成「订阅搜索失败」）。
+   现在只在 `search_result` 非空时调用，否则复位 `state='R'`。
+8. **`get_subscribe_tvs()` 输出 `lack_episodes`**（排序后的缺集明细）。
+
+### B. `app/helper/db_helper.py`
+
+`get_rss_tv_episodes()` 过滤空串：`[int(epi) for epi in str(...).split(',') if str(epi).strip()]`。
+历史数据里可能残留 `EPISODES=""`（清空缺失集后又写入），原写法 `int('')` 会抛 `ValueError`。
+
+### C. 界面
+
+| 文件 | 改动 |
+|---|---|
+| `web/templates/rss/tv_rss.html` | 卡片状态行下新增缺集摘要「缺 N 集：第 x、y、z」（>12 集截断 + `title` 放全量）；顺修一处 `class=“...”` 全角引号 |
+| `web/action.py` `__media_info` | 订阅分支返回 `lack_episodes`（直接复用 `get_subscribe_tvs` 已算好的值，零额外查询） |
+| `web/templates/navigation.html` | 媒体详情弹窗新增 `#system_media_lack_info` 区块（默认 `display:none`） |
+| `web/static/js/functions.js` | `show_mediainfo_modal` 渲染缺集；**无缺集/老报文无该字段时显式 `hide()`**（避免上一次弹窗残留） |
+
+**未新增任何数据库字段、未新增迁移、未新增配置项。**
+
+## 验证
+
+### 离线（真实源码驱动，不手抄）
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| 静态 AST | 旧分支消失、`finish_rss_subscribe` 仅剩 1 处且在 `exist_flag` 分支内、三态处理、整季填充、`lack_episodes` 输出 | 9/9 |
+| **动态** | 把**真实** `subscribe_search_tv` 等 5 个方法的源码按 AST 抽出来 exec 进宿主类，配真实 `Torrent.get_intersection_episodes` 与真实 `MetaBase.get_season_seq`，跑 6 组场景 | 20/20 |
+| **反向对照** | 同一场景喂给旧实现（`git show 0a5ce8a:app/subscribe.py`）⇒ **必须退订**（证明修复有牙） | 2/2 |
+| 桩合规 | 7 个桩的签名与真实模块 AST 逐参数比对；`log` 桩名字必须落在 `log.py` 真实公开面内（无 `warning`） | 9/9 |
+| 前端 | Jinja2 真渲染卡片（有缺集/无缺集/老数据无键/超 12 集截断/整季缺/进度条回归）；Node 桩驱动 `show_mediainfo_modal` 三分支 | 18/18 |
+| 健康 | 全量 `py_compile` + 装饰器同行粘连 AST + 路由装饰器真实 eval | 通过 |
+
+场景要点：
+
+1. 媒体库已全部存在 ⇒ 退订、不搜索；
+2. 媒体库缺 `[3,5]`、本轮提交成功 ⇒ **不退订**、登记簿写 `[3,5]`、搜索目标 `[3,5]`、状态复位 `R`；
+3. `current_ep=3` 且媒体库缺 `[1,3,5]` ⇒ 搜索目标 `[3,5]`（第 1 集在订阅范围外），
+   而**展示的缺集仍是 `[1,3,5]`**（用户要看媒体库真缺什么）；
+4. `exist_flag=None` ⇒ 不退订、不搜索、状态复位；
+5. 洗版 + 本轮无结果 ⇒ 不抛异常、不退订；
+6. 整季缺（`episodes: []`）⇒ 登记簿 `1..12`、搜索目标整季；
+7. 登记簿有历史值 `[9,10]` ⇒ **不会把目标收窄**（目标只由媒体库决定）。
+
+### 既有回归
+
+蜜柑 34/34、A1 抓取状态分类、`log` API 合规守卫 7/7、全量 `py_compile` 与装饰器体检 —— 全部通过。
+
+## 已知边界
+
+- 「补齐」的口径**依赖媒体服务器或媒体库目录**：两者都不可用时 `check_exists_medias()`
+  可能得到「全部存在」的结论并退订 —— 这是**改动前就有的行为**，本次未改变；
+  本次只把「无法查询」（`None`）这一种情形单独拎出来保护。
+- 未下载完成的集会在下一个扫描周期（默认 ≥6 小时）被**重新搜一次**，这是刻意的失败自愈；
+  同一批种子的重复提交由下载器按种子特征去重兜底。
+- 「界面上显示缺集」与「订阅是否完成」共用同一个数据源（媒体库缺集），
+  所以建议把媒体库（Emby/Jellyfin/Plex/飞牛/绿联）或同步目录配好，否则缺集只能退化为按目录扫描。
+
 # v6.3.8 — 蜜柑「一条都搜不到」：站点改版 + 归因误判（两个成因叠加）
 
 ## 现象

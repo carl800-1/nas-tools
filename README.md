@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.3.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1077,6 +1077,24 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 > 说明：这条修复对所有内置站点生效 —— 有正常内容页的站点，不会因为页面上
 > 存在可选的登录入口就被判成登录页。
 
+#### 2.50 订阅：能看到还缺哪几集，补齐之后才自动退订（v6.4.0）
+
+**能看到缺哪几集了**：电视剧订阅卡片上会显示「缺 N 集」并列出集号
+（缺得多时悬停可以看到完整清单），点开媒体详情弹窗还能看到完整的缺失集列表。
+
+**什么时候自动退订**：以前是「**这一轮搜到资源就退订**」——
+种子刚交给下载器、还没下载完（甚至下载失败）时，订阅就已经被清掉了，
+剩下没补齐的集再也没人管。现在改为**等媒体库真的查到这部剧已经完整**才退订；
+在此之前订阅会一直保留，并按周期（默认最多 6 小时一轮）自动重试。
+
+**顺带的好处**：订阅保留期间，每一轮只针对**媒体库实际还缺的集**去搜索，
+已经入库的集不会再被重复提交；媒体库一时连不上时也会跳过本轮、保持订阅，
+**不会**被误判成「已经补齐」而把订阅清掉。
+
+> 说明：`补齐` 的判断依据是**媒体服务器（Emby / Jellyfin / Plex / 飞牛 / 绿联）
+> 或媒体库目录**。如果两者都没有配置，缺集信息会退化为按目录扫描，
+> 建议至少配好其中一个。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1697,7 +1715,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.3.8   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.0   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1800,4 +1818,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-03 ｜ 当前版本 v6.3.8_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.0_
