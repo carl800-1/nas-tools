@@ -804,40 +804,39 @@ class UgreenClient(_IMediaClient):
     def get_movies(self, title, year=None):
         """
         根据标题和年份，检查电影是否存在
+
+        ⚠️ 旧实现靠 `v1/video/all` 的 `search` 参数按标题搜 —— 实测该参数被服务端
+        **完全忽略**（传任何词都返回同一批默认排序条目），所以命中判断 `name == title`
+        恒不成立 ⇒ **恒返回空** ⇒ 下载查重失效，媒体库里已有的电影会被重复下载。
+        改为在本地全量条目里过滤（`_all_library_videos()` 带进程内缓存）。
+
+        另：旧实现用 `or` 连接「片名相同」与「年份相同」，导致**年份相同但片名不同**
+        的电影也被判为「已存在」（假阳性，会拦住本该下载的片子）。这里改为：片名必须
+        匹配（自动忽略「第 N 季」等后缀差异），年份只在存在相符候选时用于收窄。
         """
         if not self._api:
             return []
         try:
-            result = self._api.request(
-                "v1/video/all",
-                params={
-                    "page": 1, "pageSize": 10,
-                    "classification": -102,
-                    "sort_type": 2, "order_type": 2,
-                    "release_date_begin": -9999999999,
-                    "release_date_end": -9999999999,
-                    "identify_status": 0, "watch_status": -1,
-                    "ug_style_id": 0, "ug_country_id": 0, "clarity": -1,
-                    "search": title,
-                },
-            )
-            if result["code"] != 200 or not isinstance(result["data"], dict):
-                return []
-            items = result["data"].get("video_arr") or []
-            ret_movies = []
-            for item in items:
-                if not isinstance(item, dict):
+            matched = []
+            for video in (self._all_library_videos() or []):
+                if not isinstance(video, dict):
                     continue
-                # v6.3.5：条目结构随固件版本变过（外层平铺 / 内层 video_info），
-                # 只认内层会让下载查重恒为空 ⇒ 可能重复下载
-                video_info = self._flatten_item(item)
-                name = video_info.get("name") or video_info.get("title") or ""
-                if name == title or (year and str(video_info.get("release_year")) == str(year)):
-                    ret_movies.append({
-                        "title": name,
-                        "year": str(video_info.get("release_year") or ""),
-                    })
-            return ret_movies
+                info = self._flatten_item(video)
+                if info.get("type") != 1:
+                    # 1 = 电影；剧集为 2，不参与电影查重
+                    continue
+                name = info.get("name") or info.get("title") or ""
+                if not self._title_matches(name, title):
+                    continue
+                matched.append({
+                    "title": name,
+                    "year": str(info.get("year") or info.get("release_year") or ""),
+                })
+            if year and matched:
+                narrowed = [m for m in matched if m.get("year") == str(year)]
+                if narrowed:
+                    matched = narrowed
+            return matched
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】搜索电影出错：" + str(e))
@@ -846,51 +845,75 @@ class UgreenClient(_IMediaClient):
     def get_tv_episodes(self, item_id=None, title=None, year=None, tmdbid=None, season=None):
         """
         根据标题、年份、季查询电视剧所有集信息
+
+        ⚠️ 绿联的剧集结构与 Emby/Plex 完全不同，两个必须知道的事实：
+        ① `ug_video_info_id` 的粒度是**季**而不是「剧」—— 同一部剧的每一季都是一条
+           独立条目（「宙斯之血 第 1 季」id=681／「第 2 季」id=677）；
+        ② `v2/video/details/getTV` 的返回里，**季列表在 `season_info`、集列表在
+           `tv_info`**，`tv_info[i]["episode"]` 才是集号（`ep_name` 形如
+           「宙斯之血 - S02E01 - 第 1 集」）。旧实现读的 `episodes` / `episode_arr`
+           两个键在真实返回里**根本不存在** ⇒ 恒定返回空列表。
+
+        另一条旧实现的死路：靠 `v1/video/all` 的 `search` 参数按标题搜剧 —— 该参数
+        被服务端忽略（传什么都返回同一批默认排序条目），且条目名带「第 N 季」后缀，
+        `vi_name == title` 的精确比较永远不成立 ⇒ item_id 恒为空。
         """
         if not self._api:
             return []
         try:
-            if not item_id and title:
-                # 先搜索电视剧
-                result = self._api.request(
-                    "v1/video/all",
-                    params={
-                        "page": 1, "pageSize": 10,
-                        "classification": -103,
-                        "sort_type": 2, "order_type": 2,
-                        "release_date_begin": -9999999999,
-                        "release_date_end": -9999999999,
-                        "identify_status": 0, "watch_status": -1,
-                        "ug_style_id": 0, "ug_country_id": 0, "clarity": -1,
-                        "search": title,
-                    },
-                )
-                if result["code"] == 200 and isinstance(result["data"], dict):
-                    items = result["data"].get("video_arr") or []
-                    for item in items:
-                        vi = self._flatten_item(item)
-                        vi_name = vi.get("name", "")
-                        if vi_name == title and (not year or str(vi.get("release_year")) == str(year)):
-                            item_id = vi.get("ug_video_info_id") or vi.get("id")
-                            break
-            if not item_id:
-                return []
-            # 使用 get_tv API 获取剧集详情（含季/集）
-            tv_data = self._api.get_tv(item_id)
-            if not tv_data:
-                # 降级使用 video_info
-                info = self._api.video_info(item_id)
-                if not info:
-                    return []
-                episodes = info.get("episodes") or info.get("episode_arr") or []
+            candidates = []
+            if item_id:
+                candidates = [{"item_id": item_id, "season_num": 0, "name": ""}]
             else:
-                episodes = tv_data.get("episodes") or tv_data.get("episode_arr") or []
+                if not title:
+                    return []
+                candidates = self._find_tv_candidates(title, year)
+                if not candidates:
+                    log.info(f"【{self.client_name}】未在媒体库中找到剧集：{title}"
+                             f"（{year or '不限年份'}）")
+                    return []
+            if season is not None and candidates:
+                # 先用条目名解析出的季号预筛，避免对无关季白跑 getTV 请求；
+                # 解析不出季号的条目（season_num=0）保守保留，交由 getTV 复核。
+                narrowed = [c for c in candidates
+                            if not c.get("season_num")
+                            or int(c["season_num"]) == int(season)]
+                if narrowed:
+                    candidates = narrowed
             exists_episodes = []
-            for ep in episodes:
-                exists_episodes.append({
-                    "season_num": ep.get("season_num") or ep.get("parent_index_number") or 0,
-                    "episode_num": ep.get("episode_num") or ep.get("index_number") or 0,
-                })
+            for cand in candidates:
+                detail = self._api.get_tv(cand.get("item_id"))
+                if not detail:
+                    continue
+                # 权威季号以 getTV 的 video_info.season 为准（实测多季剧准确）
+                video_info = detail.get("video_info")
+                video_info = video_info if isinstance(video_info, dict) else {}
+                season_num = 0
+                raw_season = video_info.get("season")
+                if isinstance(raw_season, int) and raw_season > 0:
+                    season_num = raw_season
+                if not season_num:
+                    season_num = self._parse_season_num(
+                        video_info.get("name") or cand.get("name") or "")
+                if not season_num:
+                    season_num = int(cand.get("season_num") or 0)
+                for ep in (detail.get("tv_info") or []):
+                    if not isinstance(ep, dict):
+                        continue
+                    ep_num = ep.get("episode")
+                    if not isinstance(ep_num, int) or ep_num <= 0:
+                        ep_num = 0
+                    ep_season, ep_from_name = self._parse_season_episode(ep.get("ep_name"))
+                    if not ep_num:
+                        # 兜底：从集名 "S02E01" 解析集号
+                        ep_num = ep_from_name
+                    if not ep_num:
+                        continue
+                    real_season = season_num or ep_season or 0
+                    if season is not None and real_season and int(season) != int(real_season):
+                        continue
+                    exists_episodes.append({"season_num": real_season,
+                                            "episode_num": ep_num})
             return exists_episodes
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
@@ -925,18 +948,33 @@ class UgreenClient(_IMediaClient):
     def get_episode_image_by_id(self, item_id, season_id, episode_id):
         """
         根据itemid、season_id、episode_id查询图片地址
+
+        ⚠️ 同源缺陷：旧实现读 `video_info.get("episodes") or .get("episode_arr")`，
+        这两个键在真实返回里不存在 ⇒ 恒返回空。集列表在 getTV 的 `tv_info` 里，
+        且每条集自带 `cover_path`（本地封面路径），无需再按集 id 回查详情接口。
         """
         if not self._api:
             return ""
         try:
-            info = self._api.video_info(item_id)
-            if not info:
+            detail = self._api.get_tv(item_id)
+            if not detail:
                 return ""
-            episodes = info.get("episodes") or info.get("episode_arr") or []
-            for ep in episodes:
-                if ep.get("episode_num") == episode_id or ep.get("index_number") == episode_id:
-                    img_url = self.get_remote_image_by_id(ep.get("ug_video_info_id") or ep.get("id"), "Primary")
-                    return img_url or ""
+            for ep in (detail.get("tv_info") or []):
+                if not isinstance(ep, dict):
+                    continue
+                ep_num = ep.get("episode")
+                if not isinstance(ep_num, int) or ep_num <= 0:
+                    _, ep_num = self._parse_season_episode(ep.get("ep_name"))
+                if not ep_num or ep_num != episode_id:
+                    continue
+                cover = ep.get("cover_path")
+                if cover:
+                    url = self._api.get_image_stream_url(cover)
+                    if url:
+                        return url
+                return self.get_remote_image_by_id(
+                    ep.get("ug_television_episode_id"), "Primary") or ""
+            return ""
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取剧集图片出错：" + str(e))
@@ -1057,6 +1095,103 @@ class UgreenClient(_IMediaClient):
             log.error(f"【{self.client_name}】获取媒体库根路径出错：" + str(e))
         self._lib_paths = mapping
         return mapping
+
+    # ------------------- v6.3.6：剧集定位与集号解析 -------------------
+    # 绿联把「季」做成**独立条目**：同一部剧的每一季都是一条独立条目，名字带
+    # 「第 N 季」后缀（实测「宙斯之血 第 1 季」id=681、「宙斯之血 第 2 季」id=677），
+    # `ug_video_info_id` 的粒度就是**季**而不是「剧」。因此按标题找剧必须先归一化
+    # 掉季后缀，否则条目名与 TMDB 标题永远不相等（旧实现恒空的成因之一）。
+
+    @staticmethod
+    def _normalize_title(name):
+        """把绿联条目名归一化成可比较的剧名：去掉「第 N 季」/「Season N」/尾部年份。"""
+        if not name:
+            return ""
+        text = str(name).strip()
+        for _ in range(2):
+            text = re.sub(r"[\s\-_·:：]*第\s*\d+\s*季.*$", "", text).strip()
+            text = re.sub(r"[\s\-_·:：]*[Ss]eason\s*\d+.*$", "", text).strip()
+        text = re.sub(r"[\s\-_·]*[（(]\s*(?:19|20)\d{2}\s*[)）]\s*$", "", text).strip()
+        return text
+
+    @classmethod
+    def _title_matches(cls, name, title):
+        """条目名与目标标题是否指向同一部剧（自动忽略「第 N 季」后缀差异）。"""
+        if not name or not title:
+            return False
+        raw_name = str(name).strip()
+        raw_title = str(title).strip()
+        if raw_name == raw_title:
+            return True
+        base_name = cls._normalize_title(raw_name)
+        base_title = cls._normalize_title(raw_title)
+        return bool(base_name) and base_name == base_title
+
+    @staticmethod
+    def _parse_season_num(name):
+        """从条目名解析季号：'宙斯之血 第 2 季' -> 2；解析不到返回 0。"""
+        if not name:
+            return 0
+        text = str(name)
+        matched = re.search(r"第\s*(\d+)\s*季", text)
+        if matched:
+            return int(matched.group(1))
+        matched = re.search(r"[Ss]eason\s*(\d+)", text)
+        if matched:
+            return int(matched.group(1))
+        return 0
+
+    @staticmethod
+    def _parse_season_episode(ep_name):
+        """从集名解析 (季, 集)：'宙斯之血 - S02E01 - 第 1 集' -> (2, 1)。"""
+        if not ep_name:
+            return 0, 0
+        matched = re.search(r"[Ss](\d{1,2})\s*[Ee](\d{1,3})", str(ep_name))
+        if matched:
+            return int(matched.group(1)), int(matched.group(2))
+        return 0, 0
+
+    def _find_tv_candidates(self, title, year=None):
+        """
+        按标题在**本地全量条目**里找剧集候选，返回 [(item_id, 季号, 年份, 名字), ...]。
+
+        ⚠️ 为什么不能在服务端按标题搜：实测 `v1/video/all` 的 `search` 参数被
+        服务端**完全忽略** —— 传「宙斯之血」「遗失的世界」「宙斯」返回的都是同一批
+        前 20 条（默认排序），压根不是搜索。这一版固件上筛选参数（media_lib_set_id /
+        search）统统不生效，只能全量拉回本地过滤（`_all_library_videos()` 有缓存）。
+
+        同一部剧的每一季都是独立条目（名字带「第 N 季」），所以返回**列表**。
+        `year` 是**软条件**：多季剧各季年份不同（「宙斯之血」第 1 季 2020、第 2 季
+        2024），硬过滤会把整部剧滤掉，反而误报「一集都没有」。
+        """
+        matched = []
+        for video in (self._all_library_videos() or []):
+            if not isinstance(video, dict):
+                continue
+            info = self._flatten_item(video)
+            if info.get("type") != 2:
+                # 2 = 剧集；只要剧集（电影的 type 为 1）
+                continue
+            name = info.get("name") or info.get("title") or ""
+            if not self._title_matches(name, title):
+                continue
+            item_id = info.get("ug_video_info_id") or info.get("id")
+            if not item_id:
+                continue
+            matched.append({
+                "item_id": item_id,
+                "season_num": self._parse_season_num(name),
+                "year": str(info.get("year") or info.get("release_year") or ""),
+                "name": name,
+            })
+        if year and matched:
+            # year 是**软条件**（只排序、不过滤）：多季剧各季条目年份不同
+            # （实测「宙斯之血」第 1 季 2020、第 2 季 2024），硬过滤会把目标季
+            # 整条滤掉；而 get_no_exists_episodes 传的正是**首播年**
+            # ⇒ 除首季外都会误报「一集都没有」，进而触发重复下载。
+            # 这里只把年份相符的候选排到前面（sort 稳定，不改变同优先级顺序）。
+            matched.sort(key=lambda m: 0 if m.get("year") == str(year) else 1)
+        return matched
 
     @staticmethod
     def _flatten_item(video, detail=None):
