@@ -1040,7 +1040,8 @@ class DbHelper:
             return []
         ret = self._db.query(RSSTVEPISODES.EPISODES).filter(RSSTVEPISODES.RSSID == rid).first()
         if ret:
-            return [int(epi) for epi in str(ret[0]).split(',')]
+            # 历史数据里可能残留空串（清空缺失集后写入），过滤掉避免 int('') 抛异常
+            return [int(epi) for epi in str(ret[0]).split(',') if str(epi).strip()]
         else:
             return None
 
