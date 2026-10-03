@@ -475,13 +475,20 @@ class _UgreenApi:
             return result["data"]
         return None
 
-    def video_all(self, classification, page=1, page_size=20):
+    def video_all(self, classification, page=1, page_size=20,
+                  sort_type=1, order_type=2):
+        """全量条目接口。
+
+        ⚠️ 默认 sort_type 必须是**稳定**值：服务端 sort_type=2（原默认）排序键
+        有并列值、切页会跨页重叠 ⇒ 逐页拉取会静默漏条目。详见
+        `UgreenClient._fetch_classification()` 的注释。
+        """
         result = self.request(
             "v1/video/all",
             params={
                 "page": page, "pageSize": page_size,
                 "classification": classification,
-                "sort_type": 2, "order_type": 2,
+                "sort_type": sort_type, "order_type": order_type,
                 "release_date_begin": -9999999999,
                 "release_date_end": -9999999999,
                 "identify_status": 0, "watch_status": -1,
@@ -612,6 +619,17 @@ class UgreenClient(_IMediaClient):
     # 最近一次失败原因 —— 「测试连接」失败时由 web 层直接回显到页面上
     # （web/action.py::__test_connection 已支持读该属性，飞牛影视在用）
     last_error = None
+    # v6.3.5：媒体库「库ID -> [根路径, ...]」映射。绿联的 media_list() 不返回 path，
+    # 路径只能从不带 path 调 poster_wall_get_folder() 的 folder_arr 里取。
+    _lib_paths = None
+    # v6.3.5：v1/video/all 两个分类全量拉取后的原始条目缓存
+    _all_videos = None
+    # v6.3.5：全量分页用的排序参数。sort_type=2（服务端默认）的排序键存在大量
+    # 并列值，分页窗口会**跨页重叠** —— 实测 833 条电影里有 6 条同时出现在相邻
+    # 两页，于是另外 6 条被挤出所有页窗口、永远拉不到（只能拿到 827 条）。
+    # sort_type=1 / 3 实测零重叠，用作主通道与备用通道。
+    STABLE_SORT = (1, 2)
+    FALLBACK_SORT = (3, 2)
 
     def __init__(self, config=None):
         if config:
@@ -621,6 +639,10 @@ class UgreenClient(_IMediaClient):
         self.init_config()
 
     def init_config(self):
+        # v6.3.5：路径映射与全量条目缓存都是「配置相关」的派生数据，配置一变必须重建
+        self._lib_paths = None
+        self._all_videos = None
+        self._video_info_cache = {}
         if self._client_config:
             self._host = self._client_config.get('host')
             if self._host:
@@ -804,7 +826,11 @@ class UgreenClient(_IMediaClient):
             items = result["data"].get("video_arr") or []
             ret_movies = []
             for item in items:
-                video_info = item.get("video_info") if isinstance(item, dict) else {}
+                if not isinstance(item, dict):
+                    continue
+                # v6.3.5：条目结构随固件版本变过（外层平铺 / 内层 video_info），
+                # 只认内层会让下载查重恒为空 ⇒ 可能重复下载
+                video_info = self._flatten_item(item)
                 name = video_info.get("name") or video_info.get("title") or ""
                 if name == title or (year and str(video_info.get("release_year")) == str(year)):
                     ret_movies.append({
@@ -842,7 +868,7 @@ class UgreenClient(_IMediaClient):
                 if result["code"] == 200 and isinstance(result["data"], dict):
                     items = result["data"].get("video_arr") or []
                     for item in items:
-                        vi = item.get("video_info") if isinstance(item.get("video_info"), dict) else {}
+                        vi = self._flatten_item(item)
                         vi_name = vi.get("name", "")
                         if vi_name == title and (not year or str(vi.get("release_year")) == str(year)):
                             item_id = vi.get("ug_video_info_id") or vi.get("id")
@@ -993,6 +1019,265 @@ class UgreenClient(_IMediaClient):
             return
         self.refresh_root_library()
 
+    # ==================================================================
+    # v6.3.5 新增：媒体库路径映射 / 类型推断 / 全量条目获取
+    # ------------------------------------------------------------------
+    # 背景：绿联 media_list() 只返回 media_lib_set_id / media_name / video_count，
+    # 既没有 path 也没有 media_lib_type。旧实现把 lib['path'] 当库根目录用，
+    # 恒为空 ⇒ get_items() 在每个库的第一道门槛就 return [] ⇒ 同步数量恒为 0。
+    # ==================================================================
+
+    def _load_library_paths(self):
+        """
+        建立「媒体库ID -> [根路径, ...]」映射。
+
+        路径只能从不带 path 调 poster_wall_get_folder() 的返回里取：
+        它的 folder_arr 每个元素带 media_lib_set_id 与 path。
+        ★ 一个库可能有多个根目录（实测：电影 = 华语电影 + 外语电影，
+          电视剧 = 国产剧 + 欧美剧），必须全部保留，否则会漏掉整个子库。
+        """
+        if self._lib_paths is not None:
+            return self._lib_paths
+        mapping = {}
+        try:
+            data = self._api.poster_wall_get_folder(page=1, page_size=200) or {}
+            for folder in (data.get("folder_arr") or []):
+                if not isinstance(folder, dict):
+                    continue
+                lib_id = folder.get("media_lib_set_id")
+                lib_path = folder.get("path")
+                if lib_id is None or not lib_path:
+                    continue
+                paths = mapping.setdefault(str(lib_id), [])
+                if str(lib_path) not in paths:
+                    paths.append(str(lib_path))
+            log.info(f"【{self.client_name}】媒体库根路径映射：{mapping}")
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取媒体库根路径出错：" + str(e))
+        self._lib_paths = mapping
+        return mapping
+
+    @staticmethod
+    def _flatten_item(video, detail=None):
+        """
+        把条目摊平成一份 dict：**内层 video_info 先铺、外层条目再盖（外层优先）**。
+
+        为什么必须摊平、而不是逐字段两来源查找：绿联 `/v1/video/all` 的条目结构
+        随固件版本变过 —— 老版本把详情（含 poster_path）包在 `video_info` 子字典里，
+        新版本直接平铺在条目外层。`get_local_image_by_id()` 内部只认
+        `info["poster_path"]`，若把原始条目整份交给它，老固件结构下图片恒为空。
+        摊平后两种结构对下游完全一致。
+        :param detail: 可选的 `v1/video/info` 回源结果，只补摊平后仍缺失的键
+        """
+        merged = {}
+        inner = video.get("video_info")
+        if isinstance(inner, dict):
+            merged.update(inner)
+        for key, value in video.items():
+            if key != "video_info":
+                merged[key] = value
+        if isinstance(detail, dict):
+            for key, value in detail.items():
+                if merged.get(key) in (None, "", [], {}):
+                    merged[key] = value
+        return merged
+
+    def _video_info_cached(self, item_id):
+        """
+        按 item_id 取 `v1/video/info` 详情（进程内缓存，同一部片只请求一次）。
+
+        只在原始条目缺关键字段时调用 —— 老版本固件每个条目都要回源（与原实现一致），
+        新版本固件字段齐全则一次都不用请求。
+        """
+        if item_id is None:
+            return {}
+        cache = getattr(self, "_video_info_cache", None)
+        if cache is None:
+            cache = self._video_info_cache = {}
+        if item_id in cache:
+            return cache[item_id]
+        try:
+            info = self._api.video_info(item_id) or {}
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取条目详情出错 id={item_id}：" + str(e))
+            info = {}
+        cache[item_id] = info
+        return info
+
+    @staticmethod
+    def _infer_library_type(lib_name, paths=None):
+        """
+        绿联 media_list() 不返回媒体库类型，只能推断。
+
+        ⚠️ 判定顺序必须是「先电影、后剧」：否则「动漫电影」会因含「动漫」被判成剧集。
+        （上游 MoviePilot 的 __infer_library_type 正是「剧/综艺/动漫/纪录片」在前，
+          会把「动漫电影」判成剧集，这里不跟。）
+        """
+        name = str(lib_name or "")
+        path_text = ",".join(paths or [])
+        if "电影" in name or "电影" in path_text:
+            return MediaType.MOVIE.value
+        if any(key in name for key in ("电视剧", "剧", "综艺", "动漫", "纪录片")):
+            return MediaType.TV.value
+        if "电视剧" in path_text:
+            return MediaType.TV.value
+        return MediaType.MOVIE.value
+
+    def _all_library_videos(self, force=False):
+        """
+        拉取媒体服务器上**全部**视频条目（movie + tv），供按库分桶使用。
+
+        为什么不用目录树遍历（poster_wall_get_folder 递归下钻）：
+          实测同一台 NAS 上，完整 BFS 需要 900+ 次请求（每个影片目录一次），
+          而 v1/video/all 全量只需 ceil(833/20) + ceil(123/20) = 49 次。
+        为什么只能全量拉、不能在服务端按库筛选：
+          实测 media_lib_set_id 传 1/3/5 返回的都是全量 833 条（该参数被忽略），
+          且 pageSize 上限为 20（传 100/200/500/1000 都只返回 20 条）。
+        好在每条 item 自带 media_lib_set_id，本地分桶即可精确归库。
+        """
+        if self._all_videos is not None and not force:
+            return self._all_videos
+        videos = []
+        try:
+            # -102 电影 / -103 电视剧（其余取值实测返回「参数错误！」）
+            for classification in (-102, -103):
+                total, items = self._fetch_classification(classification,
+                                                          *self.STABLE_SORT)
+                if total and len(items) < total:
+                    # 稳定排序也取不全（服务端仍可能重叠）⇒ 换一个稳定排序再拉一遍，
+                    # 只补缺不重复计，最大程度逼近服务端 total_num。
+                    log.warn(f"【{self.client_name}】分类 {classification} 按稳定排序只取到 "
+                             f"{len(items)}/{total} 条，改用备用排序补拉")
+                    _, more = self._fetch_classification(classification,
+                                                         *self.FALLBACK_SORT)
+                    have = {it.get("ug_video_info_id") or it.get("id") for it in items}
+                    for it in more:
+                        item_id = it.get("ug_video_info_id") or it.get("id")
+                        if item_id in have:
+                            continue
+                        have.add(item_id)
+                        items.append(it)
+                if total and len(items) < total:
+                    log.warn(f"【{self.client_name}】全量条目仍缺 {total - len(items)} 条："
+                             f"接口报 {total} 条，实得 {len(items)} 条"
+                             f"（classification={classification}）")
+                videos.extend(items)
+            log.info(f"【{self.client_name}】全量条目拉取完成：{len(videos)} 条")
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】全量拉取条目出错：" + str(e))
+        self._all_videos = videos
+        return videos
+
+    def _fetch_classification(self, classification, sort_type, order_type):
+        """
+        按分类逐页拉全量条目，返回 `(服务端 total_num, 条目列表)`（已按 id 去重）。
+
+        ⚠️⚠️ 为什么必须指定**稳定**的 sort_type（这里用 1，备用 3）：
+          `v1/video/all` 的页窗口是按排序键切的。`sort_type=2`（服务端默认、
+          也是改前的写法）排序键有大量并列值，服务端切页**不稳定** —— 实测同一台
+          机器上 833 条电影里有 6 条（870/848/825/750/683/617）同时出现在相邻两页
+          （4/5、5/6、6/7、9/10、12/13、15/16），于是另外 6 条被挤出所有页窗口、
+          **永远拉不到**，只能拿到 827 条。且服务端 total_num 仍报 833（把跨页
+          重复也算进去了），所以「实收条数 == total_num」这个判据**发现不了**问题
+          —— 用原始累计条数做判据会被骗，必须用**去重后**的条数。
+          换 sort_type=1 / 3 实测去重后正好 833，零重叠。
+        ⚠️ pageSize 服务端硬上限 20（传 50/100/200 都只回 20 条），不要改大。
+        """
+        items = []
+        seen = set()
+        page = 1
+        total = 0
+        # 翻页上限按 total_num 动态放宽：写死页数会在「库里条目超过
+        # 上限 × 20」时**静默少同步**，而日志里完全看不出来。
+        max_pages = 200
+        while page <= max_pages:
+            data = self._api.video_all(classification=classification, page=page,
+                                       page_size=20, sort_type=sort_type,
+                                       order_type=order_type)
+            if not data:
+                break
+            if not total:
+                total = data.get("total_num") or 0
+                if total:
+                    max_pages = -(-total // 20) + 5
+            arr = [x for x in (data.get("video_arr") or []) if isinstance(x, dict)]
+            if not arr:
+                break
+            for item in arr:
+                item_id = item.get("ug_video_info_id") or item.get("id")
+                if item_id is not None:
+                    if item_id in seen:
+                        continue
+                    seen.add(item_id)
+                items.append(item)
+            # 判据用**去重后**的条数：用原始累计条数会被「跨页重复」骗过。
+            if (total and len(seen) >= total) or data.get("is_last_page"):
+                break
+            page += 1
+        return total, items
+
+    def _build_play_url(self, item_id, video_type, media_lib_set_id):
+        """
+        按绿联 Web 端的固定格式拼播放链接（与 get_play_url() 的兜底分支一致）。
+
+        同步上千条条目时，逐条再打一次 v1/video/play_url/get 是分钟级的浪费，
+        而同步链路本身并不消费 link 字段，因此这里直接拼。
+        """
+        base = self._play_host or self._host or ""
+        if not base:
+            return ""
+        if not base.endswith("/"):
+            base += "/"
+        return (f"{base}ugreen/v1/video/play?ug_video_info_id={item_id}"
+                f"&type={video_type}&media_lib_set_id={media_lib_set_id}")
+
+    def _walk_library_videos(self, lib_id):
+        """
+        兜底：按目录树 BFS 遍历某个媒体库。
+
+        用于「条目不带 media_lib_set_id」的老固件/特殊固件 —— 此时 _all_library_videos()
+        的分桶会落空。算法与上游 MoviePilot 的 _iter_library_videos 一致：
+        收 video_arr 的同时把 folder_arr 的子目录入队下钻。
+        """
+        from collections import deque
+        paths = (self._load_library_paths() or {}).get(str(lib_id)) or []
+        if not paths:
+            log.warn(f"【{self.client_name}】get_items: 库 {lib_id} 没有可用根路径，无法遍历")
+            return []
+        queue = deque(paths)
+        visited = set()
+        result = []
+        while queue and len(visited) < 20000:
+            current = queue.popleft()
+            if current in visited:
+                continue
+            visited.add(current)
+            page = 1
+            while page <= 200:
+                data = self._api.poster_wall_get_folder(
+                    path=current, page=page, page_size=100,
+                    sort_type=1, order_type=1,
+                )
+                if not data:
+                    break
+                for video in (data.get("video_arr") or []):
+                    if isinstance(video, dict):
+                        result.append(video)
+                for folder in (data.get("folder_arr") or []):
+                    if not isinstance(folder, dict):
+                        continue
+                    sub_path = folder.get("path")
+                    if sub_path and str(sub_path) not in visited:
+                        queue.append(str(sub_path))
+                if data.get("is_last_page"):
+                    break
+                page += 1
+        log.info(f"【{self.client_name}】get_items: 库 {lib_id} 目录树遍历到 {len(result)} 条")
+        return result
+
     def get_libraries(self):
         """
         获取媒体服务器所有媒体库列表
@@ -1004,27 +1289,34 @@ class UgreenClient(_IMediaClient):
             if not libs:
                 log.warn(f"【{self.client_name}】media_list() 返回空列表")
                 return []
+            # v6.3.5：media_list() 不含 path / media_lib_type，分别靠映射与推断补齐
+            path_map = self._load_library_paths()
             libraries = []
             for lib in libs:
                 lib_id = str(lib.get("media_lib_set_id") or lib.get("id", ""))
                 lib_name = lib.get("media_name") or lib.get("name", "")
+                lib_paths = path_map.get(lib_id) or []
+                lib_path = ",".join(lib_paths)
                 lib_type = lib.get("media_lib_type", "")
                 if lib_type == "movies":
                     library_type = MediaType.MOVIE.value
                 elif lib_type == "tv":
                     library_type = MediaType.TV.value
-                else:
+                elif lib_type:
                     library_type = lib_type
+                else:
+                    # 条目录上带 type 时以条目为准（最准），否则按名称/路径推断
+                    library_type = self._infer_library_type(lib_name, lib_paths)
                 # 生成库跳转链接（绿联 Web 端根地址，深链会失效）
                 lib_link = (self._play_host or self._host or "").rstrip("/") + "/"
                 libraries.append({
                     "id": lib_id,
                     "name": lib_name,
                     "type": library_type,
-                    "path": lib.get("path", ""),
+                    "path": lib_path,
                     "link": lib_link,
                 })
-                log.info(f"【{self.client_name}】发现媒体库：id={lib_id}, name={lib_name}, type={library_type}, path={lib.get('path','')}")
+                log.info(f"【{self.client_name}】发现媒体库：id={lib_id}, name={lib_name}, type={library_type}, path={lib_path}")
             return libraries
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
@@ -1052,81 +1344,79 @@ class UgreenClient(_IMediaClient):
         if not self._api:
             return []
         try:
-            # 先获取媒体库列表，找到目标库
-            libs = self._api.media_list()
-            log.info(f"【{self.client_name}】get_items: 从 media_list() 获得 {len(libs)} 个库, parent={parent}")
-            target_lib = None
-            for lib in libs:
-                lib_match = str(lib.get("media_lib_set_id") or lib.get("id"))
-                log.info(f"【{self.client_name}】get_items: 比较库ID {lib_match} == {parent}")
-                if lib_match == str(parent):
-                    target_lib = lib
+            lib_id = str(parent)
+            lib_name = lib_id
+            for lib in (self._api.media_list() or []):
+                if str(lib.get("media_lib_set_id") or lib.get("id")) == lib_id:
+                    lib_name = lib.get("media_name") or lib.get("name") or lib_id
                     break
-            if not target_lib:
-                log.warn(f"【{self.client_name}】get_items: 未找到匹配的媒体库，parent={parent}")
-                return []
-            lib_path = target_lib.get("path", "")
-            lib_id = str(target_lib.get("media_lib_set_id") or target_lib.get("id", ""))
-            lib_name = target_lib.get("media_name") or target_lib.get("name", lib_id)
-            if not lib_path:
-                log.warn(f"【{self.client_name}】get_items: 媒体库 {lib_name} 的路径为空，无法遍历")
-                return []
-            log.info(f"【{self.client_name}】get_items: 开始遍历媒体库 {lib_name}, path={lib_path}")
-            # 使用 poster_wall_get_folder 遍历目录树获取所有视频
+            # v6.3.5 主通道：全量条目 + 本地按 media_lib_set_id 分桶
+            videos = [v for v in (self._all_library_videos() or [])
+                      if isinstance(v, dict)
+                      and str(v.get("media_lib_set_id")) == lib_id]
+            if not videos:
+                # 兜底：老固件条目可能不带 media_lib_set_id，退回目录树 BFS
+                log.warn(f"【{self.client_name}】get_items: 库 {lib_name}(id={lib_id}) "
+                         f"在全量条目里没有命中，改用目录树遍历兜底")
+                videos = self._walk_library_videos(lib_id)
+            log.info(f"【{self.client_name}】get_items: 媒体库 {lib_name}(id={lib_id}) "
+                     f"候选原始条目 {len(videos)} 条")
             ret_items = []
-            _local_video_cache = {}
-            page = 1
-            MAX_PAGES = 500
-            while True:
-                if page > MAX_PAGES:
-                    log.warn(f"【{self.client_name}】媒体库 {lib_name} 遍历已达最大页数限制 {MAX_PAGES}，终止遍历")
-                    break
-                data = self._api.poster_wall_get_folder(
-                    path=lib_path, page=page, page_size=100,
-                    sort_type=1, order_type=1,
-                )
-                if not data:
-                    log.info(f"【{self.client_name}】get_items: poster_wall_get_folder 第{page}页返回空，结束遍历")
-                    break
-                video_arr = data.get("video_arr") or []
-                log.info(f"【{self.client_name}】get_items: 第{page}页返回 {len(video_arr)} 个条目, is_last_page={data.get('is_last_page')}")
-                for video in video_arr:
-                    if not isinstance(video, dict):
-                        continue
-                    vi = video.get("video_info") if isinstance(video.get("video_info"), dict) else video
-                    video_type = vi.get("type", 0)
-                    if video_type not in [1, 2]:
-                        log.info(f"【{self.client_name}】get_items: 跳过非媒体条目 type={video_type}, name={vi.get('name','')}")
-                        continue
-                    item_id = vi.get("ug_video_info_id") or vi.get("id")
-                    if not item_id:
-                        continue
-                    name = vi.get("name") or vi.get("title") or ""
-                    item_type = MediaType.MOVIE.value if video_type == 1 else MediaType.TV.value
-                    # 缓存 video_info 结果，避免重复请求
-                    if item_id not in _local_video_cache:
-                        _local_video_cache[item_id] = self._api.video_info(item_id) or {}
-                    item_info = _local_video_cache[item_id]
-                    link = f"/open?url={quote(self.get_play_url(item_id, item_info=item_info))}&type=ugreen"
-                    image = self.get_local_image_by_id(item_id, remote=False, inner=True, video_info=item_info)
-                    ret_items.append({
-                        "id": item_id,
-                        "library": item_info.get("media_lib_set_id") or lib_id,
-                        "type": item_type,
-                        "title": name,
-                        "originalTitle": item_info.get("original_name") or vi.get("original_name") or "",
-                        "year": str(item_info.get("release_year") or vi.get("release_year") or ""),
-                        "tmdbid": item_info.get("tmdb_id") or vi.get("tmdb_id"),
-                        "imdbid": item_info.get("imdb_id") or vi.get("imdb_id"),
-                        "path": item_info.get("path") or vi.get("path") or "",
-                        "json": str(item_info),
-                        "image": image,
-                        "link": link,
-                    })
-                if data.get("is_last_page"):
-                    break
-                page += 1
-            log.info(f"【{self.client_name}】get_items: 媒体库 {lib_name} 同步完成，共 {len(ret_items)} 个条目")
+            seen_ids = set()
+            fallback_count = 0
+            for video in videos:
+                if not isinstance(video, dict):
+                    continue
+                # 先摊平：内层 video_info 与外层条目合成一份（外层优先）
+                info = self._flatten_item(video)
+                # type 定义：1=电影 2=剧集（两种固件结构都兼容）
+                video_type = info.get("type", 0)
+                if video_type not in [1, 2]:
+                    continue
+                item_id = info.get("ug_video_info_id") or info.get("id")
+                if not item_id or item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+                # 关键字段缺失时回源详情接口并重新摊平（新固件字段齐全则完全不请求）
+                if not ((info.get("name") or info.get("title"))
+                        and (info.get("poster_path") or info.get("poster"))
+                        and info.get("tmdb_id")):
+                    detail = self._video_info_cached(item_id) or {}
+                    if detail:
+                        fallback_count += 1
+                        info = self._flatten_item(video, detail)
+                name = info.get("name") or info.get("title") or ""
+                item_type = MediaType.MOVIE.value if video_type == 1 else MediaType.TV.value
+                file_path = info.get("file_path")
+                if isinstance(file_path, list) and file_path:
+                    item_path = str(file_path[0])
+                elif isinstance(file_path, str) and file_path:
+                    item_path = file_path
+                else:
+                    item_path = str(info.get("path") or "")
+                play_url = self._build_play_url(
+                    item_id, video_type, info.get("media_lib_set_id") or lib_id)
+                ret_items.append({
+                    "id": item_id,
+                    "library": info.get("media_lib_set_id") or lib_id,
+                    "type": item_type,
+                    "title": name,
+                    "originalTitle": info.get("original_name")
+                    or info.get("original_title") or "",
+                    "year": str(info.get("year") or info.get("release_year") or ""),
+                    "tmdbid": info.get("tmdb_id"),
+                    "imdbid": info.get("imdb_id"),
+                    "path": item_path,
+                    "json": str(info),
+                    "image": self.get_local_image_by_id(
+                        item_id, remote=False, inner=True, video_info=info),
+                    "link": f"/open?url={quote(play_url)}&type=ugreen",
+                })
+            if fallback_count:
+                log.info(f"【{self.client_name}】get_items: 媒体库 {lib_name} 有 "
+                         f"{fallback_count} 条原始条目缺字段，已回源 video_info 补齐")
+            log.info(f"【{self.client_name}】get_items: 媒体库 {lib_name} 收集到 "
+                     f"{len(ret_items)} 个条目")
             return ret_items
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
@@ -1192,7 +1482,7 @@ class UgreenClient(_IMediaClient):
             for item in items[:num]:
                 if not isinstance(item, dict):
                     continue
-                vi = item.get("video_info") if isinstance(item.get("video_info"), dict) else {}
+                vi = self._flatten_item(item)
                 item_id = vi.get("ug_video_info_id") or vi.get("id")
                 if not item_id:
                     continue
@@ -1231,7 +1521,7 @@ class UgreenClient(_IMediaClient):
             for item in items[:num]:
                 if not isinstance(item, dict):
                     continue
-                vi = item.get("video_info") if isinstance(item.get("video_info"), dict) else {}
+                vi = self._flatten_item(item)
                 item_id = vi.get("ug_video_info_id") or vi.get("id")
                 if not item_id:
                     continue
