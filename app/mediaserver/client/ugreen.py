@@ -622,6 +622,12 @@ class UgreenClient(_IMediaClient):
     # v6.3.5：媒体库「库ID -> [根路径, ...]」映射。绿联的 media_list() 不返回 path，
     # 路径只能从不带 path 调 poster_wall_get_folder() 的 folder_arr 里取。
     _lib_paths = None
+    # v6.3.7：媒体库「库ID -> [封面路径, ...]」。与 _lib_paths 从**同一次**
+    # poster_wall_get_folder 请求里顺带取出（folder.cover），零额外请求。
+    # 为什么需要它：media_list() 自带的 poster_paths 可能是**远程** scraper 地址
+    # （scraper.ugnas.com 带 auth_key，实测已过期 ⇒ 403），全远程的库必须靠
+    # 这份**本地**目录封面兜底，否则该库卡片仍然是黑图。
+    _lib_covers = None
     # v6.3.5：v1/video/all 两个分类全量拉取后的原始条目缓存
     _all_videos = None
     # v6.3.5：全量分页用的排序参数。sort_type=2（服务端默认）的排序键存在大量
@@ -641,6 +647,7 @@ class UgreenClient(_IMediaClient):
     def init_config(self):
         # v6.3.5：路径映射与全量条目缓存都是「配置相关」的派生数据，配置一变必须重建
         self._lib_paths = None
+        self._lib_covers = None
         self._all_videos = None
         self._video_info_cache = {}
         if self._client_config:
@@ -1005,6 +1012,12 @@ class UgreenClient(_IMediaClient):
         """
         根据ItemId查询本地图片地址
         :param video_info: 可选的已缓存 video_info 数据，避免重复请求
+
+        ⚠️ v6.3.7 修复（网页端封面全黑）：旧实现 inner 分支拼的是
+        `getImageStream`（少了 'a'）且**不带凭证**，真机实测该端点恒返回
+        {"code":9405,...}（授权错误，77 字节 JSON）；/img 中转把这 77 字节
+        JSON 当图片吐给浏览器 ⇒ 条目封面 / 媒体库封面 / 正在观看 / 最近添加
+        **全部黑图**。正解是 getImaStream + query 凭证，见 _image_url_by_path()。
         """
         if not self._api:
             return ""
@@ -1019,11 +1032,7 @@ class UgreenClient(_IMediaClient):
                 return ""
             if remote:
                 return self._api.get_image_stream_url(path)
-            else:
-                image_url = f"{self._host}ugreen/v1/video/getImageStream?name={path}&size=1"
-                if inner:
-                    return self.get_nt_image_url(image_url)
-                return image_url
+            return self._image_url_by_path(path, inner=inner)
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取本地图片出错：" + str(e))
@@ -1077,24 +1086,84 @@ class UgreenClient(_IMediaClient):
         if self._lib_paths is not None:
             return self._lib_paths
         mapping = {}
+        covers = {}
         try:
             data = self._api.poster_wall_get_folder(page=1, page_size=200) or {}
             for folder in (data.get("folder_arr") or []):
                 if not isinstance(folder, dict):
                     continue
                 lib_id = folder.get("media_lib_set_id")
-                lib_path = folder.get("path")
-                if lib_id is None or not lib_path:
+                if lib_id is None:
                     continue
-                paths = mapping.setdefault(str(lib_id), [])
-                if str(lib_path) not in paths:
-                    paths.append(str(lib_path))
+                lib_path = folder.get("path")
+                if lib_path:
+                    paths = mapping.setdefault(str(lib_id), [])
+                    if str(lib_path) not in paths:
+                        paths.append(str(lib_path))
+                # v6.3.7：folder.cover 是本地的库封面路径，用于 media_list()
+                # 的 poster_paths 全是远程地址（会 403）时兜底。
+                cover = folder.get("cover")
+                if cover:
+                    lib_cover_arr = covers.setdefault(str(lib_id), [])
+                    if str(cover) not in lib_cover_arr:
+                        lib_cover_arr.append(str(cover))
             log.info(f"【{self.client_name}】媒体库根路径映射：{mapping}")
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取媒体库根路径出错：" + str(e))
         self._lib_paths = mapping
+        self._lib_covers = covers
         return mapping
+
+    def _image_url_by_path(self, path, inner=True):
+        """
+        v6.3.7 新增：把绿联的**本地图片路径**转成浏览器可用的图片地址。
+
+        ⚠️ 真机实测要点（踩过坑，勿改）：
+          · 端点必须是 `getImaStream`（少了 'a' 的 `getImageStream` 恒返回
+            {"code":9405,...} 授权错误，77 字节 JSON）。
+          · 凭证**必须在 query 里**（token / ugk，由 get_image_stream_url 按
+            _is_ugk 自动选名）；header / cookie 一律不认 —— 所以不能走
+            get_image_cookies() 那条「中转注入 header」的路子。
+          · name 参数由 get_image_stream_url() 内部 urlencode **恰好编码一次**
+            （空格→'+'、'/'→'%2F'）；**不要**再套一层编码 —— 实测单层编码
+            5/5 取到 JPEG，双重编码 0/5（服务端只认单层编码的路径）。
+        """
+        if not path or not self._api:
+            return ""
+        stream_url = self._api.get_image_stream_url(path)
+        if not stream_url:
+            return ""
+        if inner:
+            return self.get_nt_image_url(stream_url)
+        return stream_url
+
+    def _library_cover_path(self, lib):
+        """
+        v6.3.7 新增：为媒体库挑一个**可用的本地封面路径**。
+
+        取值优先级（都是实测过的真实字段）：
+          1. custom_cover（用户自定义封面）
+          2. media_list() 的 poster_paths —— 第一个**本地**路径
+          3. poster_wall_get_folder() 的 folder.cover（同一次请求顺带取到）
+          4. media_list() 的 backdrop_paths —— 第一个**本地**路径
+        ⚠️ 远程地址（http(s):// 开头，即 scraper.ugnas.com 那批）一律跳过：
+           它们带 auth_key 有时效，实测已过期返回 403 ⇒ 用不了。
+        ⚠️ 必须先调过 _load_library_paths()（get_libraries 里已保证）。
+        """
+        lib_id = str(lib.get("media_lib_set_id") or lib.get("id", ""))
+        candidates = []
+        custom = lib.get("custom_cover")
+        if custom:
+            candidates.append(custom)
+        candidates.extend(lib.get("poster_paths") or [])
+        candidates.extend((self._lib_covers or {}).get(lib_id) or [])
+        candidates.extend(lib.get("backdrop_paths") or [])
+        for one in candidates:
+            one = str(one or "").strip()
+            if one and not one.startswith("http"):
+                return one
+        return ""
 
     # ------------------- v6.3.6：剧集定位与集号解析 -------------------
     # 绿联把「季」做成**独立条目**：同一部剧的每一季都是一条独立条目，名字带
@@ -1449,6 +1518,10 @@ class UgreenClient(_IMediaClient):
                     "name": lib_name,
                     "type": library_type,
                     "path": lib_path,
+                    # v6.3.7：库封面。此前这里**没有 image**，模板
+                    # {% if Library.image %} 判空后回落到 Plex 专用组件 ⇒ 卡片黑图。
+                    "image": self._image_url_by_path(
+                        self._library_cover_path(lib)),
                     "link": lib_link,
                 })
                 log.info(f"【{self.client_name}】发现媒体库：id={lib_id}, name={lib_name}, type={library_type}, path={lib_path}")
