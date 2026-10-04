@@ -516,6 +516,19 @@ class Subscribe:
                 note_info = {}
             rss_sites = [site for site in rss_sites if site in rss_sites_valid]
             search_sites = [site for site in search_sites if site in search_sites_valid]
+            # 缺集明细：优先取订阅登记簿；登记簿还没有记录、而整季都缺时按 1..TOTAL 兜底。
+            # 否则会出现「卡片显示缺 N 集、点开弹窗却列不出集号」（升级前建的订阅即如此）。
+            lack_episodes = sorted(self.get_subscribe_tv_episodes(rss_tv.ID) or [])
+            lack_episodes_estimated = False
+            if not lack_episodes:
+                try:
+                    total_eps = int(rss_tv.TOTAL or 0)
+                    lack_num = int(rss_tv.LACK or 0)
+                except (TypeError, ValueError):
+                    total_eps = lack_num = 0
+                if total_eps > 0 and lack_num >= total_eps:
+                    lack_episodes = list(range(1, total_eps + 1))
+                    lack_episodes_estimated = True
             ret_dict[str(rss_tv.ID)] = {
                 "id": rss_tv.ID,
                 "name": rss_tv.NAME,
@@ -541,7 +554,8 @@ class Subscribe:
                 "current_ep": current_ep,
                 "fuzzy_match": fuzzy_match,
                 "state": rss_tv.STATE,
-                "lack_episodes": sorted(self.get_subscribe_tv_episodes(rss_tv.ID) or []),
+                "lack_episodes": lack_episodes,
+                "lack_episodes_estimated": lack_episodes_estimated,
                 "poster": note_info.get("poster"),
                 "release_date": note_info.get("release_date"),
                 "vote": note_info.get("vote"),

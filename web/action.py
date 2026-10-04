@@ -1737,6 +1737,7 @@ class WebAction:
         release_date = ""
         overview = ""
         lack_episodes = []
+        lack_episodes_estimated = False
         # 类型
         if mtype in MovieTypes:
             media_type = MediaType.MOVIE
@@ -1770,6 +1771,7 @@ class WebAction:
                                              tmdbid=rssinfo[rssid].get("tmdbid"))
             if media_type != MediaType.MOVIE:
                 lack_episodes = rssinfo[rssid].get("lack_episodes") or []
+                lack_episodes_estimated = rssinfo[rssid].get("lack_episodes_estimated") or False
             if overview and poster_path:
                 rssid_ok = True
 
@@ -1826,7 +1828,8 @@ class WebAction:
             "tmdbid": mediaid,
             "rssid": rssid,
             "seasons": seasons,
-            "lack_episodes": lack_episodes
+            "lack_episodes": lack_episodes,
+            "lack_episodes_estimated": lack_episodes_estimated
         }
 
     @staticmethod

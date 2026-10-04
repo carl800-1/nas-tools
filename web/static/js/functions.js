@@ -576,7 +576,8 @@ function show_mediainfo_modal(rtype, name, year, mediaid, page, rssid) {
       //缺失剧集
       if (ret.lack_episodes && ret.lack_episodes.length > 0) {
         $("#system_media_lack_info").html(
-            "<strong>缺失剧集</strong>（共 " + ret.lack_episodes.length + " 集）：" +
+            "<strong>缺失剧集</strong>（共 " + ret.lack_episodes.length + " 集" +
+            (ret.lack_episodes_estimated ? "，整季缺、待扫描确认" : "") + "）：" +
             ret.lack_episodes.map(function (epi) {
               return "第 " + epi + " 集";
             }).join("、")).show();
