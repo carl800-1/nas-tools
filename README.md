@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1153,6 +1153,24 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 > **不影响「补齐后自动退订」**：卡片进度条（已入库 / 总集数）和订阅完成判定都仍按
 > **总集数**计算 —— 已播出的集下齐了**不会**被当成「整季完成」而退订，后续新集照常继续下载。
 
+#### 2.55 刷流时不再重复下载库里已有的片子（v6.4.5）
+
+**现象**：刷流选种时，明明是媒体库里早就有的同一部片子，却还是被选中下载，
+白白占带宽、重复入库。
+
+**现在**：刷流任务的「选种规则」区多了一个「跳过已入库」开关。勾上以后，刷流在选种
+阶段会先查你自己的**媒体库目录**——电影按「片名 + 年份」比对，剧集**精确到季 / 集**
+（库里已有 S04E01–E09 就只跳过这几集，缺的集照常下载）。库里已经有的直接跳过，不再下载。
+
+- 判断**只看本地媒体库目录**，不额外联网；
+- 季号写法不一致时先跟 TMDB 对齐一次再比对，避免「发布方第四季 / 库里第三季」这类错位误判；
+- 默认**关闭**，只对勾选的任务生效；媒体库没配好或读取出错时**自动放行**，绝不误拦。
+
+> **顺带把「包含 / 排除」合成一个框**：原来的两个输入框现在合并成一个，用 `T=` 开头表示
+> 包含、`F=` 开头表示排除。例：`T=1080p F=预告`；多个条件用 `|` 连接，
+> 如 `T=1080p|2160p F=预告|花絮`。不写前缀时按「包含」处理，与旧用法兼容；
+> 编辑旧任务会自动拼成新写法回显，保存后原值不变。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1773,7 +1791,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.4   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.5   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1876,4 +1894,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.4_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.5_

@@ -3,6 +3,117 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.4.5 — 刷流「跳过已入库」+「包含/排除」合并为单输入框
+
+## 背景
+
+用户提出：「刷流时，发现有很多是库里已经有的同名的，就不要下载了」。两轮澄清后定下三个口径：
+
+| 维度 | 口径 | 理由 |
+|---|---|---|
+| 判断依据 | **媒体库目录**（纯本地扫描） | 不查 TMDB、零额外网络请求；依赖已配好的「媒体库同步目录」 |
+| 匹配粒度 | 电影「片名 + 年份」；剧集**精确到季 / 集** | 库里已有 S04E01–E09 就只跳这几集，缺的集仍下载 ⇒ 误杀最少 |
+| 季号对齐 | 发布季号 ≠ 库季号时，**用 TMDB 对齐一次** | 应对「发布方第四季 / TMDB 季划分」不一致 |
+
+随后用户追加：「把包含和排除合并，包含用 T=、去除用 F=，这样可以不多一列」——
+加「跳过已入库」后选种规则区从 9 变 10 卡（3×3 变末行孤列），合并输入框即可回到 3×3。
+
+## 生效点
+
+`app/brushtask.py::BrushTask.__check_rss_rule(...)`（唯一调用点 `brushtask.py:341`），
+返回 `True` = 放行、`False` = 拦截。整段被 try/except 包住、末尾 `return True` ⇒ **fail-open**。
+新判断插在 `return True` **之前** —— 即使本判断异常，也不影响上面的既有规则。
+
+规则值编码：`rss_rule` 字典 `str()` 后存 `SITE_BRUSH_TASK.RSS_RULE`，读出 `eval()`
+⇒ **新增键零数据库迁移**。
+
+## 改动（4 文件）
+
+| 文件 | 位置 | 改动 |
+|---|---|---|
+| `app/brushtask.py` | `__check_rss_rule` 末尾 | `if rss_rule.get("skip_exists"): if self.__is_media_exists(title=title): return False` |
+| `app/brushtask.py` | 新增 4 类属性 + 7 方法 | 见下 |
+| `web/action.py` | `__add_brushtask` | 读 `brushtask_skip_exists` → `rss_rule["skip_exists"]`；徽章加「跳过已入库」 |
+| `web/apiv1.py` | `BrushTaskUpdate.parser` | 新增 `brushtask_skip_exists`（Y/N） |
+| `web/templates/site/brushtask.html` | 选种规则区 | 开关卡片 + 含/排合并 + `brush_filter_parse/join` |
+
+### `app/brushtask.py` 新增结构
+
+- `_LIBRARY_DIR_RE` / `_LIBRARY_SEASON_RE` 两个编译好的正则
+- `__get_library_index()` — 扫 `movie_path` / `tv_path` / `anime_path`，兼容二级分类开/关两种布局，300s TTL 缓存
+- `__index_library_dir(...)` — 建索引，排除季目录与 `RMT_FAVTYPE`
+- `__find_library_entry(meta_info)` — 按 `get_name()` 查，电影只搜 movie、剧集搜 tv/anime，年份优先
+- `__get_library_seasons(entry_path)` — 返回 `{季号: 路径}`
+- `__get_library_episodes(season_path)` — 只解析 `RMT_MEDIAEXT` 文件，返回集号集合
+- `__align_season_by_tmdb(meta_info, library_seasons)` — 季号对齐
+- `__is_media_exists(title)` — 总判定
+
+## ★ 关键设计：为什么用轻量正则而不是 MetaInfo
+
+`MetaInfo` 纯本地解析、不查 TMDB 时 **`title` 恒为 `None`**（`title` 只在 `set_tmdb_info` 里赋值），所以：
+
+- 扫片名层只能用轻量正则 `^(?P<name>.+?)\s*[\(\[]\s*(?P<year>(?:19|20)\d{2})\s*[\)\]]$`；
+  实测 **0.009s / 925 目录**，而用 `MetaInfo` 解析 846 个目录要 **8.00s**（快约 800×）。
+- **不能复用 `get_no_exists_medias` / `get_moive_dest_path`**：前者内部依赖
+  `meta_info.title`（`media_server.py` 第 1311 行）；后者的 `get_format_dict()` 用 `media.title`
+  做 `{title}` 模板，纯本地解析会渲染成空 ⇒ 命中率极低。
+
+## 季号对齐语义
+
+`__align_season_by_tmdb(meta_info, library_seasons)`：
+
+- TMDB **有**该季 ⇒ 返回 `None`（库里确实缺，**放行**）；
+- TMDB **没有**该季 ⇒ 取 `max(tmdb_seasons)`，若该季在库中则返回它，否则 `None`。
+
+## 判定矩阵（`__is_media_exists`）
+
+- 电影：同名即 `True`
+- 剧集：无 `begin_season` ⇒ `False`；查库季；缺该季 ⇒ `__align_season_by_tmdb`
+- `__get_library_episodes` 为空 ⇒ `False`
+- `begin_episode is None`（整季包）⇒ `True`
+- 否则 `get_episode_list().issubset(episodes)`
+- 整体 `try/except` ⇒ `False`（放行）
+
+## 「包含/排除」合并（只改 html，后端 3 文件零改动）
+
+合并框在前端解析成 `brushtask_include` / `brushtask_exclude` 后**仍按原 key 提交**
+⇒ `action.py` / `apiv1.py` / `brushtask.py` 一行未动。
+
+- 多段用 **`|` 连接**而不是空格：后端 `brushtask.py:1000-1006` 是 **`re.search` 正则**，
+  空格会变成「字面空格」而不是「或」。
+- 编辑旧任务用 `brush_filter_join()` 拼成 `T=… F=…` 回显，保存后原值不变（round-trip 已验证）。
+
+## 验证
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| 真机（NAS） | 改后 `brushtask.py` 投放容器 + 真 `Config`/`MetaInfo`/`Media`/真实媒体库；7 用例 | **全部符合期望** |
+| ↳ 用例 | S04E05→放行 ｜ S03E05→跳过 ｜ S03E99→放行 ｜ S02E05→跳过 ｜ S01E01-E26→跳过 ｜ S04 整季包→放行 ｜ S03 整季包→跳过 | ✓ |
+| ↳ 索引 | 927 片名 / 934 目录，构建 0.046s | ✓ |
+| 离线 | `_verify_skipexists.py` 51/51（结构 17 + 索引 13 + 判定矩阵 10 + 边界 3 + 开关 6…） | ✓ |
+| 界面 | `_verify_includeexclude.py` 57/57（含 `node --check` 全量内联 JS） | ✓ |
+| 补丁 | 15 锚点干跑 27/27、落盘 31/31（回读逐字节一致）；`py_compile` 3 文件 OK | ✓ |
+| 回归 | `_verify_644.py` 49/51 ｜ `_verify_release_644.py` 76/77 ｜ `_verify_log_api_usage.py` 7/7 | 3 个 FAIL 均为「面向发布时刻的快照断言」，非真实回归 |
+
+## 踩坑
+
+- **一度误判「季号错位」**：只看库目录（诛仙只有 Season 1/2/3）就下了结论。跑完整识别链路后更正：
+  TMDB 该剧**确实有第 4 季**、识别结果 `begin_season=4` 与发布方一致 ⇒ 诛仙 S04 库里确实没有、
+  放行才是对的。若按「忽略季号」的方案反而会误杀。**结论必须来自完整链路，不能只看中间产物。**
+- **容器内源码是旧版**：真机验证脚本从容器 `/nas-tools/app/brushtask.py` 抽 AST 时
+  `KeyError: '_LIBRARY_DIR_RE'`。SFTP 被 chroot、base64 会撑爆命令行 ⇒ 最终用
+  **ssh stdin 管道** `docker exec -i nas-tool sh -c 'cat > /tmp/_bt_new.py'` 投放后 `BT_SRC=/tmp/_bt_new.py`。
+- **Git Bash 会 mangle `/tmp/...`** 成 Windows 路径 ⇒ 加 `MSYS_NO_PATHCONV=1`。
+- **无头 Edge 截图在沙箱内静默失败**（进程起来但不产 PNG）⇒ 关沙箱才出图。
+- **`setattr(instance, ...)` 不绑定 `self`**（私有名字被字面保留，不做名称改写）⇒ 挂类才能按类属性绑定。
+
+## 已知边界
+
+- 判定依赖「媒体库目录」已配置；未配置时 `__get_library_index` 返回空 ⇒ **自动不生效、不报错**。
+- 订阅（RSS）链路不经过本判断，本版只覆盖**刷流选种**。
+- 剧集按「发布名 = 库名」匹配；若发布方与库的片名写法差异过大仍会漏判（漏判 = 放行，不误拦）。
+- 季号对齐对「库里没有该季」的种子会查一次 TMDB（有网络依赖，失败则放行）。
+
 # v6.4.4 — 缺集只统计「已播出」的集（只改展示口径，判定与搜索一字不动）
 
 ## 背景
