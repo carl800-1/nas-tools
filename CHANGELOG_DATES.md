@@ -9,6 +9,7 @@
 
 | 版本 | 发布日期 |
 |---|---|
+| [v6.4.5](https://github.com/carl800-1/nas-tools/releases/tag/v6.4.5) | 2026-10-04 |
 | [v6.4.4](https://github.com/carl800-1/nas-tools/releases/tag/v6.4.4) | 2026-10-04 |
 | [v6.4.3](https://github.com/carl800-1/nas-tools/releases/tag/v6.4.3) | 2026-10-04 |
 | [v6.4.2](https://github.com/carl800-1/nas-tools/releases/tag/v6.4.2) | 2026-10-04 |
@@ -90,4 +91,4 @@
 | [v3.7.1](https://github.com/carl800-1/nas-tools/releases/tag/v3.7.1) | 2026-06-03 |
 | [v3.7.0](https://github.com/carl800-1/nas-tools/releases/tag/v3.7.0) | 2026-06-03 |
 
-_共 80 个版本，最新为 v6.4.4（2026-10-04）。本表由发版流程同步维护。_
+_共 81 个版本，最新为 v6.4.5（2026-10-04）。本表由发版流程同步维护。_
