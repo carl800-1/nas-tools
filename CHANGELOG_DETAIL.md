@@ -3,6 +3,92 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.4.4 — 缺集只统计「已播出」的集（只改展示口径，判定与搜索一字不动）
+
+## 背景
+
+用户在订阅详情弹窗看到「第 4 季 · 缺失剧集（共 26 集）：第 1 集 … 第 26 集」，提出
+「诛仙第四季还没到 26 集，应该只缺到最新上映的吧」—— **用户是对的**。
+
+事实取证（三条独立来源 + 代码）：
+
+| 来源 | 内容 |
+|---|---|
+| 公开资料（tnt43 / icydmw） | 诛仙第四季（别名「诛仙 最终季」）**更新至第 09 集**、标签「连载」，2026-10-02 更新到第 9 集 |
+| TMDB / NeoDB / Eggplant | 该季 **number of episodes = 26**（即 TMDB `seasons[].episode_count`） |
+| 代码 | 总集数唯一来源 `Media.get_tmdb_season_episodes_num()` 直接读 `seasons[].episode_count`，**全仓没有「已播出」概念** |
+
+⇒ **26 是「宣布的总集数（含未播出）」，已播出只有 9**。
+
+## 链路（为什么界面是 26）
+
+```
+subscribe.py:863  check_exists_medias(meta_info, total_ep={4: 26})
+  └─ downloader.py:1660  episode_num = 26
+       └─ get_no_exists_episodes(meta_info, 4, 26)      # 库里 0 集 ⇒ 缺 1..26
+            └─ downloader.py:1704  len(26) >= 26 ⇒ no_item={"episodes": [], "total_episodes": 26}
+                 └─ subscribe.py:1014  用 1..total_episodes 填充
+                      └─ RSS_TV_EPISODES（明细）+ RSS_TVS.LACK = 26
+                           └─ functions.js:589  「共 26 集：第 1 集 … 第 26 集」
+```
+
+## ★ 为什么不能顺手把判定基数也改成 9
+
+若把传给 `check_exists_medias` 的 `episode_count` 也换成已播出数：
+库里 1..9 齐 ⇒ 缺集为空 ⇒ `downloader.py:1752` 判 `return_flag=True`（已全部存在）
+⇒ `subscribe.py:874-882` 走 `finish_rss_subscribe()` ⇒ **本季还在连载却中途自动退订**，
+后续新集再也不下。现状之所以没踩到，是**靠那个还没播出的第 26 集当「哨兵」**——巧而非设计。
+
+⇒ 本版**只改展示口径**：`check_exists_medias` 的 `return_flag` / `no_exists`
+（= 退订判定与搜索目标）与 `Torrent.get_intersection_episodes` 一字不动；
+`RSS_TVS.LACK`（卡片进度条分子）仍按**全量**计，卡片继续如实显示「已入库 9 / 共 26」。
+
+## 改动（5 文件 / 8 处）
+
+| 文件 | 位置 | 改动 |
+|---|---|---|
+| `app/media/media.py` | 新增 `get_tmdb_season_aired_episodes_num()` | 由 `last_episode_to_air` 推算已播出集数：目标季 < 当前播出季 ⇒ 该季总集数（已播完）；== ⇒ 其集号；> ⇒ 0；拿不到 ⇒ 0（**不裁剪**） |
+| `app/helper/db_helper.py` | `update_rss_tv_lack()` | 新增可选 `episodes_display`：`LACK` 仍按 `lack_episodes` 全量计，`RSS_TV_EPISODES` 写 `episodes_display`；不传时与旧语义**完全一致** |
+| `app/subscribe.py` | `update_subscribe_tv_lack()` | 算出 aired 后把落库明细裁剪为只含已播出的集；`aired <= 0` 不裁剪 |
+| `app/subscribe.py` | `refresh_rss_metainfo()` | 同一口径：写回登记簿前同样按 aired 裁剪 |
+| `web/action.py` | `__media_info` 弹窗接口 | 新增 `aired_episodes` / `total_episodes`（仅在季号 > 0 时查一次 TMDB，非订阅弹窗不发请求） |
+| `web/static/js/functions.js` | 缺集区块 | 追加播出进度；明细为空但有进度时显示「已播出的集已全部入库」 |
+
+## 验证
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| 离线（行为） | `_verify_644.py`：`Media` 两个方法、`DbHelper.update_rss_tv_lack`、`Subscribe.update_subscribe_tv_lack` **全部由真实源码 AST 派生后 exec** | **51/51** |
+| 关键用例 | 诛仙形态（总 26 / 播到 9） | 库 0 集 ⇒ LACK=26、明细=1..9；库 1..9 ⇒ 明细清空、LACK=17；库 1..5 ⇒ 明细=6..9、LACK=21 |
+| 边界 | 已播完的季 / 拿不到 `last_episode_to_air`（aired=0）/ 季号不匹配 | 均**不裁剪**，与 v6.4.3 一致 |
+| 反向对照 | 用备份里的旧 `update_subscribe_tv_lack` 驱动同一输入 | 得到明细 1..26 且无 `episodes_display` ⇒ 证明确实生效 |
+| 逐字节可逆 | 用补丁常量反向替换后与备份**逐字节相同**（5 文件全覆盖） | ✓ |
+| 回归守卫 | `git diff` 不含 `downloader.py` / `searcher.py` / `media_server.py` / 两个客户端；`subscribe.py` 里 `check_exists_medias` 调用段、退订分支、`get_intersection_episodes` 段**逐字节未变** | ✓ |
+| 回归 | `_verify_643.py` 54/54 ｜ `_verify_642.py` 57/57 ｜ `_verify_641_lack_fallback.py` 35/35 ｜ `_verify_640_subscribe.py` 55/55 ｜ `_verify_log_api_usage.py` 7/7 | 全绿 |
+
+## 踩坑
+
+- `_verify_640_subscribe.py` 的 `make_obj()` **没有 `self.media`** ⇒ 新代码调
+  `self.media.get_tmdb_season_aired_episodes_num()` 抛 `AttributeError`，被
+  `subscribe_search_tv` 的 `except Exception` 吞掉 ⇒ 表现为「静默不落库」+ 后续
+  `search_args[0]` IndexError。这是**桩缺属性**（生产侧 `Subscribe.init_config()` 里
+  `self.media = Media()` 一直存在），已按纪律**从真实源码派生**补桩，而不是手写。
+- **抽取方法时装饰器会丢**：真实 `Media.get_tmdb_season_*` 带 `@staticmethod`，
+  直接拼进桩类会退化成实例方法 ⇒ `self.media.f(tv_info=..., season=...)` 会把实例
+  错位绑定到 `tv_info`。已显式补回 `staticmethod`。
+- 不要写成 `for n in ("a", "b"): setattr(...)` —— `_verify_log_api_usage.py` 的 [B] 段
+  启发式会把这种形状（含其后 6 行内的 `setattr(`）当成「log 桩名字表」而误报，
+  已改为两条显式 `setattr`。
+
+## 已知边界
+
+- **未开播的季**（aired == 0）不裁剪 ⇒ 界面仍会把整季列为「缺失（待扫描确认）」。
+  闭合需要额外区分「未开播」与「取不到播出信息」，本版未做。
+- `get_tv_episodes` 内部把「季列表为空 / 查询抛异常」吞成 `[]`（v6.4.3 已记录的边界），本次未改。
+- `RSS_TVS.TOTAL` 仍是 TMDB 总集数；TMDB 后续改集数时由 `refresh_rss_metainfo()`
+  （受 `name_follow_tmdb_changed` 开关控制）同步，与本版改动无关。
+- 存量订阅的登记簿要等**下一轮订阅扫描**才会按新口径刷新，界面在此之前仍显示旧明细。
+
 # v6.4.3 — 飞牛/绿联「查不到剧 / 查不了」时返回 None（不再误报缺集、不再误退订）
 
 ## 背景（承接 v6.4.2 的追问）

@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.4** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1138,6 +1138,21 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 
 > 只改「查不到的时候怎么回答」，不动读取季集的逻辑本身；能正常查到的媒体库，结果与上一版一致。
 
+#### 2.54 缺失集只算到「已播出」，连载中的季不再把没播的算进去（v6.4.4）
+
+**现象**：诛仙第 4 季在数据源里标着 26 集、实际只播到第 9 集，订阅详情却写着
+「缺失剧集（共 26 集）：第 1 集 … 第 26 集」，把 17 集**还没播**的也算成了缺失。
+
+**原因**：整条链路只知道「总集数」（该季排定的总集数，含已排期和尚未播出的），
+没有「已播出」这个概念，于是缺集一律从第 1 集算到总集数。
+
+**现在**：连载中的季**只把已播出的集**算作缺失，旁边一并给出本季播出进度
+（例如「共 9 集，本季已播出 9 / 26 集（连载中）」）；已播出的集都入库后，
+弹窗会提示「已播出的集已全部入库」而不是留空。某一季已经播完时，结果与上一版完全一致。
+
+> **不影响「补齐后自动退订」**：卡片进度条（已入库 / 总集数）和订阅完成判定都仍按
+> **总集数**计算 —— 已播出的集下齐了**不会**被当成「整季完成」而退订，后续新集照常继续下载。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1758,7 +1773,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.3   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.4   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1861,4 +1876,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.3_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.4_
