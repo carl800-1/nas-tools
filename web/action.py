@@ -1738,6 +1738,7 @@ class WebAction:
         overview = ""
         lack_episodes = []
         lack_episodes_estimated = False
+        rss_season = ""
         # 类型
         if mtype in MovieTypes:
             media_type = MediaType.MOVIE
@@ -1772,6 +1773,9 @@ class WebAction:
             if media_type != MediaType.MOVIE:
                 lack_episodes = rssinfo[rssid].get("lack_episodes") or []
                 lack_episodes_estimated = rssinfo[rssid].get("lack_episodes_estimated") or False
+                # 订阅所在的季（形如 "S04"）：缺集明细必须带季号，否则用户分不清
+                # 是「第 4 季缺 26 集」还是「第 1 季缺 26 集」（多季剧极易误读）
+                rss_season = rssinfo[rssid].get("season") or ""
             if overview and poster_path:
                 rssid_ok = True
 
@@ -1829,7 +1833,8 @@ class WebAction:
             "rssid": rssid,
             "seasons": seasons,
             "lack_episodes": lack_episodes,
-            "lack_episodes_estimated": lack_episodes_estimated
+            "lack_episodes_estimated": lack_episodes_estimated,
+            "rss_season": rss_season
         }
 
     @staticmethod

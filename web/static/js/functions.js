@@ -562,7 +562,19 @@ function show_mediainfo_modal(rtype, name, year, mediaid, page, rssid) {
     if (ret.code === 0) {
       //显示信息
       $("#system_media_name").text(ret.title);
-      $("#system_release_date").text(ret.release_date)
+      //订阅所在的季（多季剧必须标出来，否则弹窗里看不出这条订阅管的是哪一季）
+      var season_num = 0;
+      if (ret.rss_season) {
+        var season_matched = String(ret.rss_season).match(/(\d+)/);
+        if (season_matched) {
+          season_num = parseInt(season_matched[1], 10) || 0;
+        }
+      }
+      if (season_num > 0) {
+        $("#system_release_date").text((ret.release_date || "") + " · 第 " + season_num + " 季")
+      } else {
+        $("#system_release_date").text(ret.release_date)
+      }
       if (ret.poster_path) {
         $("#system_media_poster").attr("img-src", ret.poster_path);
       } else {
@@ -573,10 +585,11 @@ function show_mediainfo_modal(rtype, name, year, mediaid, page, rssid) {
       } else {
         $("#system_media_overview").text(ret.overview);
       }
-      //缺失剧集
+      //缺失剧集（带季号：缺集登记簿是按订阅的季存的，不标季会被误读成第 1 季）
       if (ret.lack_episodes && ret.lack_episodes.length > 0) {
+        var season_label = season_num > 0 ? "第 " + season_num + " 季 · " : "";
         $("#system_media_lack_info").html(
-            "<strong>缺失剧集</strong>（共 " + ret.lack_episodes.length + " 集" +
+            "<strong>" + season_label + "缺失剧集</strong>（共 " + ret.lack_episodes.length + " 集" +
             (ret.lack_episodes_estimated ? "，整季缺、待扫描确认" : "") + "）：" +
             ret.lack_episodes.map(function (epi) {
               return "第 " + epi + " 集";

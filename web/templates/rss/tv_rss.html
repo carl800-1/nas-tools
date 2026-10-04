@@ -80,18 +80,6 @@
                   <span class="badge bg-blue"></span>  完成
                 {% endif %}
               </div>
-              {% if Attr.lack_episodes %}
-                <div class="text-muted" title="缺失剧集：第 {{ Attr.lack_episodes|join('、') }} 集{% if Attr.lack_episodes_estimated %}（整季缺，待扫描确认）{% endif %}">
-                  <small>
-                    缺 {{ Attr.lack_episodes|length }} 集{% if Attr.lack_episodes_estimated %}（整季）{% endif %}：
-                    {% for LackEpisode in Attr.lack_episodes[:12] %}
-                      第 {{ LackEpisode }} 集{% if not loop.last %}、{% endif %}
-                    {% endfor %}
-                    {% if Attr.lack_episodes|length > 12 %} …{% endif %}
-                    {% if Attr.lack_episodes_estimated %}<span class="text-warning">待扫描确认</span>{% endif %}
-                  </small>
-                </div>
-              {% endif %}
               <div{% if Attr.over_edition or
                     Attr.filter_restype or
                     Attr.filter_pix or

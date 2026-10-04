@@ -931,8 +931,11 @@ class UgreenClient(_IMediaClient):
         """
         查询缺少哪几集
         """
+        # 查询不了就返回 None（当前契约：None = 无法确认，由调用方回退到目录扫描）。
+        # 原先返回 [] 会被 check_exists_medias 当成「一集都不缺」⇒ 误判订阅已完成并清除，
+        # 而 emby/plex 在这一层返回的都是 None。
         if not self._api:
-            return []
+            return None
         if not season:
             season = 1
         try:
@@ -943,14 +946,14 @@ class UgreenClient(_IMediaClient):
                 season=season,
             )
             if not isinstance(exists_episodes, list):
-                return []
+                return None
             exists_episodes = [ep.get("episode_num") for ep in exists_episodes]
             total_episodes = [ep for ep in range(1, total_num + 1)]
             return list(set(total_episodes).difference(set(exists_episodes)))
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】查询缺失集数出错：" + str(e))
-            return []
+            return None
 
     def get_episode_image_by_id(self, item_id, season_id, episode_id):
         """
@@ -1173,13 +1176,20 @@ class UgreenClient(_IMediaClient):
 
     @staticmethod
     def _normalize_title(name):
-        """把绿联条目名归一化成可比较的剧名：去掉「第 N 季」/「Season N」/尾部年份。"""
+        """把绿联条目名归一化成可比较的剧名：去掉「第 N 季」/「季 N」/「Season N」/尾部年份。
+
+        ⚠️ 季后缀有**两种语序**，且在真实媒体库里并存（实测 123 条剧集：「第 N 季」
+        58 条、「季 N」47 条，如「诛仙 季 1」「生活大爆炸 季 12」）。只剥离「第 N 季」
+        会让「诛仙 季 1」归一化后仍是「诛仙 季 1」≠「诛仙」⇒ 条目被判为不存在 ⇒
+        整部剧所有季都误报「一集都没有」，并触发重复下载。
+        """
         if not name:
             return ""
         text = str(name).strip()
         for _ in range(2):
-            text = re.sub(r"[\s\-_·:：]*第\s*\d+\s*季.*$", "", text).strip()
+            text = re.sub(r"[\s\-_·:：]*第\s*[\d一二三四五六七八九十]+\s*季.*$", "", text).strip()
             text = re.sub(r"[\s\-_·:：]*[Ss]eason\s*\d+.*$", "", text).strip()
+            text = re.sub(r"[\s\-_·:：]*季\s*\d+.*$", "", text).strip()
         text = re.sub(r"[\s\-_·]*[（(]\s*(?:19|20)\d{2}\s*[)）]\s*$", "", text).strip()
         return text
 
@@ -1197,15 +1207,49 @@ class UgreenClient(_IMediaClient):
         return bool(base_name) and base_name == base_title
 
     @staticmethod
+    def _cn_numeral(text):
+        """中文数字转整数（一~九十九）：'十二' -> 12；解析不到返回 0。"""
+        if not text:
+            return 0
+        text = str(text).strip()
+        if text.isdigit():
+            return int(text)
+        digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        if "十" in text:
+            left, _, right = text.partition("十")
+            if left and left not in digits:
+                return 0
+            if right and right not in digits:
+                return 0
+            tens = digits.get(left, 1) if left else 1
+            ones = digits.get(right, 0) if right else 0
+            return tens * 10 + ones
+        total = 0
+        for ch in text:
+            if ch not in digits:
+                return 0
+            total = total * 10 + digits[ch]
+        return total
+
+    @staticmethod
     def _parse_season_num(name):
-        """从条目名解析季号：'宙斯之血 第 2 季' -> 2；解析不到返回 0。"""
+        """从条目名解析季号：'宙斯之血 第 2 季'/'诛仙 季 1'/'大道朝天 第一季' -> 1~N；解析不到返回 0。
+
+        ⚠️ 必须同时认「季 N」这种语序（数字在「季」**之后**，实测 47/123 条剧集这么写）：
+        只认「第 N 季」会让这些条目的季号恒为 0，多季剧的目标季在预筛阶段被整条滤掉，
+        最终误报「该季一集都没有」。
+        """
         if not name:
             return 0
         text = str(name)
-        matched = re.search(r"第\s*(\d+)\s*季", text)
+        matched = re.search(r"第\s*([\d一二三四五六七八九十]+)\s*季", text)
+        if matched:
+            return UgreenClient._cn_numeral(matched.group(1))
+        matched = re.search(r"[Ss]eason\s*(\d+)", text)
         if matched:
             return int(matched.group(1))
-        matched = re.search(r"[Ss]eason\s*(\d+)", text)
+        matched = re.search(r"季\s*(\d+)", text)
         if matched:
             return int(matched.group(1))
         return 0
