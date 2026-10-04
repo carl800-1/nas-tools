@@ -961,7 +961,7 @@ class TrimeMediaClient(_IMediaClient):
     def get_movies(self, title, year=None):
         """根据标题和年份，检查电影是否存在"""
         if not self.__is_ready():
-            return []
+            return None
         try:
             ret_movies = []
             for item in self._api.search_list(keywords=title) or []:
@@ -983,7 +983,7 @@ class TrimeMediaClient(_IMediaClient):
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】搜索电影出错：" + str(e))
-            return []
+            return None
 
     def __get_series_id_by_name(self, name, year):
         """按标题和年份查找电视剧 guid"""
@@ -1056,10 +1056,16 @@ class TrimeMediaClient(_IMediaClient):
     def get_no_exists_episodes(self, meta_info, season, total_num):
         """查询缺少哪几集"""
         if not self.__is_ready():
-            return []
+            return None
         if not season:
             season = 1
         try:
+            # 找不到这部剧时返回 None（= 无法确认），让上层回退本地目录扫描。
+            # 绝不能返回 [] —— 那等于「该季一集都不缺」，订阅会被误判为已完成并清除。
+            if not self.__get_series_id_by_name(meta_info.title, meta_info.year):
+                log.info(f"【{self.client_name}】未在媒体库中找到剧集：{meta_info.title}"
+                         f"（{meta_info.year or '不限年份'}），本轮无法确认缺失集")
+                return None
             exists = self.get_tv_episodes(
                 title=meta_info.title,
                 year=meta_info.year,
@@ -1067,14 +1073,14 @@ class TrimeMediaClient(_IMediaClient):
                 season=season,
             )
             if not isinstance(exists, list):
-                return []
+                return None
             exists_nums = [ep.get("episode_num") for ep in exists]
             all_nums = list(range(1, int(total_num) + 1))
             return sorted(set(all_nums).difference(set(exists_nums)))
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】查询缺失集数出错：" + str(e))
-            return []
+            return None
 
     def get_iteminfo(self, itemid):
         """根据 ItemId 查询项目详情"""

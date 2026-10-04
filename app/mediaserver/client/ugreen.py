@@ -822,7 +822,7 @@ class UgreenClient(_IMediaClient):
         匹配（自动忽略「第 N 季」等后缀差异），年份只在存在相符候选时用于收窄。
         """
         if not self._api:
-            return []
+            return None
         try:
             matched = []
             for video in (self._all_library_videos() or []):
@@ -847,7 +847,7 @@ class UgreenClient(_IMediaClient):
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】搜索电影出错：" + str(e))
-            return []
+            return None
 
     def get_tv_episodes(self, item_id=None, title=None, year=None, tmdbid=None, season=None):
         """
