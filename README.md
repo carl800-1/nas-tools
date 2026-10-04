@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.3** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1124,6 +1124,20 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 > 顺带修了一个隐患：绿联查询不可用（登录失败 / 连接异常）时，不再被当成「已经全都有了」，
 > 避免把还没补齐的订阅当成已完成而**自动退订**。
 
+#### 2.53 飞牛/绿联「查不到剧」时不再误报缺集、不再误退订（v6.4.3）
+
+**现象**：飞牛影视里明明有这部剧，订阅却报「整季都缺」并反复重新下载；更糟的是，
+飞牛连不上（登录失效 / 网络异常）时，还没下完的订阅会被当成「已经下完了」**自动退订**。
+
+**原因**：订阅检查会拿剧名和年份去媒体库里比对，飞牛要求**名字与年份完全相等**才认 ——
+差一点就被当成「库里没有这部剧」，该季每一集都判成「缺」。而查询失败时返回的是一个
+**空结果**，上层把它读成「一集都不缺」，于是订阅被误判完成并清除。
+
+**现在**：这两种「拿不准」的情况都会如实表示**无法确认**，改由本地目录扫描复核，
+既不凭空报「整季全缺」，也不会误退订。绿联影视的电影查重也一并对齐。
+
+> 只改「查不到的时候怎么回答」，不动读取季集的逻辑本身；能正常查到的媒体库，结果与上一版一致。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1744,7 +1758,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.2   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.3   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1847,4 +1861,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.2_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.3_

@@ -3,6 +3,105 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.4.3 — 飞牛/绿联「查不到剧 / 查不了」时返回 None（不再误报缺集、不再误退订）
+
+## 背景（承接 v6.4.2 的追问）
+
+v6.4.2 修的是绿联「季名两种语序」导致订阅误报缺集。随后复核**飞牛影视有没有同样的问题**，
+结论是「一半有、一半没有」：
+
+| | 绿联 | 飞牛 |
+|---|---|---|
+| A 类**触发原因** | 季名 `季 N` 语序解析失败 | 剧名 / 年份**精确比对**不中 |
+| A 类**症状**（误报整季缺 + 重复下载） | 有 | **同样有** |
+| B 类（返回 `[]` 被当「已完整」⇒ 误退订） | v6.4.2 已修 | **未修** |
+
+## 根因与契约
+
+`check_exists_medias()`（`app/downloader/downloader.py:1687-1692`）的既定契约是：
+
+```python
+no_exists_episodes = self.mediaserver.get_no_exists_episodes(...)
+if no_exists_episodes is None:      # None = 无法确认 ⇒ 回退本地目录扫描
+    no_exists_episodes = self.filetransfer.get_no_exists_medias(...)
+if no_exists_episodes:              # 非空 = 缺这些集
+    ...
+# 客户端与目录扫描都拿不到东西 ⇒ return_flag 保持 False ⇒ 在 1752 行被置 True（= 已全部存在）
+```
+
+各客户端在这一层的失败返回值**必须**是 `None`：
+
+| 客户端 | `get_no_exists_episodes` 失败 | `get_movies` 失败 |
+|---|---|---|
+| emby | `None` | `None` |
+| jellyfin | `None` | `None` |
+| plex | `None` | `None` |
+| ugreen | `None`（v6.4.2 修） | **`[]`** ← 本版修 |
+| trimemedia | **`[]`** ← 本版修 | **`[]`** ← 本版修 |
+
+而 `[]` 在调用方眼里是「**一集都不缺**」，于是：
+连接失败 / 查询异常 ⇒ 订阅被判 `exist_flag=True` 且 `library_no_exists` 为空 ⇒
+`app/subscribe.py:869` 走 `finish_rss_subscribe()` ⇒ **订阅被静默判完成并清除**。
+
+飞牛还有第二条同源路径：`__get_series_id_by_name()` 用「剧名精确相等 + 年份精确相等」找剧，
+找不到就返回 `None` ⇒ `get_tv_episodes()` 返回 `[]` ⇒ `get_no_exists_episodes()` 把
+`exists_nums` 算成空 ⇒ **返回全部集号**（= 误报「整季全缺」）⇒ 反复提交下载。
+症状与绿联 A 类一致，只是触发原因不同（绿联是季名语序，飞牛是剧名/年份比对）。
+
+## 改动（2 文件 / 7 处，全部是「查不到时返回 None」）
+
+| 文件 | 位置 | 改动 |
+|---|---|---|
+| `app/mediaserver/client/trimemedia.py` | `get_movies` 未就绪 / 异常 | `return []` → `return None` |
+| 同上 | `get_no_exists_episodes` 未就绪 | `return []` → `return None` |
+| 同上 | `get_no_exists_episodes` **新增预检** | 按名字找不到剧 ⇒ 记日志并 `return None` |
+| 同上 | `get_no_exists_episodes` 类型防御 / 异常 | `return []` → `return None` |
+| `app/mediaserver/client/ugreen.py` | `get_movies` 未启用 / 异常 | `return []` → `return None` |
+
+**刻意不动 `get_tv_episodes`**：它同时被「媒体库同步」使用（`app/mediaserver/media_server.py:325`
+存 `seasoninfo`），改它的返回契约会波及同步数据 ⇒ 把「按名字找不到剧」的判定放进
+`get_no_exists_episodes` 里做预检，公开契约保持原样。
+
+**正常路径行为完全不变**：库里真的没有这一季 ⇒ 仍返回全部集号（正确答案）；
+库里已齐 ⇒ 仍返回 `[]`（正确答案）。只有「查不了」才变成 `None`。
+
+## 验证
+
+| 层 | 内容 | 结果 |
+|---|---|---|
+| 离线（行为） | `_verify_643.py`：飞牛 / 绿联方法**由真实源码 AST 派生**后 exec，跑失败路径 + 正常路径真值表 | **54/54** |
+| 端到端 | 真实 `check_exists_medias` + 同一磁盘真相（缺 1/2/3）对照 `None` vs `[]` | 见下 |
+| 端到端结果 | 客户端返回 `None` ⇒ 回退目录扫描被调用、`exist_flag=False`、缺失集落库；<br>客户端返回 `[]`（旧） ⇒ **不回退、`exist_flag=True`（磁盘明明缺 3 集）** | **符合预期** |
+| 反向对照 | PREV（`19578d6`）旧实现：找不到剧 ⇒ **返回全部集号**（误报整季缺）；未就绪 ⇒ **返回 `[]`**（误判已完整） | 已钉死 |
+| 契约护栏 | 脚本内断言 `get_tv_episodes` 与 PREV **逐字节相同** | ✓ |
+| 回归 | `_verify_642.py` 57/57 ｜ `_verify_641_lack_fallback.py` 35/35 ｜ `_verify_640_subscribe.py` 53/53 | 全绿 |
+| 桩合规 | `_verify_log_api_usage.py` 7/7（桩名全部从 `log.py` 真实公开面派生） | ✓ |
+
+桩纪律：假 `_TrimeApi` 四个方法的**形参名**、假 `MediaServer` / `FileTransfer` / `Media`
+的方法名与形参名，全部由真实源码 AST 派生并在脚本中断言；`meta_info` 用到的属性
+由正则从被测方法源码里抽出后断言 —— 避免「桩比产品更宽容」造成的假绿。
+
+## 踩坑
+
+- `attrs_on()` 用 `ast.parse()` 解析**类体缩进片段**会 `IndentationError` ⇒ 必须先 `textwrap.dedent()`。
+- 断言辅助 `check(tag, cond, extra)` 必须容忍 `extra=None`，否则**断言失败的打印本身再抛
+  `TypeError`**，把真正的失败信息整个盖掉。
+- 复用旧版验证脚本时，「未就绪」场景要用 `_api=None`，而不是一个 token 齐全的假 `_TrimeApi` ——
+  否则测到的是「找不到剧」分支，**两条分支会看起来都通过**。
+- `_verify_640_subscribe.py` / `_verify_641_lack_fallback.py` 里各有一条断言**自 v6.4.2 起
+  必然为假**（它们要求订阅卡片含 `Attr.lack_episodes*`，而 v6.4.2 按用户要求把该区块整段删了）。
+  这是**断言过时不是回归**（已用 git 核对：v6.4.1 有 6 处、v6.4.2 起 0 处），
+  已就地改成新语义 —— 断言卡片**不再**含缺集区块。
+
+## 已知边界
+
+- `get_tv_episodes` 内部把「季列表为空 / 查询抛异常」一律吞成 `[]`，而 `[]` 在
+  `get_no_exists_episodes` 里等于「该季一集都没有」⇒ 这类**瞬时故障**仍会表现为
+  「整季全缺」（**响亮失败**：会重复搜索下载，但**不会**静默误删订阅）。
+  彻底闭合需要让 `get_tv_episodes` 区分「查不到」与「确实没有」，属公开契约变更，本版未做。
+- 本机媒体服务器是**绿联**，无飞牛真机环境 ⇒ 上述结论来自**代码 + 离线**验证，未做飞牛真机复验。
+- 绿联 `get_tv_episodes` 自身异常时同样仍返回 `[]`（同上，未改）。
+
 # v6.4.2 — 绿联「季 N」条目名导致订阅缺集误报 + 缺集明细标明季
 
 ## 现象（真机取证，2026-10-04）
