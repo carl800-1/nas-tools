@@ -586,14 +586,24 @@ function show_mediainfo_modal(rtype, name, year, mediaid, page, rssid) {
         $("#system_media_overview").text(ret.overview);
       }
       //缺失剧集（带季号：缺集登记簿是按订阅的季存的，不标季会被误读成第 1 季）
+      //连载中的季只统计到「已播出」的集，并给出本季播出进度，避免把没播的集当成缺失
+      var season_label = season_num > 0 ? "第 " + season_num + " 季 · " : "";
+      var air_scope = "";
+      if (ret.aired_episodes != null && ret.total_episodes) {
+        air_scope = "本季已播出 " + ret.aired_episodes + " / " + ret.total_episodes + " 集" +
+            (ret.aired_episodes < ret.total_episodes ? "（连载中）" : "");
+      }
       if (ret.lack_episodes && ret.lack_episodes.length > 0) {
-        var season_label = season_num > 0 ? "第 " + season_num + " 季 · " : "";
         $("#system_media_lack_info").html(
             "<strong>" + season_label + "缺失剧集</strong>（共 " + ret.lack_episodes.length + " 集" +
+            (air_scope ? "，" + air_scope : "") +
             (ret.lack_episodes_estimated ? "，整季缺、待扫描确认" : "") + "）：" +
             ret.lack_episodes.map(function (epi) {
               return "第 " + epi + " 集";
             }).join("、")).show();
+      } else if (air_scope) {
+        $("#system_media_lack_info").html(
+            "<strong>" + season_label + "已播出的集已全部入库</strong>（" + air_scope + "）").show();
       } else {
         $("#system_media_lack_info").hide();
       }

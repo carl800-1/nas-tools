@@ -1859,6 +1859,36 @@ class Media:
         return 0
 
     @staticmethod
+    def get_tmdb_season_aired_episodes_num(tv_info, season: int):
+        """
+        从TMDB剧集详情推算某季「已播出」的集数
+        （不含已排期但还没播出、以及尚未排期的集）
+        :param tv_info: 已获取的TMDB剧集详情
+        :param season: 季号，数字
+        :return: 已播出集数；无法判断时返回 0
+        """
+        if not tv_info or not season:
+            return 0
+        # TMDB 只在剧集详情里给出「最后播出的那一集」，据此推算：
+        # 目标季早于它 ⇒ 目标季已播完；等于它 ⇒ 就是它的集号；晚于它 ⇒ 还没开播
+        last_episode = tv_info.get("last_episode_to_air") or {}
+        try:
+            last_season = int(last_episode.get("season_number") or 0)
+            last_number = int(last_episode.get("episode_number") or 0)
+        except (TypeError, ValueError):
+            return 0
+        if last_season <= 0 or last_number <= 0:
+            return 0
+        season = int(season)
+        if season < last_season:
+            # 该季已经播完（当前播出季在它后面）
+            return Media.get_tmdb_season_episodes_num(tv_info, season)
+        if season == last_season:
+            return last_number
+        # 该季还没开播
+        return 0
+
+    @staticmethod
     def __dict_media_crews(crews):
         """
         字典化媒体工作人员

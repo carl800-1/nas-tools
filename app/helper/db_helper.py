@@ -958,9 +958,13 @@ class DbHelper:
         return 0
 
     @DbPersist(_db)
-    def update_rss_tv_lack(self, title=None, year=None, season=None, rssid=None, lack_episodes: list = None):
+    def update_rss_tv_lack(self, title=None, year=None, season=None, rssid=None, lack_episodes: list = None,
+                           episodes_display: list = None):
         """
         更新电视剧缺失的集数
+        :param lack_episodes: 剩余未入库的集（含本季尚未播出的集），用于 LACK 计数
+        :param episodes_display: 界面展示用的缺失集（只含本季已播出的集）。
+                                 传空列表表示「已播出的集都不缺」；不传时与 lack_episodes 相同
         """
         if not title and not rssid:
             return
@@ -969,7 +973,9 @@ class DbHelper:
         else:
             lack = len(lack_episodes)
         if rssid:
-            self.update_rss_tv_episodes(rssid, lack_episodes)
+            if episodes_display is None:
+                episodes_display = lack_episodes
+            self.update_rss_tv_episodes(rssid, episodes_display)
             self._db.query(RSSTVS).filter(RSSTVS.ID == int(rssid)).update(
                 {
                     "LACK": lack

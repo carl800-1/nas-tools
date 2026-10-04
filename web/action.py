@@ -1739,6 +1739,9 @@ class WebAction:
         lack_episodes = []
         lack_episodes_estimated = False
         rss_season = ""
+        # 本季已播出 / 总集数（只对订阅弹窗有意义：缺集明细只统计已播出的集）
+        aired_episodes = 0
+        total_episodes = 0
         # 类型
         if mtype in MovieTypes:
             media_type = MediaType.MOVIE
@@ -1776,6 +1779,19 @@ class WebAction:
                 # 订阅所在的季（形如 "S04"）：缺集明细必须带季号，否则用户分不清
                 # 是「第 4 季缺 26 集」还是「第 1 季缺 26 集」（多季剧极易误读）
                 rss_season = rssinfo[rssid].get("season") or ""
+                # 播出进度：连载中的季用来说明「为什么只缺这几集」
+                try:
+                    rss_season_num = int(str(rss_season).replace("S", "").replace("s", "") or 0)
+                except ValueError:
+                    rss_season_num = 0
+                if rss_season_num > 0:
+                    _tv_info = _media.get_tmdb_info(mtype=MediaType.TV,
+                                                    tmdbid=rssinfo[rssid].get("tmdbid"))
+                    if _tv_info:
+                        total_episodes = _media.get_tmdb_season_episodes_num(
+                            tv_info=_tv_info, season=rss_season_num)
+                        aired_episodes = _media.get_tmdb_season_aired_episodes_num(
+                            tv_info=_tv_info, season=rss_season_num)
             if overview and poster_path:
                 rssid_ok = True
 
@@ -1834,6 +1850,8 @@ class WebAction:
             "seasons": seasons,
             "lack_episodes": lack_episodes,
             "lack_episodes_estimated": lack_episodes_estimated,
+            "aired_episodes": aired_episodes,
+            "total_episodes": total_episodes,
             "rss_season": rss_season
         }
 

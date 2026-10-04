@@ -668,10 +668,16 @@ class Subscribe:
                                                      image=media_info.get_message_image(),
                                                      desc=media_info.overview,
                                                      note=self.gen_rss_note(media_info))
-                    # 更新缺失季集
+                    # 更新缺失季集（只登记本季已播出的集，连载中不把还没播出的集算成缺失）
+                    lack_episode_list = list(range(total_episode - lack_episode + 1, total_episode + 1))
+                    aired_episodes = self.media.get_tmdb_season_aired_episodes_num(
+                        tv_info=media_info.tmdb_info,
+                        season=int(str(season).replace("S", "")))
+                    if aired_episodes > 0:
+                        lack_episode_list = [ep for ep in lack_episode_list if ep <= aired_episodes]
                     self.dbhelper.update_rss_tv_episodes(
-                        rid=rssid, 
-                        episodes=range(total_episode - lack_episode + 1, total_episode + 1)
+                        rid=rssid,
+                        episodes=lack_episode_list
                     )
                     # 清除TMDB缓存
                     self.metahelper.delete_meta_data_by_tmdbid(media_info.tmdb_id)
@@ -1007,6 +1013,16 @@ class Subscribe:
         if not seasoninfo:
             return
         self.dbhelper.update_rss_tv_state(rssid=rssid, state='R')
+        # 本季「已播出」的集数：连载中的季不能把还没播出的集算成缺失。
+        # 拿不到时（0）不裁剪 —— 宁可多报，也不误报「已播出的都齐了」。
+        aired_episodes = 0
+        try:
+            season_seq = int(media_info.begin_season or 0)
+        except (TypeError, ValueError):
+            season_seq = 0
+        if season_seq and media_info.tmdb_info:
+            aired_episodes = self.media.get_tmdb_season_aired_episodes_num(
+                tv_info=media_info.tmdb_info, season=season_seq)
         for info in seasoninfo:
             if str(info.get("season")) == media_info.get_season_seq():
                 lack_episodes = info.get("episodes")
@@ -1014,11 +1030,22 @@ class Subscribe:
                 if not lack_episodes and info.get("total_episodes"):
                     lack_episodes = list(range(1, int(info.get("total_episodes")) + 1))
                 if lack_episodes:
+                    # 界面只展示「已播出」的缺口；LACK 仍按全量计（卡片进度条 = 已入库 / 总集数）
+                    episodes_display = lack_episodes
+                    if aired_episodes > 0:
+                        episodes_display = [ep for ep in lack_episodes if int(ep) <= aired_episodes]
                     log.info("【Subscribe】更新电视剧 %s %s 缺失集数为 %s" % (
                         media_info.get_title_string(),
                         media_info.get_season_string(),
                         len(lack_episodes)))
-                    self.dbhelper.update_rss_tv_lack(rssid=rssid, lack_episodes=lack_episodes)
+                    if len(episodes_display) != len(lack_episodes):
+                        log.info("【Subscribe】%s %s 本季已播出 %s 集，界面只展示已播出的缺失集 %s 集" % (
+                            media_info.get_title_string(),
+                            media_info.get_season_string(),
+                            aired_episodes,
+                            len(episodes_display)))
+                    self.dbhelper.update_rss_tv_lack(rssid=rssid, lack_episodes=lack_episodes,
+                                                    episodes_display=episodes_display)
                 break
 
     def get_subscribe_tv_episodes(self, rssid):
