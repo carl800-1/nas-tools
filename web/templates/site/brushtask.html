@@ -408,9 +408,9 @@
                     </div>
                     <div class="me-2 mb-3 flex-shrink-0">
                         <label class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" id="brushtask_free_limit_speed">
-                            <span class="form-check-label">限免到期下载限速 <span class="form-help"
-                                                              title="开启后，限免到期后下载速度降为1B/s，防止流量偷跑。测试站点有限，请观察后开启。"
+                            <input class="form-check-input" type="checkbox" id="brushtask_skip_exists">
+                            <span class="form-check-label">跳过已入库 <span class="form-help"
+                                                              title="媒体库中已有该种子对应的媒体时不再下载：电影按片名+年份，剧集精确到季/集。需要在「设置 → 媒体库」配置媒体库目录，且只在本地媒体库中查找。"
                                                               data-bs-toggle="tooltip">?</span></span>
                         </label>
                     </div>
@@ -418,7 +418,7 @@
                         <label class="form-check form-switch">
                             <input class="form-check-input" type="checkbox" id="brushtask_free_ddl_delete">
                             <span class="form-check-label">限免到期删种 <span class="form-help"
-                                                              title="开启后，限免到期后删种，优先级高于限免到期下载限速"
+                                                              title="开启后，限免到期后即删种；仅作用于还在下载中的种子，已下载完成在做种的种子不受影响"
                                                               data-bs-toggle="tooltip">?</span></span>
                         </label>
                     </div>
@@ -594,21 +594,20 @@
                     </div>
                     <div class="col-lg-4">
                         <div class="mb-3">
-                            <label class="form-label">包含/排除 <span class="form-help"
-                                                                   title="T= 开头为包含，F= 开头为排除，值均按正则式匹配种子名称或副标题。示例：T=1080p|2160p F=预告。未写前缀时整体按「包含」处理；多个 T= 或 F= 段会以 | 连接。"
-                                                                   data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_include_exclude" class="form-control"
-                                   placeholder="T=包含正则  F=排除正则">
+                            <label class="form-label">包含 <span class="form-help"
+                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时才会下载"
+                                                                 data-bs-toggle="tooltip">?</span></label>
+                            <input type="text" id="brushtask_include" class="form-control"
+                                   placeholder="关键字或正则表达式">
                         </div>
                     </div>
                     <div class="col-lg-4">
                         <div class="mb-3">
-                            <label class="form-label">跳过已入库 <span class="form-help"
-                                                                   title="媒体库中已有该种子对应的媒体时不再下载：电影按片名+年份，剧集精确到季/集。需要在「设置 → 媒体库」配置媒体库目录，且只在本地媒体库中查找。"
-                                                                   data-bs-toggle="tooltip">?</span></label>
-                            <label class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="brushtask_skip_exists">
-                            </label>
+                            <label class="form-label">排除 <span class="form-help"
+                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时不会下载"
+                                                                 data-bs-toggle="tooltip">?</span></label>
+                            <input type="text" id="brushtask_exclude" class="form-control"
+                                   placeholder="关键字或正则表达式">
                         </div>
                     </div>
                 </div>
@@ -796,64 +795,6 @@
     </div>
 </div>
 <script type="text/javascript">
-  // 解析刷流「包含/排除」合并输入框：
-  //   T=xxx -> 包含（include）、F=xxx -> 排除（exclude），两者都是正则式
-  //   未写前缀的裸文本整体按「包含」处理（兼容旧用法）
-  //   多个 T= 或 F= 段以「|」连接（正则「或」语义）
-  function brush_filter_parse(raw) {
-    let text = (raw || "").trim();
-    let result = { include: "", exclude: "" };
-    if (!text) {
-      return result;
-    }
-    let marks = [];
-    let re = /(^|\s)([TtFf])\s*=/g;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      marks.push({
-        tag: m[2].toUpperCase(),
-        start: m.index,
-        valStart: m.index + m[0].length
-      });
-    }
-    if (!marks.length) {
-      result.include = text;
-      return result;
-    }
-    let head = text.slice(0, marks[0].start).trim();
-    let inc = [], exc = [];
-    for (let i = 0; i < marks.length; i++) {
-      let end = (i + 1 < marks.length) ? marks[i + 1].start : text.length;
-      let val = text.slice(marks[i].valStart, end).trim();
-      if (!val) {
-        continue;
-      }
-      if (marks[i].tag === "T") {
-        inc.push(val);
-      } else {
-        exc.push(val);
-      }
-    }
-    if (head) {
-      inc.unshift(head);
-    }
-    result.include = inc.join("|");
-    result.exclude = exc.join("|");
-    return result;
-  }
-
-  // 把 include / exclude 两个字段拼成「T=… F=…」文本（编辑回填用）
-  function brush_filter_join(include, exclude) {
-    let parts = [];
-    if (include) {
-      parts.push("T=" + include);
-    }
-    if (exclude) {
-      parts.push("F=" + exclude);
-    }
-    return parts.join(" ");
-  }
-
   // 显示新增刷流任务
   function show_brushtask_modal() {
     if (!{{ Sites|length }}) {
@@ -877,8 +818,9 @@
       filter_item_change('', 'brushtask_year', $('#brushtask_year_do_'));
       //任务时长（同理：不清空会残留上一次编辑的值）
       $("#brushtask_duration").val("");
-      //包含/排除（合并输入框，新建时必须显式清空，否则会残留上一次编辑的值）
-      $("#brushtask_include_exclude").val("");
+      //包含/排除（新建时必须显式清空，否则会残留上一次编辑的值）
+      $("#brushtask_include").val("");
+      $("#brushtask_exclude").val("");
       //跳过已入库（复选框：新建时必须显式取消勾选）
       $("#brushtask_skip_exists").prop("checked", false);
       //RSS地址已不在界面上维护（改为隐藏域），新建时必须清空，
@@ -924,12 +866,6 @@
         } else {
           $("#brushtask_transfer").prop("checked", false);
         }
-        // 限免到期限速
-        if (ret.task.brushtask_free_limit_speed) {
-          $("#brushtask_free_limit_speed").prop("checked", true);
-        } else {
-          $("#brushtask_free_limit_speed").prop("checked", false);
-        }
         // 限免到期删种
         if (ret.task.brushtask_free_ddl_delete) {
           $("#brushtask_free_ddl_delete").prop("checked", true);
@@ -943,8 +879,9 @@
         }
         $("#brushtask_current_site_count").val(ret.task.rss_rule.current_site_count)
         $("#brushtask_peercount").val(ret.task.rss_rule.peercount)
-        //包含/排除（合并输入框：从 include / exclude 两个字段拼回「T=… F=…」）
-        $("#brushtask_include_exclude").val(brush_filter_join(ret.task.rss_rule.include, ret.task.rss_rule.exclude));
+        //包含/排除（从 include / exclude 两个字段分别回填）
+        $("#brushtask_include").val(ret.task.rss_rule.include);
+        $("#brushtask_exclude").val(ret.task.rss_rule.exclude);
         $("#brushtask_label").val(ret.task.label);
         $("#brushtask_duration").val(ret.task.duration);
         $("#brushtask_savepath").val(ret.task.savepath);
@@ -1144,7 +1081,6 @@
     let brushtask_savepath = $("#brushtask_savepath").val();
     let brushtask_state = $("#brushtask_state").val();
     let brushtask_transfer = $("#brushtask_transfer").prop('checked');
-    let brushtask_free_limit_speed = $("#brushtask_free_limit_speed").prop('checked');
     let brushtask_free_ddl_delete = $("#brushtask_free_ddl_delete").prop('checked');
     let brushtask_sendmessage = $("#brushtask_sendmessage").prop('checked');
     let brushtask_skip_exists = $("#brushtask_skip_exists").prop('checked');
@@ -1166,10 +1102,9 @@
       }
       $("#brushtask_torrent_size").removeClass("is-invalid");
     }
-    //包含/排除（合并输入框：解析「T=… F=…」拆回 include / exclude 两个字段）
-    let brush_filter = brush_filter_parse($("#brushtask_include_exclude").val());
-    let brushtask_include = brush_filter.include;
-    let brushtask_exclude = brush_filter.exclude;
+    //包含/排除
+    let brushtask_include = $("#brushtask_include").val();
+    let brushtask_exclude = $("#brushtask_exclude").val();
     //当前站点任务总数
     let brushtask_current_site_count = $("#brushtask_current_site_count").val();
     if (brushtask_current_site_count && isNaN(brushtask_current_site_count)) {
@@ -1323,7 +1258,6 @@
       brushtask_savepath: brushtask_savepath,
       brushtask_state: brushtask_state,
       brushtask_transfer: brushtask_transfer,
-      brushtask_free_limit_speed: brushtask_free_limit_speed,
       brushtask_free_ddl_delete: brushtask_free_ddl_delete,
       brushtask_sendmessage: brushtask_sendmessage,
       brushtask_free: brushtask_free,
