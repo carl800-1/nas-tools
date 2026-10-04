@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.5** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1171,6 +1171,18 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 > 如 `T=1080p|2160p F=预告|花絮`。不写前缀时按「包含」处理，与旧用法兼容；
 > 编辑旧任务会自动拼成新写法回显，保存后原值不变。
 
+#### 2.56 刷流弹窗版式微调：包含/排除拆回两框、「跳过已入库」上移、限速下线（v6.4.6）
+
+v6.4.5 上线后按实际使用反馈做了三处调整：
+
+- 「**包含**」「**排除**」**拆回两个独立输入框**（上一版合并成 `T=` / `F=` 单框，用起来不如分开直观）；
+- 「**跳过已入库**」**挪到弹窗顶部开关行**，与「消息推送」「转移到媒体库」「限免到期删种」并列，更醒目；
+- 「**限免到期下载限速**」开关**下线** —— 限免快结束时不再自动把下载速度压到 1 B/s。
+  若想在限免结束时立刻止损，仍可用「限免到期删种」。
+
+选种规则区回到 **9 个卡片、3×3 整行对齐**（促销 / Hit&Run / 任务总数 ｜ 大小 / 做种数 / 发布时间 ｜
+年份 / 包含 / 排除）。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1791,7 +1803,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.5   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.6   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1894,4 +1906,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.5_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.6_
