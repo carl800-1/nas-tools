@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.0** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1095,6 +1095,19 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 > 或媒体库目录**。如果两者都没有配置，缺集信息会退化为按目录扫描，
 > 建议至少配好其中一个。
 
+#### 2.51 老订阅也能看到缺哪几集了（v6.4.1）
+
+**现象**：升级前就已经存在的订阅，卡片上会显示「缺 26 集」，但点开详情列不出具体集号。
+
+**原因**：这类订阅数据库里只存了缺集**数量**，没存集号（集号要等订阅扫描时才写进去）。
+
+**现在**：只要这部剧是「整季都缺」，就直接按「第 1 ~ 第 N 集」列出来，并标注
+「整季缺、待扫描确认」；等下一次自动扫描（默认最多 6 小时一轮）写入真实集号后，
+标注会自动消失。如果只是缺了一部分、数据库里又没有集号，界面会如实只显示数量，
+**不会编造集号**。
+
+> 说明：本次只改界面展示，不影响搜索、下载与「补齐后自动退订」的判定。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1715,7 +1728,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.0   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.1   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1818,4 +1831,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.0_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.1_
