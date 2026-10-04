@@ -594,20 +594,21 @@
                     </div>
                     <div class="col-lg-4">
                         <div class="mb-3">
-                            <label class="form-label">包含 <span class="form-help"
-                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时才会下载"
-                                                                 data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_include" class="form-control"
-                                   placeholder="关键字或正则表达式">
+                            <label class="form-label">包含/排除 <span class="form-help"
+                                                                   title="T= 开头为包含，F= 开头为排除，值均按正则式匹配种子名称或副标题。示例：T=1080p|2160p F=预告。未写前缀时整体按「包含」处理；多个 T= 或 F= 段会以 | 连接。"
+                                                                   data-bs-toggle="tooltip">?</span></label>
+                            <input type="text" id="brushtask_include_exclude" class="form-control"
+                                   placeholder="T=包含正则  F=排除正则">
                         </div>
                     </div>
                     <div class="col-lg-4">
                         <div class="mb-3">
-                            <label class="form-label">排除 <span class="form-help"
-                                                                 title="种子名称或副标题中包括对应关键字或者匹配正则式时不会下载"
-                                                                 data-bs-toggle="tooltip">?</span></label>
-                            <input type="text" id="brushtask_exclude" class="form-control"
-                                   placeholder="关键字或正则表达式">
+                            <label class="form-label">跳过已入库 <span class="form-help"
+                                                                   title="媒体库中已有该种子对应的媒体时不再下载：电影按片名+年份，剧集精确到季/集。需要在「设置 → 媒体库」配置媒体库目录，且只在本地媒体库中查找。"
+                                                                   data-bs-toggle="tooltip">?</span></label>
+                            <label class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="brushtask_skip_exists">
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -795,6 +796,64 @@
     </div>
 </div>
 <script type="text/javascript">
+  // 解析刷流「包含/排除」合并输入框：
+  //   T=xxx -> 包含（include）、F=xxx -> 排除（exclude），两者都是正则式
+  //   未写前缀的裸文本整体按「包含」处理（兼容旧用法）
+  //   多个 T= 或 F= 段以「|」连接（正则「或」语义）
+  function brush_filter_parse(raw) {
+    let text = (raw || "").trim();
+    let result = { include: "", exclude: "" };
+    if (!text) {
+      return result;
+    }
+    let marks = [];
+    let re = /(^|\s)([TtFf])\s*=/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      marks.push({
+        tag: m[2].toUpperCase(),
+        start: m.index,
+        valStart: m.index + m[0].length
+      });
+    }
+    if (!marks.length) {
+      result.include = text;
+      return result;
+    }
+    let head = text.slice(0, marks[0].start).trim();
+    let inc = [], exc = [];
+    for (let i = 0; i < marks.length; i++) {
+      let end = (i + 1 < marks.length) ? marks[i + 1].start : text.length;
+      let val = text.slice(marks[i].valStart, end).trim();
+      if (!val) {
+        continue;
+      }
+      if (marks[i].tag === "T") {
+        inc.push(val);
+      } else {
+        exc.push(val);
+      }
+    }
+    if (head) {
+      inc.unshift(head);
+    }
+    result.include = inc.join("|");
+    result.exclude = exc.join("|");
+    return result;
+  }
+
+  // 把 include / exclude 两个字段拼成「T=… F=…」文本（编辑回填用）
+  function brush_filter_join(include, exclude) {
+    let parts = [];
+    if (include) {
+      parts.push("T=" + include);
+    }
+    if (exclude) {
+      parts.push("F=" + exclude);
+    }
+    return parts.join(" ");
+  }
+
   // 显示新增刷流任务
   function show_brushtask_modal() {
     if (!{{ Sites|length }}) {
@@ -818,6 +877,10 @@
       filter_item_change('', 'brushtask_year', $('#brushtask_year_do_'));
       //任务时长（同理：不清空会残留上一次编辑的值）
       $("#brushtask_duration").val("");
+      //包含/排除（合并输入框，新建时必须显式清空，否则会残留上一次编辑的值）
+      $("#brushtask_include_exclude").val("");
+      //跳过已入库（复选框：新建时必须显式取消勾选）
+      $("#brushtask_skip_exists").prop("checked", false);
       //RSS地址已不在界面上维护（改为隐藏域），新建时必须清空，
       //否则会静默沿用上一个任务的RSS；留空即回落到站点配置的RSS地址
       $("#brushtask_rssurl").val("");
@@ -880,8 +943,8 @@
         }
         $("#brushtask_current_site_count").val(ret.task.rss_rule.current_site_count)
         $("#brushtask_peercount").val(ret.task.rss_rule.peercount)
-        $("#brushtask_include").val(ret.task.rss_rule.include);
-        $("#brushtask_exclude").val(ret.task.rss_rule.exclude);
+        //包含/排除（合并输入框：从 include / exclude 两个字段拼回「T=… F=…」）
+        $("#brushtask_include_exclude").val(brush_filter_join(ret.task.rss_rule.include, ret.task.rss_rule.exclude));
         $("#brushtask_label").val(ret.task.label);
         $("#brushtask_duration").val(ret.task.duration);
         $("#brushtask_savepath").val(ret.task.savepath);
@@ -939,6 +1002,8 @@
         //发布年份（取不到时必须显式清空，否则会残留上一次编辑的值）
         let year_str = ret.task.rss_rule.year ? ret.task.rss_rule.year.split('#') : ['', ''];
         filter_item_change(year_str[0], 'brushtask_year', $('#brushtask_year_do_' + year_str[0]), year_str[1])
+        //跳过已入库（复选框：取不到时必须显式取消勾选）
+        $("#brushtask_skip_exists").prop("checked", ret.task.rss_rule.skip_exists ? true : false);
         //清除上一次校验失败留下的红框（is-invalid），否则会残留到本次弹窗
         $("#modal-brushtask .is-invalid").removeClass("is-invalid");
         //弹窗
@@ -1082,6 +1147,7 @@
     let brushtask_free_limit_speed = $("#brushtask_free_limit_speed").prop('checked');
     let brushtask_free_ddl_delete = $("#brushtask_free_ddl_delete").prop('checked');
     let brushtask_sendmessage = $("#brushtask_sendmessage").prop('checked');
+    let brushtask_skip_exists = $("#brushtask_skip_exists").prop('checked');
     let brushtask_free = $("#brushtask_free").val();
     let brushtask_hr = $("#brushtask_hr").val();
     //种子大小
@@ -1100,10 +1166,10 @@
       }
       $("#brushtask_torrent_size").removeClass("is-invalid");
     }
-    //包含
-    let brushtask_include = $("#brushtask_include").val();
-    //排除
-    let brushtask_exclude = $("#brushtask_exclude").val();
+    //包含/排除（合并输入框：解析「T=… F=…」拆回 include / exclude 两个字段）
+    let brush_filter = brush_filter_parse($("#brushtask_include_exclude").val());
+    let brushtask_include = brush_filter.include;
+    let brushtask_exclude = brush_filter.exclude;
     //当前站点任务总数
     let brushtask_current_site_count = $("#brushtask_current_site_count").val();
     if (brushtask_current_site_count && isNaN(brushtask_current_site_count)) {
@@ -1274,7 +1340,8 @@
       brushtask_avg_upspeed: brushtask_avg_upspeed_do + "#" + brushtask_avg_upspeed,
       brushtask_iatime: brushtask_iatime_do + "#" + brushtask_iatime,
       brushtask_pubdate: brushtask_pubdate_do + "#" + brushtask_pubdate,
-      brushtask_year: brushtask_year_do + "#" + brushtask_year
+      brushtask_year: brushtask_year_do + "#" + brushtask_year,
+      brushtask_skip_exists: brushtask_skip_exists
     };
 
     ajax_post("add_brushtask", params, function (ret) {

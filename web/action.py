@@ -2187,6 +2187,8 @@ class WebAction:
         brushtask_iatime = data.get("brushtask_iatime")
         brushtask_pubdate = data.get("brushtask_pubdate")
         brushtask_year = data.get("brushtask_year")
+        # 复选框：网页端传 bool、开放 API 传字符串，统一归一化（避免 "false" 被当成真值）
+        brushtask_skip_exists = str(data.get("brushtask_skip_exists") or "").lower() in ("y", "yes", "true", "1")
         frac_before_range = data.get("frac_before_range")
         frac_before_percent = data.get("frac_before_percent")
         frac_after_range = data.get("frac_after_range")
@@ -2201,7 +2203,8 @@ class WebAction:
             "current_site_count": brushtask_current_site_count,
             "peercount": brushtask_peercount,
             "pubdate": brushtask_pubdate,
-            "year": brushtask_year
+            "year": brushtask_year,
+            "skip_exists": brushtask_skip_exists
         }
         # 删除规则
         remove_rule = {
@@ -2778,6 +2781,9 @@ class WebAction:
                 rule_htmls.append(
                     '<span class="badge badge-outline text-orange me-1 mb-1" title="未活动时间">未活动时间: %s %s小时</span>'
                     % (rule_filter_string.get(iatimes[0]), iatimes[1]))
+        if rules.get("skip_exists"):
+            rule_htmls.append(
+                '<span class="badge badge-outline text-cyan me-1 mb-1" title="跳过已入库">跳过已入库</span>')
 
         return "<br>".join(rule_htmls)
 

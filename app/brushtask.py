@@ -1,4 +1,5 @@
 import math
+import os
 import re
 import sys
 import time
@@ -12,14 +13,16 @@ import log
 from app.downloader import Downloader
 from app.filter import Filter
 from app.helper import DbHelper, RssHelper
+from app.media import Media
 from app.media.meta import MetaInfo
 from app.message import Message
 from app.sites import Sites, SiteConf
 from app.utils import StringUtils, ExceptionUtils
 from app.utils.commons import singleton
 from app.utils.tags import Tags
-from app.utils.types import BrushDeleteType
-from config import BRUSH_REMOVE_TORRENTS_INTERVAL, BRUSH_TASK_DURATION_CHECK_INTERVAL, Config
+from app.utils.types import BrushDeleteType, MediaType
+from config import BRUSH_REMOVE_TORRENTS_INTERVAL, BRUSH_TASK_DURATION_CHECK_INTERVAL, Config, \
+    RMT_FAVTYPE, RMT_MEDIAEXT
 
 
 # 「任务时长」的取值范围（小时）：0.1 小时 = 6 分钟，720 小时 = 30 天。
@@ -100,12 +103,16 @@ class BrushTask(object):
         self.siteconf = SiteConf()
         self.filter = Filter()
         self.downloader = Downloader()
+        self.media = Media()
         # 移除现有任务
         self.stop_service()
         # 读取刷流任务列表
         self.load_brushtasks()
         # 清理缓存
         self._torrents_cache = []
+        # 媒体库片名索引缓存（供「跳过已入库」选种条件使用）
+        self._library_index = {}
+        self._library_index_time = 0
         # 启动RSS任务
         if self._brush_tasks:
             self._scheduler = BackgroundScheduler(timezone=Config().get_timezone())
@@ -1111,10 +1118,215 @@ class BrushTask(object):
                             title, torrent_year, min_year, max_year))
                         return False
 
+            # 检查媒体库中是否已存在（放在最后：即使本判断异常，也不会影响上面的规则）
+            if rss_rule.get("skip_exists"):
+                if self.__is_media_exists(title=title):
+                    log.info("【刷流】%s 媒体库中已存在，跳过下载" % title)
+                    return False
+
         except Exception as err:
             ExceptionUtils.exception_traceback(err)
 
         return True
+
+    # 媒体库片名目录名形如「片名 (年份)」，用于「跳过已入库」的本地索引
+    _LIBRARY_DIR_RE = re.compile(r"^(?P<name>.+?)\s*[\(\[]\s*(?P<year>(?:19|20)\d{2})\s*[\)\]]\s*$")
+    # 季目录名形如「Season 1」
+    _LIBRARY_SEASON_RE = re.compile(r"^[Ss]eason\s*(\d+)$")
+
+    def __get_library_index(self):
+        """
+        构建媒体库片名索引 {片名: [(年份, 目录路径, 库类型)]}
+
+        纯本地扫描（轻量正则，900+ 个目录约 10ms），带 TTL 缓存。
+        目录名由转移重命名规则生成，形如「片名 (年份)」；未启用二级分类时片名
+        目录直接位于媒体库根目录下，启用时位于「根/分类」下，两种情况都扫。
+        """
+        now = time.time()
+        if self._library_index and now - self._library_index_time < 300:
+            return self._library_index
+        index = {}
+        try:
+            media_config = Config().get_config("media") or {}
+            roots = []
+            for key, kind in (("movie_path", "movie"), ("tv_path", "tv"), ("anime_path", "anime")):
+                value = media_config.get(key)
+                if not value:
+                    continue
+                for root in (value if isinstance(value, list) else [value]):
+                    if root and os.path.isdir(root):
+                        roots.append((root, kind))
+            for root, kind in roots:
+                for level1 in os.listdir(root):
+                    path1 = os.path.join(root, level1)
+                    if not os.path.isdir(path1):
+                        continue
+                    # ① 未启用二级分类：level1 本身就是片名目录
+                    self.__index_library_dir(index=index, dir_name=level1, dir_path=path1, kind=kind)
+                    # ② 启用二级分类：level1 是分类目录，片名目录在其下
+                    for name in os.listdir(path1):
+                        path2 = os.path.join(path1, name)
+                        if os.path.isdir(path2):
+                            self.__index_library_dir(index=index, dir_name=name, dir_path=path2, kind=kind)
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+        self._library_index = index
+        self._library_index_time = now
+        return index
+
+    def __index_library_dir(self, index, dir_name, dir_path, kind):
+        """把单个媒体库目录加入索引（跳过季目录、精选目录等非片名目录）"""
+        name = (dir_name or "").strip()
+        if not name or self._LIBRARY_SEASON_RE.match(name) or name == RMT_FAVTYPE:
+            return
+        matched = self._LIBRARY_DIR_RE.match(name)
+        title = (matched.group("name") if matched else name).strip()
+        year = matched.group("year") if matched else None
+        if not title:
+            return
+        index.setdefault(title, []).append((year, dir_path, kind))
+
+    def __find_library_entry(self, meta_info):
+        """
+        在媒体库索引中查找该种子对应的片目录
+        :return: (目录路径, 目录名里的年份) 或 None
+        """
+        name = meta_info.get_name()
+        if not name:
+            return None
+        candidates = self.__get_library_index().get(name)
+        if not candidates:
+            return None
+        # 电影只比对电影库；剧集/动漫比对电视剧与动漫库
+        if meta_info.type == MediaType.MOVIE:
+            candidates = [item for item in candidates if item[2] == "movie"]
+        else:
+            candidates = [item for item in candidates if item[2] in ("tv", "anime")]
+        if not candidates:
+            return None
+        # 有年份时优先精确匹配，其次接受目录名里没写年份的
+        if meta_info.year:
+            for year, path, _kind in candidates:
+                if not year or str(year) == str(meta_info.year):
+                    return path, year
+            return None
+        return candidates[0][1], candidates[0][0]
+
+    def __get_library_seasons(self, entry_path):
+        """列出媒体库中该片已有的季目录 {季号: 目录路径}"""
+        seasons = {}
+        try:
+            for name in os.listdir(entry_path):
+                path = os.path.join(entry_path, name)
+                if not os.path.isdir(path):
+                    continue
+                matched = self._LIBRARY_SEASON_RE.match(name.strip())
+                if matched:
+                    seasons[int(matched.group(1))] = path
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+        return seasons
+
+    @staticmethod
+    def __get_library_episodes(season_path):
+        """读取媒体库中某一季已入库的集号集合（只解析媒体文件）"""
+        episodes = set()
+        try:
+            for name in os.listdir(season_path):
+                if os.path.splitext(name)[1].lower() not in RMT_MEDIAEXT:
+                    continue
+                file_meta = MetaInfo(name)
+                if file_meta.get_episode_list():
+                    episodes.update(file_meta.get_episode_list())
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+        return episodes
+
+    def __align_season_by_tmdb(self, meta_info, library_seasons):
+        """
+        媒体库里没有该季号时，用 TMDB 区分两种情形
+
+        · TMDB 有该季号 ⇒ 媒体库里确实缺这一季，不该跳过（返回 None）
+        · TMDB 没有该季号（发布季号超出 TMDB 范围）⇒ 视为 TMDB 的最新一季
+
+        :param meta_info: 种子本地解析结果
+        :param library_seasons: 媒体库中已有的季号 {季号: 路径}
+        :return: 对齐后（且媒体库中确实存在）的季号；无法对齐时返回 None
+        """
+        if not meta_info.org_string:
+            return None
+        new_meta = self.media.get_media_info(title=meta_info.org_string)
+        if not new_meta or not new_meta.tmdb_info:
+            return None
+        tmdb_seasons = {sea.get("season_number")
+                        for sea in (new_meta.tmdb_info.get("seasons") or [])
+                        if sea.get("season_number") is not None}
+        if not tmdb_seasons:
+            return None
+        season = new_meta.begin_season
+        if season in tmdb_seasons:
+            # TMDB 有这个季、媒体库里没有 ⇒ 库里确实缺这一季
+            return None
+        # 发布季号超出 TMDB 的季范围 ⇒ 按最新季对齐
+        latest = max(tmdb_seasons)
+        if latest in library_seasons:
+            log.debug("【刷流】%s 季号 %s 在 TMDB 中不存在，按最新季 %s 对齐" % (
+                meta_info.org_string, season, latest))
+            return latest
+        return None
+
+    def __is_media_exists(self, title):
+        """
+        检查媒体库中是否已存在该种子对应的媒体（供「跳过已入库」选种条件使用）
+
+        · 电影：媒体库中有同名（年份优先）影片即视为已存在
+        · 剧集：精确到季/集 —— 种子包含的集都已入库才算已存在；整季包（不带集号）
+                则媒体库中该季有任何内容即视为已存在。媒体库里没有该季号时，
+                用 TMDB 对齐一次（发布季号与 TMDB 季划分不一致的情况）。
+
+        :param title: 种子名称
+        :return: True = 媒体库中已存在（应跳过）
+        """
+        if not title:
+            return False
+        try:
+            meta_info = MetaInfo(title)
+            if not meta_info or not meta_info.get_name():
+                return False
+            entry = self.__find_library_entry(meta_info)
+            if not entry:
+                return False
+            entry_path = entry[0]
+            # 电影：同名即已存在
+            if meta_info.type == MediaType.MOVIE:
+                log.debug("【刷流】%s 媒体库中已有同名电影：%s" % (title, entry_path))
+                return True
+            # 剧集/动漫：按季、集比对
+            if not meta_info.begin_season:
+                return False
+            library_seasons = self.__get_library_seasons(entry_path)
+            if not library_seasons:
+                return False
+            season = meta_info.begin_season
+            if season not in library_seasons:
+                season = self.__align_season_by_tmdb(meta_info, library_seasons)
+                if not season:
+                    return False
+            episodes = self.__get_library_episodes(library_seasons[season])
+            if not episodes:
+                return False
+            if meta_info.begin_episode is None:
+                # 整季包：媒体库该季已有内容即跳过
+                log.debug("【刷流】%s 媒体库第 %s 季已有内容，跳过" % (title, season))
+                return True
+            want_episodes = set(meta_info.get_episode_list() or [])
+            if want_episodes and want_episodes.issubset(episodes):
+                log.debug("【刷流】%s 媒体库第 %s 季已有集 %s，跳过" % (
+                    title, season, sorted(want_episodes)))
+                return True
+        except Exception as err:
+            ExceptionUtils.exception_traceback(err)
+        return False
 
     @staticmethod
     def __check_remove_rule(remove_rule,
