@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.1** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.2** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1108,6 +1108,22 @@ NAStool 按旧结构去找结果行，一条也找不到；找不到之后，又
 
 > 说明：本次只改界面展示，不影响搜索、下载与「补齐后自动退订」的判定。
 
+#### 2.52 绿联季名两种写法都认 + 缺集明细标明季（v6.4.2）
+
+**现象**：绿联影视里明明有这部剧（如「诛仙」第 1~3 季都在），订阅却显示「缺 26 集」，
+而且反复重新下载；点开详情又看不出说的是哪一季。
+
+**原因**：绿联媒体库里「季」的写法有两种并存 —— `诛仙 第 1 季` 和 `诛仙 季 1`。
+本版之前只认前者，于是用后一种写法的剧（实测某真实库里 123 部剧中有 47 部）会被当成
+「媒体库里没有这部剧」，该剧的每一季都被判成「全集都缺」。
+
+**现在**：两种写法都认，缺集数量按真实媒体库计算；缺集明细写成
+「**第 4 季** · 缺失剧集（共 26 集）：第 1 集 …」，一眼看出是哪一季。
+订阅列表的卡片不再显示缺集明细，只在点开详情后展示，列表保持整齐统一。
+
+> 顺带修了一个隐患：绿联查询不可用（登录失败 / 连接异常）时，不再被当成「已经全都有了」，
+> 避免把还没补齐的订阅当成已完成而**自动退订**。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1728,7 +1744,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.1   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.2   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1831,4 +1847,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.1_
+_Last updated: 2026-10-04 ｜ 当前版本 v6.4.2_
