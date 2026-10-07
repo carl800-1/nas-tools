@@ -14,6 +14,10 @@ lock = threading.Lock()
 
 LOG_QUEUE = deque(maxlen=200)
 LOG_INDEX = 0
+# 单调递增的日志序号：每条日志带一个只增不减的 seq，
+# 供「实时日志」的每个连接各自定位游标（见 get_logs_since），
+# 避免共用一份全局游标时多个连接互相「抢走」对方的日志
+LOG_SEQ = 0
 
 
 class Logger:
@@ -78,7 +82,7 @@ class Logger:
 
 
 def __append_log_queue(level, text):
-    global LOG_INDEX, LOG_QUEUE
+    global LOG_INDEX, LOG_QUEUE, LOG_SEQ
     with lock:
         text = escape(text)
         if text.startswith("【"):
@@ -86,12 +90,40 @@ def __append_log_queue(level, text):
             text = text.replace(f"【{source}】", "")
         else:
             source = "System"
+        LOG_SEQ += 1
         LOG_QUEUE.append({
+            "seq": LOG_SEQ,
             "time": time.strftime('%H:%M:%S', time.localtime(time.time())),
             "level": level,
             "source": source,
             "text": text})
         LOG_INDEX += 1
+
+
+def get_logs_since(since=0, source=None):
+    """
+    取序号大于 since 的日志（供「实时日志」按各自游标拉取）。
+
+    每个连接传入自己上次拿到的 cursor，互不干扰：
+    旧连接未及时关闭、多标签页、反向代理保持的长连接，都不会再「吃掉」新连接的日志。
+    :param since: 上次返回的 cursor（首次传 0）
+    :param source: 可选，按来源过滤
+    :return: (logs, cursor) —— cursor 为当前最大序号，下次原样传回
+    """
+    with lock:
+        if not LOG_QUEUE:
+            return [], LOG_SEQ
+        # since 落后于队列现存最早一条时（首次连接、或落后太多被挤出队列），
+        # 从现存最早一条开始给；首次连接因此能看到最近的历史日志
+        earliest = LOG_QUEUE[0].get("seq", 0)
+        if since < earliest - 1:
+            since = earliest - 1
+        if since > LOG_SEQ:
+            since = LOG_SEQ
+        logs = [lg for lg in LOG_QUEUE if lg.get("seq", 0) > since]
+        if source:
+            logs = [lg for lg in logs if lg.get("source") == source]
+        return logs, LOG_SEQ
 
 
 def debug(text, module=None):

@@ -92,8 +92,9 @@ LoginManager.login_view = "login"
 LoginManager.init_app(App)
 
 # SSE
-LoggingSource = ""
-LoggingLock = Lock()
+# 说明：原先这里用全局 LoggingSource / LoggingLock + log.LOG_INDEX 做「实时日志」的单游标，
+# 多连接时会互相抢日志（详见 stream_logging 的注释）。现改为每个连接各自持游标
+# （log.get_logs_since），这两个全局量已不再需要。
 
 # 路由注册
 App.register_blueprint(apiv1_bp, url_prefix="/api/v1")
@@ -1881,33 +1882,31 @@ def Img():
 def stream_logging():
     """
     实时日志EventSources响应
+
+    每个连接各自维护游标（cursor）从 LOG_QUEUE 取「序号大于自己游标」的日志，
+    不再共用一份全局 LOG_INDEX；同时不再把锁跨 yield 持有。
+
+    背景（原实现的缺陷）：原先用一个全局 log.LOG_INDEX 记录「未读条数」，
+    谁先读到就把全局游标清零 —— 一旦同时存在多个连接（界面重复打开、
+    多标签页、或反向代理保持着的旧长连接），它们会互相抢日志：
+    后加入/被抢占的那个连接永远只能收到空数组，界面就一直停在「刷新中...」，
+    且只有重启服务才能恢复。改成「一人一份游标」后，各连接互不影响。
     """
+    _source = request.args.get("source") or ""
 
-    def __logging(_source=""):
-        """
-        实时日志
-        """
-        global LoggingSource
-
+    def __logging():
+        # 首次传 0：把当前队列里已存在的日志先补一遍（打开弹窗即可看到最近记录）
+        cursor = 0
         while True:
-            with LoggingLock:
-                if _source != LoggingSource:
-                    LoggingSource = _source
-                    log.LOG_INDEX = len(log.LOG_QUEUE)
-                if log.LOG_INDEX > 0:
-                    logs = list(log.LOG_QUEUE)[-log.LOG_INDEX:]
-                    log.LOG_INDEX = 0
-                    if _source:
-                        logs = [lg for lg in logs if lg.get("source") == _source]
-                else:
-                    logs = []
-                time.sleep(1)
-                yield 'data: %s\n\n' % json.dumps(logs)
+            logs, cursor = log.get_logs_since(cursor, _source or None)
+            time.sleep(1)
+            yield 'data: %s\n\n' % json.dumps(logs)
 
-    return Response(
-        __logging(request.args.get("source") or ""),
-        mimetype='text/event-stream'
-    )
+    resp = Response(__logging(), mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache'
+    # 关闭 nginx 等反向代理对该响应的缓冲，保证日志逐条实时下发
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
 
 
 @App.route('/stream-progress')
