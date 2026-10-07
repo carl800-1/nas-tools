@@ -4,7 +4,10 @@ CleanHelper（目录清理服务）单元测试。
 
 覆盖要点：
   - 阈值边界：大小「等于」阈值的子文件夹必须命中（判据为 <= N）
-  - 嵌套的小文件夹：只按一级子文件夹递归汇总，深层嵌套正确累加
+  - 递归扫描：默认 recursive=True，多级子目录都会被检查（父未命中时下钻到深层）
+  - 命中即剪枝：父目录命中后其子目录不再单独列为待删项（避免重复统计）
+  - 一级模式：recursive=False 时退回旧行为，只处理一级子文件夹
+  - 嵌套的大小汇总：目录大小按递归累加内部所有文件
   - 空目录：大小为 0，必然命中
   - dry-run：只返回清单，不落盘删除
   - 符号链接：默认跳过（不计入大小、不删除）
@@ -174,13 +177,40 @@ class CleanHelperTest(unittest.TestCase):
         result = self.helper.scan(self.root, 1)
         self.assertNotIn("deep", self._names(result))
 
-    def test_only_first_level_subdirs_are_cleaned(self):
-        """深层子目录不会被单独列为待删项（只处理一级子文件夹）"""
-        self._mkfile(os.path.join("parent", "child", "f.bin"), 10)
-        result = self.helper.scan(self.root, 1)
+    def test_recursive_default_scans_nested_subdirs(self):
+        """默认 recursive=True：父目录未命中时下钻，深层小目录被单独命中"""
+        # 阈值 5MB；parent(20MB)、child(10MB) 均未命中，grandchild(1MB) 命中
+        mb = 1024 * 1024
+        self._mkfile(os.path.join("parent", "f.bin"), 20 * mb)
+        self._mkfile(os.path.join("parent", "child", "f.bin"), 10 * mb)
+        self._mkfile(os.path.join("parent", "child", "grandchild", "f.bin"), 1 * mb)
+        result = self.helper.scan(self.root, 5)
+        # ⚠️ matched 里的 path 是绝对路径，按结尾判断（Windows 分隔符可能是 \ 或 /）
+        paths = [item["path"].replace("\\", "/") for item in result["matched"]]
+        self.assertTrue(any(p.endswith("parent/child/grandchild") for p in paths), paths)
+        # depth 字段标注相对根目录的层级
+        depths = {os.path.basename(i["path"]): i.get("depth") for i in result["matched"]}
+        self.assertEqual(depths.get("grandchild"), 3)
+
+    def test_matched_parent_prunes_children(self):
+        """命中即剪枝：父目录命中后其子目录不再单独列为待删项"""
+        mb = 1024 * 1024
+        self._mkfile(os.path.join("parent", "f.bin"), 1 * mb)
+        self._mkfile(os.path.join("parent", "child", "f.bin"), 1 * mb)
+        result = self.helper.scan(self.root, 5)
         names = self._names(result)
         self.assertIn("parent", names)
         self.assertNotIn("child", names)
+
+    def test_non_recursive_scans_only_first_level(self):
+        """recursive=False：退回旧行为，只处理一级子文件夹，深层不被命中"""
+        mb = 1024 * 1024
+        self._mkfile(os.path.join("parent", "f.bin"), 20 * mb)
+        self._mkfile(os.path.join("parent", "child", "grandchild", "f.bin"), 1 * mb)
+        result = self.helper.scan(self.root, 5, recursive=False)
+        names = self._names(result)
+        self.assertNotIn("grandchild", names)
+        self.assertEqual(result["recursive"], False)
 
     # ---------------- dry-run ----------------
 

@@ -2199,14 +2199,16 @@ class SyncRun(ApiResource):
 class SystemCleanDirsScan(ApiResource):
     parser = reqparse.RequestParser()
     parser.add_argument('root_path', type=str, help='根目录', location='form', required=True)
-    parser.add_argument('threshold_mb', type=float, help='大小阈值(MB)，小于等于该值的子文件夹将被清理',
+    parser.add_argument('threshold_mb', type=float, help='大小阈值(MB)，小于等于该值的文件夹将被清理',
                         location='form', required=True)
     parser.add_argument('follow_links', type=str, help='是否跟随符号链接（true/false）', location='form')
+    parser.add_argument('recursive', type=str, help='是否包含子目录（true/false，默认 true）',
+                        location='form')
 
     @system.doc(parser=parser)
     def post(self):
         """
-        目录清理预览：列出将被删除的子文件夹清单，不执行删除（密钥认证）
+        目录清理预览：列出将被删除的文件夹清单，不执行删除（密钥认证）
         """
         return WebAction().api_action(cmd='clean_dirs_scan', data=self.parser.parse_args())
 
@@ -2215,20 +2217,23 @@ class SystemCleanDirsScan(ApiResource):
 class SystemCleanDirsRun(ApiResource):
     parser = reqparse.RequestParser()
     parser.add_argument('root_path', type=str, help='根目录', location='form', required=True)
-    parser.add_argument('threshold_mb', type=float, help='大小阈值(MB)，小于等于该值的子文件夹将被清理',
+    parser.add_argument('threshold_mb', type=float, help='大小阈值(MB)，小于等于该值的文件夹将被清理',
                         location='form', required=True)
     parser.add_argument('follow_links', type=str, help='是否跟随符号链接（true/false）', location='form')
+    parser.add_argument('recursive', type=str, help='是否包含子目录（true/false，默认 true）',
+                        location='form')
 
     @system.doc(parser=parser)
     def post(self):
         """
-        目录清理：删除扫描命中的子文件夹（密钥认证，不可撤销）
+        目录清理：删除扫描命中的文件夹（密钥认证，不可撤销）
         """
         args = self.parser.parse_args()
         # 表单传来的字符串转 bool
-        fl = args.get("follow_links")
-        if isinstance(fl, str):
-            args["follow_links"] = fl.strip().lower() in ("true", "1", "yes", "on")
+        for key in ("follow_links", "recursive"):
+            val = args.get(key)
+            if isinstance(val, str):
+                args[key] = val.strip().lower() in ("true", "1", "yes", "on")
         return WebAction().api_action(cmd='clean_dirs_run', data=args)
 
 

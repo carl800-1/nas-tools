@@ -795,6 +795,7 @@ def service():
                            SyncPaths=SyncPaths,
                            CleanDefaultRoot=CleanConf.get("root_path"),
                            CleanDefaultThreshold=CleanConf.get("threshold_mb"),
+                           CleanDefaultRecursive=CleanConf.get("recursive", True),
                            SchedulerTasks=Services)
 
 

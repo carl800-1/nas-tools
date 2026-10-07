@@ -12,15 +12,19 @@ BYTES_PER_MB = 1024 * 1024
 
 class CleanHelper:
     """
-    目录清理服务：扫描指定根目录下的所有子文件夹，
+    目录清理服务：扫描指定根目录下的文件夹，
     删除其中总大小小于等于阈值（单位 MB）的文件夹。
 
     设计约束：
       1. 根目录与阈值均为入参（可来自配置或接口），不写死；
       2. 文件夹大小按递归累加内部所有文件大小计算，1MB = 1024*1024 字节，空文件夹为 0；
-      3. 只处理根目录的「子文件夹」，根目录本身与根目录下的散落文件不受影响；
+      3. recursive=True（默认）时扫描**任意层级**的子文件夹（多级递归）；
+         recursive=False 时退回旧行为，只处理根目录的「一级子文件夹」。
+         两种模式下根目录本身与根目录下的散落文件都不受影响；
       4. 支持 dry_run：只扫描并返回待删除清单，不落盘删除；
-      5. 权限不足、文件占用、符号链接等异常记录日志后跳过，不中断整体流程。
+      5. 权限不足、文件占用、符号链接等异常记录日志后跳过，不中断整体流程；
+      6. 递归时做「命中即剪枝」：某目录命中阈值后不再下钻，
+         避免既删父目录又删子目录导致重复统计与无效删除。
     """
 
     def __init__(self):
@@ -35,6 +39,7 @@ class CleanHelper:
             clean_dirs:
               root_path: ''
               threshold_mb: 10
+              recursive: true
         """
         try:
             conf = Config().get_config("clean_dirs") or {}
@@ -49,9 +54,16 @@ class CleanHelper:
             threshold_mb = float(threshold_mb)
         except (TypeError, ValueError):
             threshold_mb = 10
+        # 缺省为 True：包含子目录（多级递归）
+        recursive = conf.get("recursive", True)
+        if isinstance(recursive, str):
+            recursive = recursive.strip().lower() not in ("false", "0", "no", "off", "")
+        else:
+            recursive = bool(recursive)
         return {
             "root_path": root_path,
-            "threshold_mb": threshold_mb
+            "threshold_mb": threshold_mb,
+            "recursive": recursive
         }
 
     @staticmethod
@@ -72,6 +84,20 @@ class CleanHelper:
         if value < 0:
             return 0.0
         return value
+
+    @staticmethod
+    def normalize_recursive(value, default=True):
+        """
+        归一化「是否包含子目录」参数。
+
+        Web 表单 / REST 传来的可能是 bool，也可能是字符串（"true"/"1"/"on"…）。
+        None / 空串表示「没传」，此时取默认值（默认 True = 包含子目录）。
+        """
+        if value is None or value == "":
+            return bool(default)
+        if isinstance(value, str):
+            return value.strip().lower() not in ("false", "0", "no", "off")
+        return bool(value)
 
     def get_dir_size(self, dir_path, follow_links=False):
         """
@@ -121,13 +147,14 @@ class CleanHelper:
                     skipped.append({"path": file_path, "reason": f"未知异常：{err}"})
         return total_size, skipped
 
-    def scan(self, root_path, threshold_mb, follow_links=False):
+    def scan(self, root_path, threshold_mb, follow_links=False, recursive=True):
         """
-        扫描根目录下的所有**一级子文件夹**，返回大小 <= 阈值的清单。
+        扫描根目录下的文件夹，返回大小 <= 阈值的清单。
 
-        :param root_path: 根目录（仅其子文件夹会被处理，根目录本身不动）
-        :param threshold_mb: 阈值（MB），大小 <= 该值的子文件夹判为待删
+        :param root_path: 根目录（仅其下的文件夹会被处理，根目录本身不动）
+        :param threshold_mb: 阈值（MB），大小 <= 该值的文件夹判为待删
         :param follow_links: 是否跟随符号链接
+        :param recursive: True = 递归扫描任意层级子目录；False = 只扫一级子目录
         :return: dict
         """
         threshold_value = self.normalize_threshold(threshold_mb)
@@ -135,6 +162,7 @@ class CleanHelper:
             "root_path": root_path,
             "threshold_mb": threshold_value,
             "threshold_bytes": int(threshold_value * BYTES_PER_MB),
+            "recursive": bool(recursive),
             "total_dirs": 0,
             "matched": [],
             "skipped": [],
@@ -160,9 +188,55 @@ class CleanHelper:
             result["error"] = f"根目录读取失败：{err}"
             return result
 
+        def handle_dir(sub_path, name, depth):
+            """处理单个候选目录：算大小、判阈值、命中则剪枝"""
+            size, sub_skipped = self.get_dir_size(sub_path, follow_links=follow_links)
+            result["skipped"].extend(sub_skipped)
+            result["total_dirs"] += 1
+            if size <= result["threshold_bytes"]:
+                result["matched"].append({
+                    "path": sub_path,
+                    "name": name,
+                    "depth": depth,
+                    "size_bytes": size,
+                    "size_mb": round(size / BYTES_PER_MB, 3),
+                })
+                result["total_free_bytes"] += size
+                # 命中即剪枝：父目录被删时子目录随之消失，
+                # 再往下扫只会产生「已随父目录删除」的重复项与无效删除
+                return True
+            # 未命中且允许递归时，继续看它的子目录
+            return False
+
+        def walk(current_path, depth):
+            """递归下钻 current_path 下的子文件夹（深度优先）"""
+            try:
+                sub_entries = sorted(os.listdir(current_path))
+            except PermissionError as err:
+                result["skipped"].append({"path": current_path, "reason": f"权限不足：{err}"})
+                return
+            except OSError as err:
+                result["skipped"].append({"path": current_path, "reason": f"读取失败：{err}"})
+                return
+            for name in sub_entries:
+                sub_path = os.path.join(current_path, name)
+                # 只处理「子文件夹」：文件（含散落文件）与符号链接一律跳过
+                try:
+                    if os.path.islink(sub_path):
+                        result["skipped"].append({"path": sub_path, "reason": "符号链接已跳过"})
+                        continue
+                    if not os.path.isdir(sub_path):
+                        continue  # 散落文件：不受影响，也不记录
+                except OSError as err:
+                    result["skipped"].append({"path": sub_path, "reason": f"状态检查失败：{err}"})
+                    continue
+                if handle_dir(sub_path, name, depth):
+                    continue  # 命中剪枝，不再下钻
+                if recursive:
+                    walk(sub_path, depth + 1)
+
         for name in entries:
             sub_path = os.path.join(root_path, name)
-            # 只处理「子文件夹」：文件（含散落文件）与符号链接一律跳过
             try:
                 if os.path.islink(sub_path):
                     result["skipped"].append({"path": sub_path, "reason": "符号链接已跳过"})
@@ -172,33 +246,25 @@ class CleanHelper:
             except OSError as err:
                 result["skipped"].append({"path": sub_path, "reason": f"状态检查失败：{err}"})
                 continue
-
-            size, sub_skipped = self.get_dir_size(sub_path, follow_links=follow_links)
-            result["skipped"].extend(sub_skipped)
-            result["total_dirs"] += 1
-
-            if size <= result["threshold_bytes"]:
-                result["matched"].append({
-                    "path": sub_path,
-                    "name": name,
-                    "size_bytes": size,
-                    "size_mb": round(size / BYTES_PER_MB, 3),
-                })
-                result["total_free_bytes"] += size
+            if handle_dir(sub_path, name, 1):
+                continue
+            if recursive:
+                walk(sub_path, 2)
 
         # 待删清单按大小升序，便于从最小开始删
         result["matched"].sort(key=lambda x: x["size_bytes"])
         self._last_scan = result
         return result
 
-    def clean(self, root_path, threshold_mb, dry_run=True, follow_links=False):
+    def clean(self, root_path, threshold_mb, dry_run=True, follow_links=False, recursive=True):
         """
         执行清理：先扫描，再按 dry_run 决定是否真正删除。
 
         :param dry_run: True = 只预览（不删除任何东西）；False = 真正执行删除
+        :param recursive: True = 递归扫描任意层级子目录；False = 只扫一级子目录
         :return: dict（包含 matched 清单与已删除结果）
         """
-        scan_result = self.scan(root_path, threshold_mb, follow_links=follow_links)
+        scan_result = self.scan(root_path, threshold_mb, follow_links=follow_links, recursive=recursive)
         result = dict(scan_result)
         result["dry_run"] = bool(dry_run)
         result["deleted"] = []
@@ -223,6 +289,7 @@ class CleanHelper:
                 result["deleted"].append({
                     "path": target,
                     "name": item["name"],
+                    "depth": item.get("depth", 1),
                     "size_bytes": item["size_bytes"],
                     "size_mb": item["size_mb"],
                 })
@@ -253,10 +320,11 @@ class CleanHelper:
         """
         if result.get("error"):
             return result["error"]
+        scope = "各级子文件夹" if result.get("recursive") else "一级子文件夹"
         # 未声明 dry_run 的裸扫描结果，也按预览口径描述
         if result.get("dry_run") or "deleted" not in result:
             released_mb = round(result.get("total_free_bytes", 0) / BYTES_PER_MB, 2)
-            return (f"预览完成：扫描 {result.get('total_dirs', 0)} 个子文件夹，"
+            return (f"预览完成：扫描 {result.get('total_dirs', 0)} 个{scope}，"
                     f"命中 {len(result.get('matched', []))} 个，"
                     f"预计可释放 {released_mb} MB（未执行删除）")
         released = round(result.get("deleted_bytes", 0) / BYTES_PER_MB, 2)

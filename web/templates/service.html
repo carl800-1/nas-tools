@@ -201,7 +201,7 @@
           <div class="col-lg-8">
             <div class="mb-3">
               <label class="form-label required">根目录 <span class="form-help"
-                  title="只扫描该目录下的子文件夹；根目录本身与根目录下的散落文件不受影响"
+                  title="只扫描该目录下的文件夹；根目录本身与根目录下的散落文件不受影响"
                   data-bs-toggle="tooltip">?</span></label>
               <input type="text" id="clean_dirs_root" class="form-control filetree-folders-only"
                      value="{{ CleanDefaultRoot or '' }}" placeholder="如 /media/downloads">
@@ -210,7 +210,7 @@
           <div class="col-lg-4">
             <div class="mb-3">
               <label class="form-label required">大小阈值 (MB) <span class="form-help"
-                  title="总大小小于等于该值的子文件夹将被清理；1MB = 1024×1024 字节，空文件夹计为 0"
+                  title="总大小小于等于该值的文件夹将被清理；1MB = 1024×1024 字节，空文件夹计为 0"
                   data-bs-toggle="tooltip">?</span></label>
               <input type="number" min="0" step="0.1" id="clean_dirs_threshold" class="form-control"
                      value="{{ CleanDefaultThreshold if CleanDefaultThreshold is not none else 10 }}"
@@ -218,8 +218,15 @@
             </div>
           </div>
         </div>
-        <div class="mb-2">
-          <label class="form-check form-switch">
+        <div class="mb-2 d-flex align-items-center flex-wrap">
+          <label class="form-check form-switch me-4 mb-0">
+            <input class="form-check-input" type="checkbox" id="clean_dirs_recursive"
+                   {% if CleanDefaultRecursive is not none and CleanDefaultRecursive|string|lower in ['false','0','no','off'] %}unchecked{% else %}checked{% endif %}>
+            <span class="form-check-label">包含子目录 <span class="form-help"
+                title="开启（默认）：递归扫描任意层级，比如 a/b/c 这种嵌套目录也会被检查。<br>关闭：只检查根目录下的一级子文件夹。<br>父目录一旦命中就会被整体删除，其内部的子目录不再单独列出。"
+                data-bs-toggle="tooltip">?</span></span>
+          </label>
+          <label class="form-check form-switch mb-0">
             <input class="form-check-input" type="checkbox" id="clean_dirs_follow_links">
             <span class="form-check-label">跟随符号链接 <span class="form-help"
                 title="默认关闭：符号链接（目录与文件）一律跳过，不计入大小也不删除"
@@ -426,7 +433,8 @@
     return {
       "root_path": $("#clean_dirs_root").val().trim(),
       "threshold_mb": $("#clean_dirs_threshold").val(),
-      "follow_links": $("#clean_dirs_follow_links").is(":checked")
+      "follow_links": $("#clean_dirs_follow_links").is(":checked"),
+      "recursive": $("#clean_dirs_recursive").is(":checked")
     };
   }
 
@@ -463,8 +471,9 @@
 
   // 渲染扫描结果表格
   function clean_dirs_render(result, isPreview) {
+    let scope = result.recursive ? "各级子文件夹" : "一级子文件夹";
     let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：`
-      + `共扫描 <strong>${result.total_dirs}</strong> 个子文件夹，`
+      + `共扫描 <strong>${result.total_dirs}</strong> 个${scope}，`
       + `命中 <strong>${result.matched.length}</strong> 个，`
       + `阈值 <strong>${result.threshold_mb}</strong> MB`
       + (isPreview
@@ -473,24 +482,29 @@
             + `实际释放 <strong>${((result.deleted_bytes || 0) / 1048576).toFixed(2)}</strong> MB`)
       + `</div>`;
 
+    // 层级徽标：让嵌套目录一眼能看出深度
+    let depthBadge = (d) => d && d > 1
+      ? `<span class="badge bg-secondary me-1" title="相对根目录的第 ${d} 层">第${d}层</span>`
+      : "";
+
     if (isPreview && result.matched.length > 0) {
       html += `<div class="table-responsive" style="max-height:320px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-hover table-striped">
           <thead><tr><th>目录</th><th class="w-1">大小</th></tr></thead><tbody>`;
       for (let item of result.matched) {
         html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
-          + `${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
+          + `${depthBadge(item.depth)}${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
       }
       html += `</tbody></table></div>`;
     } else if (isPreview) {
-      html += `<div class="text-muted">没有符合条件的子文件夹，无需清理。</div>`;
+      html += `<div class="text-muted">没有符合条件的文件夹，无需清理。</div>`;
     } else if (result.deleted && result.deleted.length > 0) {
       html += `<div class="table-responsive" style="max-height:240px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-hover table-striped">
           <thead><tr><th>已删除目录</th><th class="w-1">大小</th></tr></thead><tbody>`;
       for (let item of result.deleted) {
         html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
-          + `${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
+          + `${depthBadge(item.depth)}${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
       }
       html += `</tbody></table></div>`;
     }

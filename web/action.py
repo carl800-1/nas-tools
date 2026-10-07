@@ -2848,12 +2848,14 @@ class WebAction:
     @staticmethod
     def __clean_dirs_scan(data):
         """
-        目录清理：预览模式，扫描指定根目录下总大小 <= 阈值(MB) 的子文件夹，不删除任何内容。
-        :param data: {root_path, threshold_mb, follow_links}
+        目录清理：预览模式，扫描指定根目录下总大小 <= 阈值(MB) 的文件夹，不删除任何内容。
+        :param data: {root_path, threshold_mb, follow_links, recursive}
         """
         root_path = data.get("root_path")
         threshold_mb = data.get("threshold_mb")
         follow_links = bool(data.get("follow_links"))
+        # 未显式传 recursive 时回落到配置默认值（默认 True = 含子目录）
+        recursive = CleanHelper.normalize_recursive(data.get("recursive"))
         # 未传参则回落到配置文件中的默认值
         if root_path is None or threshold_mb is None or threshold_mb == "":
             default_conf = CleanHelper.get_default_config()
@@ -2864,7 +2866,8 @@ class WebAction:
         result = CleanHelper().clean(root_path=root_path,
                                      threshold_mb=threshold_mb,
                                      dry_run=True,
-                                     follow_links=follow_links)
+                                     follow_links=follow_links,
+                                     recursive=recursive)
         if result.get("error"):
             return {"code": -1, "msg": result["error"]}
         return {"code": 0,
@@ -2875,11 +2878,12 @@ class WebAction:
     def __clean_dirs_run(data):
         """
         目录清理：执行模式，删除扫描命中的文件夹（不可撤销）。
-        :param data: {root_path, threshold_mb, follow_links}
+        :param data: {root_path, threshold_mb, follow_links, recursive}
         """
         root_path = data.get("root_path")
         threshold_mb = data.get("threshold_mb")
         follow_links = bool(data.get("follow_links"))
+        recursive = CleanHelper.normalize_recursive(data.get("recursive"))
         if root_path is None or threshold_mb is None or threshold_mb == "":
             default_conf = CleanHelper.get_default_config()
             if root_path is None:
@@ -2891,7 +2895,8 @@ class WebAction:
         result = CleanHelper().clean(root_path=root_path,
                                      threshold_mb=threshold_mb,
                                      dry_run=False,
-                                     follow_links=follow_links)
+                                     follow_links=follow_links,
+                                     recursive=recursive)
         if result.get("error"):
             return {"code": -1, "msg": result["error"]}
         return {"code": 0,
