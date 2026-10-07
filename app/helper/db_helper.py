@@ -2501,7 +2501,8 @@ class DbHelper:
         """
         增加目录同步
         :param scrape: 刮削策略，1=刮削新的信息，0=复用已有信息不刮削
-        :param overwrite: 目的文件已存在时，1=覆盖替换，0=跳过
+        :param overwrite: 目的文件已存在时，0=跳过 / 1=删除原有文件并用新文件替换 /
+                          2=删除本次要转移的源文件（媒体库中原文件保留）
         """
         return self._db.insert(CONFIGSYNCPATHS(
             SOURCE=source,

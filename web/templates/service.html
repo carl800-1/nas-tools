@@ -367,11 +367,12 @@
           <div class="col-lg-6">
             <div class="mb-3">
               <label class="form-label">目的已存在时 <span class="form-help"
-                                                    title="删除原文件并替换：媒体库中已存在同名文件时，删除原有文件并用新文件替换（注意：源文件码率更低时会覆盖更好的版本）；跳过：保持原有文件不变；按目录配置：使用各目录在「目录同步」配置中保存的设置"
+                                                    title="删除原文件并替换：媒体库中已存在同名文件时，删除原有文件并用新文件替换（注意：源文件码率更低时会覆盖更好的版本）；删除所需转移的文件：媒体库中原文件保留，把本次要转移的源文件删掉（适合清理已入库的重复文件）；跳过：保持原有文件不变；按目录配置：使用各目录在「目录同步」配置中保存的设置"
                                                     data-bs-toggle="tooltip">?</span></label>
               <select id="service_sync_overwrite" class="form-select">
                 <option value="auto" selected>按目录配置</option>
                 <option value="on">删除原文件并替换</option>
+                <option value="delete_source">删除所需转移的文件</option>
                 <option value="off">跳过</option>
               </select>
             </div>

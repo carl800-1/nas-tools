@@ -71,7 +71,8 @@ class CONFIGSYNCPATHS(Base):
     LOCATING = Column(Integer)
     # 刮削策略：1=刮削新的信息（默认），0=复用目录中已有的信息（不重新刮削，省流量）
     SCRAPE = Column(Integer)
-    # 目的文件已存在时：1=删除原有文件并用新文件替换，0=跳过（默认）
+    # 目的文件已存在时：0=跳过（默认，保留原文件与源文件）/ 1=删除原有文件并用新文件替换 /
+    # 2=删除本次要转移的源文件（媒体库中原文件保留）
     OVERWRITE = Column(Integer)
 
 

@@ -138,8 +138,10 @@
                 <div class="datagrid-item">
                   <div class="datagrid-title">已存在时</div>
                   <div class="datagrid-content">
-                    {% if Attr.overwrite %}
-                      <span class="badge bg-red">覆盖替换</span>
+                    {% if Attr.overwrite == 1 %}
+                      <span class="badge bg-red">删除原件后替换</span>
+                    {% elif Attr.overwrite == 2 %}
+                      <span class="badge bg-orange">删除待转移文件</span>
                     {% else %}
                       <span class="badge bg-cyan">跳过</span>
                     {% endif %}
@@ -242,12 +244,14 @@
             </label>
           </div>
           <div class="col-lg-4 mb-1">
-            <label class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" id="sync_path_overwrite">
-              <span class="form-check-label">已存在时替换 <span class="form-help"
-                title="开启：目标媒体库中已存在同名文件时，删除原有文件并用新文件替换（注意：源文件码率更低时会覆盖更好的版本）；关闭：跳过，保持原有文件不变"
-                data-bs-toggle="tooltip">?</span></span>
-            </label>
+            <label class="form-label">目的已存在时 <span class="form-help"
+              title="删除原文件并替换：目标媒体库中已存在同名文件时，删除原有文件并用新文件替换（注意：源文件码率更低时会覆盖更好的版本）；删除所需转移的文件：媒体库中原文件保留，把本次要转移的源文件删掉（适合清理已入库的重复文件）；跳过：媒体库文件与原文件都不变"
+              data-bs-toggle="tooltip">?</span></label>
+            <select id="sync_path_overwrite" class="form-select">
+              <option value="0">跳过</option>
+              <option value="1">删除原文件并替换</option>
+              <option value="2">删除所需转移的文件</option>
+            </select>
           </div>
         </div>
       </div>
@@ -271,7 +275,7 @@
     $("#sync_path_enabled").prop("checked", true);
     $("#sync_path_locating").prop("checked", false);
     $("#sync_path_scrape").prop("checked", true);
-    $("#sync_path_overwrite").prop("checked", false);
+    $("#sync_path_overwrite").val("0");
     $("#sync_path_syncmod").val("{{ SyncMod }}");
     $("#modal-directory").modal('show');
     refresh_locating_state();
@@ -294,7 +298,19 @@
         $("#sync_path_locating").prop("checked", sync_item.locating);
         // 老配置不含这两项：刮削缺省为开、覆盖缺省为关，与后端默认一致
         $("#sync_path_scrape").prop("checked", sync_item.scrape !== false && sync_item.scrape !== 0);
-        $("#sync_path_overwrite").prop("checked", sync_item.overwrite === true || sync_item.overwrite === 1);
+        // 目的已存在时：0=跳过 / 1=删除原文件并替换 / 2=删除所需转移的文件（老配置可能为 true/false/null）
+        let _overwrite = sync_item.overwrite;
+        if (_overwrite === true) {
+          _overwrite = 1;
+        } else if (_overwrite === false || _overwrite === null || _overwrite === undefined) {
+          _overwrite = 0;
+        } else {
+          _overwrite = parseInt(_overwrite, 10);
+          if (isNaN(_overwrite)) {
+            _overwrite = 0;
+          }
+        }
+        $("#sync_path_overwrite").val(String(_overwrite));
         $("#modal-directory").modal('show');
         refresh_locating_state();
       }

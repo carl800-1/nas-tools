@@ -76,9 +76,10 @@ class Sync(object):
             # 刮削策略：1=刮削新的信息，0=复用已有信息不刮削
             # 历史数据该列为空（None），按 1 处理，保持原有行为
             scrape = True if sync_conf.SCRAPE is None else bool(sync_conf.SCRAPE)
-            # 目的文件已存在时：1=覆盖替换，0=跳过
+            # 目的文件已存在时：0=跳过（默认）/ 1=删除原有文件并用新文件替换 /
+            # 2=删除本次要转移的源文件（媒体库中原文件保留）
             # 历史数据该列为空（None），按 0 处理，保持原有行为
-            overwrite = False if sync_conf.OVERWRITE is None else bool(sync_conf.OVERWRITE)
+            overwrite = 0 if sync_conf.OVERWRITE is None else int(sync_conf.OVERWRITE)
             # 转移方式
             syncmode = sync_conf.MODE
             syncmode_enum = ModuleConf.RMT_MODES.get(syncmode)
@@ -98,8 +99,10 @@ class Sync(object):
                 log_content2 += "，启用兼容模式"
             if not scrape:
                 log_content2 += "，不刮削（复用已有信息）"
-            if overwrite:
-                log_content2 += "，已存在时覆盖替换"
+            if overwrite == 1:
+                log_content2 += "，已存在时删除原文件并替换"
+            elif overwrite == 2:
+                log_content2 += "，已存在时删除待转移的文件"
             log.info(f"【Sync】读取到监控目录：{monpath}，{log_content1}转移方式：{syncmode_enum.value}{log_content2}")
             if not enabled:
                 log.info(f"【Sync】{monpath} 不进行监控和同步：手动关闭")
@@ -426,7 +429,8 @@ class Sync(object):
         全量转移Sync目录下的文件，WEB界面点击目录同步时获发
         :param sid: 同步目录ID，可为单个ID、ID列表，为空时处理全部启用中的目录
         :param scrape: 临时覆盖刮削策略，True=刮削 / False=不刮削，None=按各目录配置
-        :param overwrite: 临时覆盖「已存在则替换」，True=覆盖 / False=跳过，None=按各目录配置
+        :param overwrite: 临时覆盖「目的已存在时」策略，0=跳过 / 1=删除原文件并替换 /
+                          2=删除所需转移的文件（删源、保留媒体库原文件），None=按各目录配置
         """
         if not sid:
             sids = self._monitor_sync_path_ids
