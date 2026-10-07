@@ -25,7 +25,7 @@
 | ① | `config/my-category.yaml` | **新增**。movie / tv / anime 三段完整策略 + 落地说明，纯 LF |
 | ② | `version.py` | `APP_VERSION` v6.4.7 → v6.4.8 |
 | ③ | `CHANGELOG.md` | 头部插入 v6.4.8 段 |
-| ④ | `README.md` | 版本行 / `docker pull` / Last updated + 「目录规划与挂载」补一段指引 |
+| ④ | `README.md` | 版本行 / `docker pull` / Last updated |
 
 **零代码改动** —— 不动 `app/` 下任何文件，纯配置交付，因此没有回归风险。
 
