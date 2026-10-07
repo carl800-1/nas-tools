@@ -12,7 +12,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)
 
-> 当前版本：**v6.4.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.8** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：<https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools>
 
@@ -164,6 +164,11 @@ media:
 3. **目录名尽量用英文**，避免 `#`、`&`、空格等特殊字符带来的转义问题。
 4. 使用 `move`（移动）转移方式时，源文件会被搬走；若同时有多个触发器（下载器监控、目录同步、手动整理）覆盖同一目录，容易触发重复转移的报错，详见 [常见问题](#常见问题)。
 
+> **不知道二级分类怎么写？** 程序自带一套可直接启用的策略 `config/my-category.yaml` ——
+> 按「儿童 / 动漫 / 华语（国产） / 外语」四分，并把综艺、纪录片显式归拢到一个「其他」分类。
+> 把上面的 `category` 改成 `my-category` 再重启容器即可；文件里有逐条注释、
+> 三条最容易配错的规则说明，以及「一个分类建一个媒体库」的对照表与自检方法。
+
 <a id="配置"></a>
 
 ## 首次配置
@@ -294,7 +299,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.7   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.8   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -364,4 +369,4 @@ docker compose up -d
 
 ---
 
-*Last updated: 2026-10-07 ｜ 当前版本 v6.4.7*
+*Last updated: 2026-10-07 ｜ 当前版本 v6.4.8*
