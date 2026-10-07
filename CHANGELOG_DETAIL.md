@@ -3,6 +3,62 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.5.2 — 目录清理支持包含子目录（多级递归）
+
+## 目录清理支持包含子目录（多级递归）
+
+### 现象
+
+`服务 → 目录清理` 只能清掉根目录**下一层**的目录。下载目录一旦有多层嵌套
+（`/downloads/站点/剧集/季/剧集文件`），深处的空壳目录、样本目录永远扫不到。
+
+### 原因
+
+`app/helper/clean_helper.py` 的 `scan()` 用 `os.listdir(root_path)` 遍历**直接子项**，
+没有任何下钻逻辑；`os.listdir` 只返回一层。
+
+### 改动（7 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/helper/clean_helper.py` | `scan()` / `clean()` 增加 `recursive` 参数（默认 `True`）；未命中才下钻子目录；命中即剪枝；`matched` / `deleted` 增加 `depth` 字段；新增 `normalize_recursive()` 统一归一化 bool / 字符串 / None（None 取默认 True）；`format_result_message` 按口径区分「各级子文件夹」/「一级子文件夹」 |
+| `web/action.py` | `__clean_dirs_scan` / `__clean_dirs_run` 两个入口透传 `recursive` |
+| `web/apiv1.py` | `/system/clean_dirs/scan` 与 `/run` 增加 `recursive` 表单参数（`follow_links` 的字符串转 bool 写法照抄） |
+| `web/main.py` | 模板变量 `CleanDefaultRecursive`（从 `clean_dirs.recursive` 取） |
+| `web/templates/service.html` | 新增「包含子目录」开关（默认勾选，与「跟随符号链接」同一行 `d-flex`）；预览 / 已删列表加「第N层」徽标；`clean_dirs_params()` 带上 `recursive` |
+| `config/config.yaml` | `clean_dirs.recursive` 默认 `true` |
+| `tests/test_clean_helper.py` | 过时的「只处理一级」用例改为覆盖 **递归 / 剪枝 / 一级** 三种契约；补 `depth` 字段断言 |
+
+### 关键设计：命中即剪枝
+
+父目录命中阈值后其子目录必然随之消失，若继续下钻会：
+
+1. 让 `total_free_bytes` **重复累加**（父 2MB + 子 1MB 被算成 3MB，而实际只释放 2MB）；
+2. 在真正删除时产生「子目录已随父删除」的**无效删除**与报错。
+
+所以 `walk()` 命中即 `return True` 表示「已剪枝」，不再下钻。
+
+### 验证
+
+- `.workbuddy/tests/clean_dirs_recursive_verify.py` —— **49/49**
+  （真实目录树：多层命中、剪枝、depth、根目录/散落文件不受影响、dry_run、真删除、参数归一化）
+- `.workbuddy/tests/clean_dirs_recursive_neg.py` —— 反向 **5/5**
+  （关递归 / 去剪枝 / 破坏参数归一化，均被精确检出）
+- `.workbuddy/tests/clean_dirs_recursive_ui_verify.py` —— **21/21**（模板 / 接口 / 配置接线）
+- 项目官方 `tests/test_clean_helper.py` —— **33 项全绿**（2 项符号链接因 Windows 权限跳过）
+- `py_compile` 通过；7 个文件裸 LF 均为 0
+
+### 踩到的坑
+
+- 官方测试用 `unittest` 不是 pytest，隔离 venv 里没装 pytest
+  → `python -m unittest tests.test_clean_helper`（需 `export NASTOOL_CONFIG=<repo>/config/config.yaml`）
+- 官方测试的 `_mkfile(rel_path, size)` 里 `size` 是**字节数不是 MB**，且只接受 int
+  （写 `0.5` 会 `TypeError: can't multiply sequence by non-int of type 'float'`）
+- `matched[].path` 是**绝对路径**且 Windows 下分隔符是 `\` → 断言深层目录要用 `endswith`，
+  不能拿相对串去 `assertIn`
+- `clean_helper` 是 `import log` 后调**模块级** `log.info(...)`，桩件只挂 `log.log` 对象会
+  AttributeError，须逐个 `setattr(log_mod, "info", ...)` 挂模块级函数
+
 # v6.5.1 — 媒体库设置页去掉「动漫」「未识别」两张卡
 
 ## 背景
