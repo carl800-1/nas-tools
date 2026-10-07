@@ -30,9 +30,13 @@ class Category:
             return
         try:
             if not os.path.exists(self._category_path):
-                shutil.copy(os.path.join(Config().get_inner_config_path(), "default-category.yaml"),
-                            self._category_path)
-                log.warn(f"【Config】二级分类策略 {category_name} 配置文件不存在，已按模板生成...")
+                # 优先使用与策略同名的模板（如 my-category -> config/my-category.yaml），
+                # 找不到同名模板时才回退到默认模板 default-category.yaml
+                tpl_path = os.path.join(Config().get_inner_config_path(), f"{category_name}.yaml")
+                if not os.path.exists(tpl_path):
+                    tpl_path = os.path.join(Config().get_inner_config_path(), "default-category.yaml")
+                shutil.copy(tpl_path, self._category_path)
+                log.warn(f"【Config】二级分类策略 {category_name} 配置文件不存在，已按模板 {os.path.basename(tpl_path)} 生成...")
             with open(self._category_path, mode='r', encoding='utf-8') as f:
                 try:
                     yaml = ruamel.yaml.YAML()
