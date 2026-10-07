@@ -7,7 +7,7 @@
 [![Docker pulls](https://img.shields.io/docker/pulls/carl800-1/nas-tools?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 [![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-pink?style=plastic)](https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools)
 
-> 当前版本：**v6.4.6** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
+> 当前版本：**v6.4.7** ｜ 镜像：`ghcr.io/carl800-1/nas-tools` ｜ 端口：`3000` ｜ 协议：AGPL-3.0
 
 Docker 镜像：https://github.com/carl800-1/nas-tools/pkgs/container/nas-tools
 
@@ -1183,6 +1183,17 @@ v6.4.5 上线后按实际使用反馈做了三处调整：
 选种规则区回到 **9 个卡片、3×3 整行对齐**（促销 / Hit&Run / 任务总数 ｜ 大小 / 做种数 / 发布时间 ｜
 年份 / 包含 / 排除）。
 
+#### 2.57 英文片名不再被误削、重复中文名不再拼接（v6.4.7）
+
+- **`Jade Dynasty` 这类英文片名不再被误识别**：以前 `Jade` 会被当成香港 TVB 翡翠台的台标剥掉，
+  片名只剩 `Dynasty`，结果匹配到 1981 年的美剧《豪门恩怨》。现在只有 `Jade` 后面**紧跟中文剧名**时才剥台标
+  （`JADE.爱回家` 这类港剧照旧），英文片名完整保留。
+- **`[剧名]剧名…` 这类文件名也能识别了**：方括号里的中文名与后面重复时，以前会被拼成「剧名 剧名」而匹配不上 TMDB，
+  现在重复的中文名不会再被拼接。
+
+> 这一版修好之后，之前为绕开该问题添加的「自定义识别词」可以删掉（设置 → 自定义识别词），
+> 两种命名（中文 + 英文 / 纯英文）都能正确识别。
+
 ### 3. 跳转与入口优化
 
 方便把 NAS-Tools 当作媒体管理主入口：
@@ -1803,7 +1814,7 @@ media:
 **换新版本镜像**
 
 ```bash
-docker pull ghcr.io/carl800-1/nas-tools:6.4.6   # 也可继续用 latest
+docker pull ghcr.io/carl800-1/nas-tools:6.4.7   # 也可继续用 latest
 docker compose up -d
 ```
 
@@ -1906,4 +1917,4 @@ docker compose up -d
 
 ---
 
-_Last updated: 2026-10-04 ｜ 当前版本 v6.4.6_
+_Last updated: 2026-10-07 ｜ 当前版本 v6.4.7_
