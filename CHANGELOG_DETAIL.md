@@ -3,6 +3,103 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.6.0 — 目录同步新增「刮削信息」「已存在时替换」开关
+
+## 一、起因
+
+### 现象
+
+用户贴出的日志（`09.temp` 下两个目录，每轮同步都重复出现）：
+
+```
+开始处理：/video/09.temp/星际迷航：奇异新世界 (2022)，转移方式：移动
+/video/09.temp/星际迷航：奇异新世界 (2022) 目录下有 31 个文件被扫描规则过滤，未纳入处理（不是支持的媒体后缀）：thumb.jpg、fanart.jpg、poster.jpg、logo.png、banner.jpg、season01-banner.jpg、season01-landscape.jpg、season01-poster.jpg、tvshow.nfo、background.jpg、...等共 31 个
+/video/09.temp/星际迷航：奇异新世界 (2022) 目录下未找到媒体文件，当前最小文件大小限制为 150.0M
+/video/09.temp 处理失败：目录下未找到媒体文件，当前最小文件大小限制为 150.0M
+```
+
+用户的原话：「这就有些浪费流量了」。
+
+### 现场核查（NAS 实测）
+
+SSH 到 fnOS（`192.168.3.26`）进容器实测：
+
+- `/video/09.Temp/<分类>/<剧名 (年份)>/` 下**只剩 nfo 与图片，没有任何视频文件**；
+  对应剧目在媒体库 `/video/02.电视剧/...` 里**已存在且完整**。
+- 因此「N 个文件被扫描规则过滤」列出的全是 `tvshow.nfo` / `poster.jpg` / `season01-*.jpg`
+  这类**刮削产物** —— 本就不是媒体后缀，被正常过滤；
+  「未找到媒体文件」是因为视频确实已经转移走了。目录同步每轮全量扫描，
+  这些只剩残留的目录就会被反复报一次。
+- 用户贴的第二段日志（`文件 … 已存在`）是另一条链路：源目录有视频，
+  但媒体库已有同名文件 → 被记为失败，且**每个文件都重新查了一次 TMDB**。
+
+### 根因（两条，互相独立）
+
+1. **重复刮削**：`FileTransfer.transfer_media` 无条件调用 `Scraper.gen_scraper_files()`。
+   虽然它内部对**已存在**的 nfo / 图片有「存在即跳过」判断，但
+   （a）图片在这之前就要先发起网络请求；
+   （b）更重要的是**没有「这次同步根本不刮削」的档位** —— 而用户要的正是这一档。
+2. **「已存在即跳过」没有反向开关**：目的文件已存在的分支是
+   「`media.size > orgin_file_size and self._filesize_cover` 才覆盖，否则跳过」，
+   想「删旧换新」只能去开全局洗版、且必须新文件更大。
+
+## 二、改了什么
+
+### 数据层
+
+- `app/db/models.py`：`CONFIGSYNCPATHS` 新增 `SCRAPE` / `OVERWRITE`（均 `Integer`，可空）。
+- `scripts/versions/a7e21c4b9d38_1_3_8.py`：新增迁移，两个 `add_column` 都用 `try/except`
+  包住 —— 本仓每次启动都会 `delete from alembic_version` 后**重跑全部迁移**
+  （见 `app/db/main_db.py`），迁移体必须幂等。
+- `app/helper/db_helper.py`：`insert_config_sync_path` 增加 `scrape=1, overwrite=0`；
+  `check_config_sync_paths` 增加两个 `elif` 分支（各自只改自己那一列）。
+
+### 业务层
+
+- `app/filetransfer.py` → `transfer_media()` 新增两个参数：
+  - `scrape=True`：为 `False` 时**跳过** `gen_scraper_files`，直接复用目录里已有的元数据；
+  - `overwrite_exist=False`：为 `True` 时覆盖判断变为
+    `overwrite_exist or udf_flag or (media.size > orgin_file_size and self._filesize_cover)`，
+    即**不再看大小**，走 `__transfer_file(over_flag=True, old_file=...)` 先删后移。
+    （`SOFTLINK` 模式仍不覆盖 —— 硬链接不复制内容，覆盖没有意义。）
+- `app/sync.py`：
+  - `init_config` 读取两列，**空值按 `1` / `0` 兜底**（老配置行为不变），写进目录配置字典；
+  - `transfer_sync(sid=None, scrape=None, overwrite=None)` 支持**按次临时覆盖**，
+    传 `None` 表示回落到该目录自己的配置；
+  - `file_change_handler` / `transfer_mon_files`（目录监控链路）同样透传这两个值。
+- `web/action.py`：`__run_directory_sync` 解析 `on/off/auto` 并透传（`auto` → `None`）；
+  `__add_or_edit_sync_path` 落库；`__check_sync_path` 增加 `scrape` / `overwrite` 两个分支。
+
+### 界面
+
+- `web/templates/setting/directorysync.html`：编辑弹窗新增「刮削信息」「已存在时替换」两个开关；
+  卡片上新增两项状态（刮削新的 / 复用已有、覆盖替换 / 跳过）。
+- `web/templates/service.html`：「手动目录同步」弹窗新增两个下拉，
+  值域为「按目录配置 / 刮削新的信息 / 复用已有信息」与
+  「按目录配置 / 删除原文件并替换 / 跳过」；每次打开弹窗重置为「按目录配置」，
+  避免上一次的临时选择被误当成默认值。
+
+## 三、验证
+
+| 脚本 | 覆盖 | 结果 |
+|---|---|---|
+| `.workbuddy/tests/sync_scrape_overwrite_verify.py` | 接线正针 55 项 + 从**真实源码 AST** 抽表达式求值 7 项 + 反针 8 项 + Jinja 真实渲染 8 项 | 68/68 |
+| `.workbuddy/tests/sync_path_db_verify.py` | 真实建表 + Alembic 迁移链 + `DbHelper` 往返 + 老数据 NULL 兜底 + 真实 `Sync.transfer_sync` 透传/回落 | 24/24 |
+| `tests/`（官方） | 与升级前 HEAD **逐项一致**（用临时 worktree 在 HEAD 复现，证明那 2 项失败源自本地 Python 3.13，与本次改动无关） | 35 项 |
+| `decorator_structure_check.py` / `web_main_import_verify.py` | 装饰器结构 / 路由装饰器求值 | 6/6、6/6 |
+
+反针（破坏关键接点后，正向断言必须**精确失败**）覆盖 8 处：删掉刮削守卫、删掉
+`overwrite_exist` 条件、把洗版条件改成裸 `True`、sync 层不传参、sync 层不读目录配置、
+action 层不解析、落库丢字段、模型少列 —— 全部被检出。
+
+## 四、行为兼容
+
+| 场景 | 升级前 | 升级后（老配置两列为空） |
+|---|---|---|
+| 目录同步的刮削 | 每次都刮 | 刮（`SCRAPE` 空 → 按 `1`） |
+| 目的文件已存在 | 只在「新文件更大 + 开洗版」时覆盖 | 同上（`OVERWRITE` 空 → 按 `0`） |
+| 其他入口（搜索 / 订阅 / RSS / 手动识别） | 刮削、不覆盖 | 完全不变（`transfer_media` 默认 `scrape=True, overwrite_exist=False`） |
+
 # v6.5.3 — 修复「实时日志」多连接互相抢日志（界面卡在「刷新中…」）
 
 ## 「实时日志」多连接互相抢日志
