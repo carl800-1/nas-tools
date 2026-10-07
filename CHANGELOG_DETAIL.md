@@ -3,6 +3,76 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.4.9 — 二级分类策略「同名模板优先」兜底
+
+## 背景
+
+v6.4.8 随程序附赠了 `config/my-category.yaml`，但启用时发现：把 `media.category` 改成
+`my-category` 之后，生成出来的却是默认策略的内容。
+
+根因在 `app/media/category.py:32-35` —— 策略文件不存在时的兜底复制是**写死的**：
+
+```python
+shutil.copy(os.path.join(Config().get_inner_config_path(), "default-category.yaml"),
+            self._category_path)
+```
+
+不管 `category_name` 叫什么，复制的都是 `default-category.yaml`
+⇒ 自定义策略名**永远拿不到自己的模板**，只能拿到 default 的一份副本。
+
+这也解释了为什么「把模板改名成 `default-category.yaml` 就行」并不成立：
+存量容器的 `/config/default-category.yaml` **早就存在**，而这段逻辑外面有
+`if not os.path.exists(self._category_path)` 守卫
+⇒ 已存在的文件永远不会被重新复制，改名对存量用户无效。
+
+## 改动（1 文件，3 行）
+
+`app/media/category.py` —— 兜底复制改为「同名优先、default 回退」：
+
+| 顺序 | 候选模板 | 命中条件 |
+|---|---|---|
+| ① | `{category_name}.yaml` | 程序目录里存在与策略同名的模板 |
+| ② | `default-category.yaml` | ① 不存在时回退 |
+
+日志同步带上实际使用的模板名（`已按模板 my-category.yaml 生成...`），便于确认复制了哪一份。
+
+**未改动**：`if not os.path.exists` 守卫保留 ⇒ 存量策略文件依旧不会被覆盖；
+`Category.get_category` 的判定逻辑、三个 `*_categorys` 属性的取用方式均未动。
+
+## 容器内的两个目录（为什么需要这一步）
+
+| 目录 | 角色 | 内容 |
+|---|---|---|
+| `/nas-tools/config` | 镜像内源码目录（`Config().get_inner_config_path()`） | 程序自带的模板，随镜像更新 |
+| `/config` | 宿主机挂载的配置目录（`NASTOOL_CONFIG`） | 用户实际生效的策略文件，长期保留 |
+
+两者是不同目录，「同名复制」正是连接它们的那一步。
+
+## 验证
+
+`_verify_649.py`：用桩顶掉 `log` / `config` 后**真跑** `Category.init_config()`（`ruamel.yaml`
+为真实依赖），在临时目录里模拟 `inner` / `user` 两个目录，**29/29** 通过。
+
+与 v6.4.8 的 `_verify_category_scheme.py` 不同 —— 那个复刻了判定逻辑，这次是直接执行源码，
+覆盖的是文件系统行为。
+
+| 用例 | 断言 | 结果 |
+|---|---|---|
+| ① 有同名模板 | 生成内容 == `my-category.yaml`，且 ≠ default | ✓ |
+| ② 无同名模板 | 回退 == `default-category.yaml` | ✓ |
+| ③ 默认名 | 行为与修复前逐字节一致（向后兼容） | ✓ |
+| ④ 文件已存在 | 内容不被覆盖（存量用户保护） | ✓ |
+| ⑤ 解析结果 | movie / tv / anime 三段非空，首项均为「儿童」类 | ✓ |
+| ⑥ 反向对照 | 旧逻辑下同一场景确实拿到 default 的内容 | ✓ |
+| ⑦ 边界 | 策略名为空不产生文件；名为 `config` 被拒绝 | ✓ |
+
+## 已知边界
+
+- **只影响「文件不存在」的那一刻**：已有的策略文件（含 v6.4.8 之前生成的）不会被替换，
+  存量用户想换成新模板仍需手动覆盖一次。
+- **策略名仍是自由输入**：界面上没有「下拉选择已有策略」的控件，本次不改前端；
+  名字打错时会静默回退到 default 模板（日志有提示，但界面不报错）。
+
 # v6.4.8 — 附赠经验证的二级分类策略模板（config/my-category.yaml）
 
 ## 背景

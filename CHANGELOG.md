@@ -3,6 +3,19 @@
 > 每个版本只列三栏：✨ 新功能 / 🐛 修复 / 🔧 其他；底部「完整更新记录」指向 GitHub compare 视图（即 Comparing changes，含全部 commit 与 diff）。
 > 各版本的实现细节（改了哪些文件、测试、为什么这么改）见 [CHANGELOG_DETAIL.md](CHANGELOG_DETAIL.md)。
 
+# v6.4.9
+
+### 🐛 修复
+- **自定义策略名再也不会拿到「别人的模板」**。此前二级分类策略文件不存在时，程序**永远**复制
+  `default-category.yaml` 当模板，不管你 `media.category` 填的是什么名字 —— 于是填 `my-category`
+  得到的其实是默认策略的一份副本，v6.4.8 附赠的那套策略等于拿不到。
+  现在改为**先在程序目录里找同名模板**（`my-category` → `my-category.yaml`），
+  找不到才回退 `default-category.yaml`。
+- 老的 `default-category` 行为**完全不变**；已经存在的策略文件依旧**不会被覆盖**，
+  日志会带上实际使用的模板名（`已按模板 my-category.yaml 生成...`），方便确认复制了哪一份。
+
+**完整更新记录**: [v6.4.8...v6.4.9](https://github.com/carl800-1/nas-tools/compare/v6.4.8...v6.4.9)
+
 # v6.4.8
 
 ### ✨ 新功能
