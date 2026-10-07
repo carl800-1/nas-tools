@@ -3,6 +3,52 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.6.1 — 「目的已存在时」新增「删除所需转移的文件」档
+
+## 一、起因
+
+v6.6.0 把「目的已存在时」做成了两态（0 跳过 / 1 替换）。用户指出还缺一档：
+源目录里那个**已经入库**的文件，希望**删掉源文件、保留媒体库里那份**，
+用来清理重复，而不是二选一地「留着」或「覆盖」。
+
+## 二、改动
+
+档位由两态扩为三态，复用 `CONFIG_SYNC_PATHS.OVERWRITE` 列（**无需新迁移**）：
+
+| 值 | 含义 | 媒体库原文件 | 源文件 |
+|---|---|---|---|
+| 0 | 跳过（默认） | 保留 | 保留 |
+| 1 | 删除原文件并替换 | 删除 | 转移过去 |
+| 2 | 删除所需转移的文件 | 保留 | **删除** |
+
+- `filetransfer.transfer_media(overwrite_exist=...)` 由布尔改为档位值，默认 `0`。
+  ⚠️ **关键坑**：Python 的 `bool(2)` 为 `True`，若沿用布尔判断，新档位 2 会被误当成
+  「删除原文件并替换」而**把媒体库里的版本覆盖掉**。因此先把值归一化成 `int`，
+  再按 `== 1` / `== 2` 分流；`sync.py` 侧也把 `bool(sync_conf.OVERWRITE)` 改成
+  `int(sync_conf.OVERWRITE)`。
+- 档位 2 命中时执行 `os.remove(源文件)`，成功计入 `handler_flag`；
+  删除失败则记 `success_flag = False`、累加 `failed_count` / `alert_count` 并收集告警，
+  **不会误报成功**，然后 `continue` 跳过后续转移。
+- `web/action.py`：新增 `_to_overwrite_mode()`（落库）与 `_parse_overwrite()`（手动同步临时值），
+  两者都接受 `delete_source` / `2` 等写法，缺省 / `auto` 返回「按目录配置」；
+  `overwrite` 的图章分支由「勾选=1/未勾=0」改为按三档取值。
+- `web/templates/service.html`：「手动目录同步」下拉增加第四项「删除所需转移的文件」。
+- `web/templates/setting/directorysync.html`：配置页弹窗原「已存在时替换」开关换成三档下拉；
+  列表卡片状态徽标增加「删除待转移文件」。
+- `app/sync.py`：日志串按档位分别输出「已存在时删除原文件并替换」「已存在时删除待转移的文件」。
+
+## 三、验证（`.workbuddy/tests/sync_scrape_overwrite_verify.py`，88 / 0）
+
+- 全链路接线（`models` 列 → `sync` 读取 → `filetransfer` 参数 → `action` 解析 → 模板渲染）；
+- 从**真实源码 AST** 抽覆盖判断表达式求值，34 组取值组合；
+- **抽出删源分支的源码体真实执行**：真删一次临时文件，校验媒体库原文件保留、
+  删除失败路径正确计入失败与告警；
+- **反针 7 条**（破坏归一化 / 破坏 `== 2` 分流 / 破坏失败计数等接点，必须被检出）；
+- 真实 Jinja 渲染两个模板，校验下拉四项与徽标文案。
+
+数据库层 `.workbuddy/tests/sync_path_db_verify.py`：24 / 0（真实建表 + 迁移链 + DbHelper 往返 +
+老数据 NULL 兜底 + 真实 `Sync.transfer_sync` 透传）。官方 `tests/` 与改动前 HEAD 逐项一致。
+
 # v6.6.0 — 目录同步新增「刮削信息」「已存在时替换」开关
 
 ## 一、起因
