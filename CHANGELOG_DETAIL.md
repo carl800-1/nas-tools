@@ -3,6 +3,47 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.5.1 — 媒体库设置页去掉「动漫」「未识别」两张卡
+
+## 背景
+
+「媒体库」页（`web/templates/setting/library.html`）是**一级目录根**的配置入口，
+四张卡分别绑 `media.movie_path` / `media.tv_path` / `media.anime_path` / `media.unknown_path`。
+
+v6.5.0 把动漫降为二级分类之后，后两张与当前模型不再匹配：
+
+| 卡 | 后端配置 | 实际作用 | 去掉的理由 |
+|---|---|---|---|
+| 动漫 | `media.anime_path` | 动漫剧集是否单独一个物理根（留空则回落 `_tv_path`） | v6.5.0 之后动漫住在剧集根**下面**的「动漫剧集」二级目录，不再需要独立根入口 |
+| 未识别 | `media.unknown_path` | 识别失败文件的**备份硬链接**落点 | 它是备份目录、不是媒体库，挂在「媒体库」页语义不符 |
+
+## 改动（1 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `web/templates/setting/library.html` | 删掉「动漫」「未识别」两张卡，239 行 → 157 行 |
+
+## 后端零改动（重要）
+
+`media.anime_path` / `media.unknown_path` 两个配置键、`__update_directory` 接口，
+以及各处读取它们的代码**全部保留**：
+
+| 读取点 | 行为 |
+|---|---|
+| `app/filetransfer.py:106-107` | `anime_path` 留空 ⇒ 动漫根回落 `_tv_path`，`_anime_category_flag` 回落 `_tv_category_flag` |
+| `app/filetransfer.py:1319 / 1362` | `meta_info.type == ANIME` 时仍取 `_anime_path`（手工配了值照样生效） |
+| `app/filetransfer.py:730-735` | 识别失败时若配了 `unknown_path` 才转移备份，否则只记一条记录 |
+| `web/main.py:1165-1170`、`web/action.py:3705 / 4438` | 文件管理目录树、空间统计仍把这两个键算进去 |
+| `app/plugins/modules/libraryscraper.py:53-54` | 媒体库刮削仍把 `anime_path` 计入待刮目录 |
+
+⇒ **纯 UI 收口**：只是不再从界面提供入口，能力与数据一个没丢。
+
+## 验证
+
+- `_verify_651.py`：模板结构断言（两张卡已无、电影 / 电视剧卡保留、JS 函数完好、
+  `anime_path` / `unknown_path` 不再出现在模板里）+ 后端引用完整性 + 升版锚点
+- 回归：`_verify_650.py`（分类策略）/ `_verify_649.py` 等
+
 # v6.5.0 — 动漫降为二级分类 + 默认策略换成定稿方案
 
 ## 背景
