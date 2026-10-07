@@ -125,6 +125,26 @@
                     {% endif %}
                   </div>
                 </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">刮削信息</div>
+                  <div class="datagrid-content">
+                    {% if Attr.scrape %}
+                      <span class="badge bg-cyan">刮削新的</span>
+                    {% else %}
+                      <span class="badge bg-orange">复用已有</span>
+                    {% endif %}
+                  </div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">已存在时</div>
+                  <div class="datagrid-content">
+                    {% if Attr.overwrite %}
+                      <span class="badge bg-red">覆盖替换</span>
+                    {% else %}
+                      <span class="badge bg-cyan">跳过</span>
+                    {% endif %}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -213,6 +233,22 @@
                 data-bs-toggle="tooltip">?</span></span>
             </label>
           </div>
+          <div class="col-lg-4 mb-1">
+            <label class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="sync_path_scrape" checked>
+              <span class="form-check-label">刮削信息 <span class="form-help"
+                title="开启：为转移进来的媒体重新刮削 nfo 和图片；关闭：不重新刮削，直接复用目录中已有的 nfo 与图片（省流量，适合源目录已经刮削过的场景）"
+                data-bs-toggle="tooltip">?</span></span>
+            </label>
+          </div>
+          <div class="col-lg-4 mb-1">
+            <label class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="sync_path_overwrite">
+              <span class="form-check-label">已存在时替换 <span class="form-help"
+                title="开启：目标媒体库中已存在同名文件时，删除原有文件并用新文件替换（注意：源文件码率更低时会覆盖更好的版本）；关闭：跳过，保持原有文件不变"
+                data-bs-toggle="tooltip">?</span></span>
+            </label>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
@@ -234,6 +270,8 @@
     $("#sync_path_rename").prop("checked", true);
     $("#sync_path_enabled").prop("checked", true);
     $("#sync_path_locating").prop("checked", false);
+    $("#sync_path_scrape").prop("checked", true);
+    $("#sync_path_overwrite").prop("checked", false);
     $("#sync_path_syncmod").val("{{ SyncMod }}");
     $("#modal-directory").modal('show');
     refresh_locating_state();
@@ -254,6 +292,9 @@
         $("#sync_path_rename").prop("checked", sync_item.rename);
         $("#sync_path_enabled").prop("checked", sync_item.enabled);
         $("#sync_path_locating").prop("checked", sync_item.locating);
+        // 老配置不含这两项：刮削缺省为开、覆盖缺省为关，与后端默认一致
+        $("#sync_path_scrape").prop("checked", sync_item.scrape !== false && sync_item.scrape !== 0);
+        $("#sync_path_overwrite").prop("checked", sync_item.overwrite === true || sync_item.overwrite === 1);
         $("#modal-directory").modal('show');
         refresh_locating_state();
       }

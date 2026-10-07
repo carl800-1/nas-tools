@@ -1449,6 +1449,10 @@ class WebAction:
         rename = data.get("rename")
         enabled = data.get("enabled")
         locating = data.get("locating")
+        # 刮削策略：勾选=刮削新的信息，不勾=复用目录中已有的信息（不重新刮削，省流量）
+        scrape = data.get("scrape")
+        # 目的文件已存在时是否删除原文件并用新文件替换
+        overwrite = data.get("overwrite")
 
         _sync = Sync()
 
@@ -1487,7 +1491,10 @@ class WebAction:
                                compatibility=compatibility,
                                rename=rename,
                                enabled=enabled,
-                               locating=locating)
+                               locating=locating,
+                               # 缺省（老前端）时保持原有行为：刮削、不覆盖
+                               scrape=1 if scrape is None else int(bool(scrape)),
+                               overwrite=0 if overwrite is None else int(bool(overwrite)))
         return {"code": 0, "msg": ""}
 
     @staticmethod
@@ -1535,6 +1542,12 @@ class WebAction:
             return {"code": 0}
         elif flag == "locating":
             _sync.check_sync_paths(sid=sid, locating=1 if checked else 0)
+            return {"code": 0}
+        elif flag == "scrape":
+            _sync.check_sync_paths(sid=sid, scrape=1 if checked else 0)
+            return {"code": 0}
+        elif flag == "overwrite":
+            _sync.check_sync_paths(sid=sid, overwrite=1 if checked else 0)
             return {"code": 0}        
         else:
             return {"code": 1}
@@ -5235,8 +5248,24 @@ class WebAction:
     def __run_directory_sync(data):
         """
         执行单个目录的目录同步
+        :param sid: 同步目录ID列表，为空时处理全部启用中的目录
+        :param scrape: 临时刮削策略，on=刮削 / off=不刮削 / 其他（含缺省）=按各目录配置
+        :param overwrite: 临时覆盖策略，on=已存在则替换 / off=跳过 / 其他（含缺省）=按各目录配置
         """
-        ThreadHelper().start_thread(Sync().transfer_sync, (data.get("sid"),))
+        scrape = data.get("scrape")
+        overwrite = data.get("overwrite")
+
+        def _parse_flag(value):
+            if value is None or value == "" or value == "auto":
+                # 按各目录自己的配置
+                return None
+            return value is True or value == "on" or value == "true"
+
+        ThreadHelper().start_thread(Sync().transfer_sync, (
+            data.get("sid"),
+            _parse_flag(scrape),
+            _parse_flag(overwrite)
+        ))
         return {"code": 0, "msg": "执行成功"}
 
     @staticmethod

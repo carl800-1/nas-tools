@@ -351,6 +351,32 @@
             </div>
           </div>
         </div>
+        <div class="row">
+          <div class="col-lg-6">
+            <div class="mb-3">
+              <label class="form-label">刮削信息 <span class="form-help"
+                                                    title="刮削新的信息：为本次同步的媒体重新刮削 nfo 和图片；复用已有信息：不重新刮削，直接使用目录中已有的 nfo 与图片（省流量）；按目录配置：使用各目录在「目录同步」配置中保存的设置"
+                                                    data-bs-toggle="tooltip">?</span></label>
+              <select id="service_sync_scrape" class="form-select">
+                <option value="auto" selected>按目录配置</option>
+                <option value="on">刮削新的信息</option>
+                <option value="off">复用已有信息</option>
+              </select>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <div class="mb-3">
+              <label class="form-label">目的已存在时 <span class="form-help"
+                                                    title="删除原文件并替换：媒体库中已存在同名文件时，删除原有文件并用新文件替换（注意：源文件码率更低时会覆盖更好的版本）；跳过：保持原有文件不变；按目录配置：使用各目录在「目录同步」配置中保存的设置"
+                                                    data-bs-toggle="tooltip">?</span></label>
+              <select id="service_sync_overwrite" class="form-select">
+                <option value="auto" selected>按目录配置</option>
+                <option value="on">删除原文件并替换</option>
+                <option value="off">跳过</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <a href="javascript:run_sync_now()" id="service_sync_btn" class="btn btn-primary">开始同步</a>
@@ -402,6 +428,9 @@
         show_clean_dirs_modal();
         break;
       case "sync":
+        // 每次打开都回到「按目录配置」，避免上一次的临时选择被误解为默认
+        $('#service_sync_scrape').val("auto");
+        $('#service_sync_overwrite').val("auto");
         $('#modal-service-sync').modal('show');
         break;
       default:
@@ -846,7 +875,12 @@
   // 立即运行目录同步
   function run_sync_now() {
     let sids = select_GetSelectedVAL("service_sync_dir");
-    ajax_post("run_directory_sync", {sid: sids}, function (ret) {
+    ajax_post("run_directory_sync", {
+      sid: sids,
+      // auto = 按各目录自己的配置；on/off = 本次同步临时覆盖
+      scrape: $("#service_sync_scrape").val(),
+      overwrite: $("#service_sync_overwrite").val()
+    }, function (ret) {
       $("#modal-service-sync").modal('hide');
       if (ret.code === 0) {
         show_success_modal("目录同步已启动，正在后台运行");

@@ -502,7 +502,9 @@ class FileTransfer:
                        min_filesize=None,
                        udf_flag=False,
                        root_path=False,
-                       ignore_download_history=False):
+                       ignore_download_history=False,
+                       scrape=True,
+                       overwrite_exist=False):
         """
         识别并转移一个文件、多个文件或者目录
         :param in_from: 来源，即调用该功能的渠道
@@ -519,6 +521,9 @@ class FileTransfer:
         :param udf_flag: 自定义转移标志，为True时代表是自定义转移，此时很多处理不一样
         :param root_path: 是否根目录下的文件
         :param ignore_download_history: 是否忽略下载历史识别
+        :param scrape: 是否刮削元数据。False 时不生成 nfo/图片，直接复用目录中已有的信息
+                       （目录同步场景下可避免重复下载图片）
+        :param overwrite_exist: 目的文件已存在时是否删除原有文件并用新文件替换，默认 False（跳过）
         :return: 处理状态，错误信息
         """
 
@@ -787,7 +792,12 @@ class FileTransfer:
                         exist_filenum = exist_filenum + 1
                         if rmt_mode != RmtMode.SOFTLINK:
                             orgin_file_size = os.path.getsize(ret_file_path)
-                            if media.size > orgin_file_size and self._filesize_cover or udf_flag:
+                            # 会走覆盖的三种情形：
+                            #   1) overwrite_exist：本次同步显式要求「已存在则替换」，不再比较大小
+                            #   2) udf_flag：自定义转移
+                            #   3) 新文件更大且开启了洗版（filesize_cover）
+                            if overwrite_exist or udf_flag or (
+                                    media.size > orgin_file_size and self._filesize_cover):
                                 # 原文件
                                 old_file = ret_file_path
                                 # 拆分后缀
@@ -930,7 +940,12 @@ class FileTransfer:
                         message_medias[message_key].total_episodes += media.total_episodes
                         message_medias[message_key].size += media.size
                 # 生成nfo及poster
-                if bluray_disk_dir and media.type == MediaType.MOVIE:
+                if not scrape:
+                    # 关闭刮削时直接复用目录中已有的 nfo/图片：目录同步场景下
+                    # 源目录或媒体库通常已刮削完整，重新刮削只会重复下载图片（费流量），
+                    # 而且已有文件不会被覆盖，属于纯浪费。
+                    log.debug("【Rmt】%s 已关闭刮削，复用已有信息，跳过生成 nfo 及图片" % reg_path)
+                elif bluray_disk_dir and media.type == MediaType.MOVIE:
                     # 原盘文件的情况下 使用目录名称.nfo 生成
                     self.scraper.gen_scraper_files(media=media,
                                                    dir_path=ret_dir_path,

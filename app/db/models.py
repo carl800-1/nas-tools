@@ -69,6 +69,10 @@ class CONFIGSYNCPATHS(Base):
     ENABLED = Column(Integer)
     NOTE = Column(Text)
     LOCATING = Column(Integer)
+    # 刮削策略：1=刮削新的信息（默认），0=复用目录中已有的信息（不重新刮削，省流量）
+    SCRAPE = Column(Integer)
+    # 目的文件已存在时：1=删除原有文件并用新文件替换，0=跳过（默认）
+    OVERWRITE = Column(Integer)
 
 
 class CONFIGUSERS(Base):
