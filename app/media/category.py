@@ -54,6 +54,11 @@ class Category:
             self._movie_categorys = self._categorys.get('movie')
             self._tv_categorys = self._categorys.get('tv')
             self._anime_categorys = self._categorys.get('anime')
+            # 动漫（ANIME，即 genre 含 16 的剧集）与剧集共用二级分类，不再单列：
+            # 策略文件里不写 anime 段时沿用 tv 段，避免分类名变成空字符串后
+            # 动漫剧集平铺在剧集根目录下（一个分类都不进）。
+            if not self._anime_categorys:
+                self._anime_categorys = self._tv_categorys
         log.info(f"【Config】已加载二级分类策略 {category_name}")
 
     @property
