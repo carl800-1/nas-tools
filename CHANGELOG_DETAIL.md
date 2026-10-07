@@ -3,6 +3,68 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.5.3 — 修复「实时日志」多连接互相抢日志（界面卡在「刷新中…」）
+
+## 「实时日志」多连接互相抢日志
+
+### 现象
+
+在绿联 DXP4800 Plus（Docker 部署，经绿联应用网关 `app-3008-….ugdocker.link` 访问）上，
+打开导航栏「实时日志」弹窗，**一直停在「刷新中…」，看不到任何日志**，重启容器后短暂恢复、
+过一会儿又卡住。容器本身日志正常（`docker logs` 有输出），说明日志在产出，只是没送到前端。
+
+### 原因
+
+`web/main.py` 的 `/stream-logging` 用**一份全局游标** `log.LOG_INDEX` 表示「未读条数」，
+消费逻辑是「谁先读到就把全局游标清零」：
+
+```python
+while True:
+    with LoggingLock:              # ← 锁一直握到 yield 之后
+        if _source != LoggingSource:
+            LoggingSource = _source
+            log.LOG_INDEX = len(log.LOG_QUEUE)
+        if log.LOG_INDEX > 0:
+            logs = list(log.LOG_QUEUE)[-log.LOG_INDEX:]
+            log.LOG_INDEX = 0      # ← 谁读到谁清零
+        ...
+        time.sleep(1)
+        yield 'data: %s\n\n' % json.dumps(logs)
+```
+
+一旦同时存在两条以上的连接（**重复打开弹窗、多标签页，或反向代理保留着的旧长连接**），
+它们会互相「抢」这份游标：被抢占的那条**每次都只拿到空数组**，界面就永远停在「刷新中…」，
+且不会自己恢复（只有重启服务能清掉旧连接）。另外 `time.sleep(1)` 与 `yield` 都在
+`with LoggingLock` 内，锁跨 `yield` 持有，会让多条连接进一步互相卡住。
+
+### 复现（实测）
+
+用一个临时测试账号登录，再 `POST /subscribe?apikey=WRONG` 触发 `log.warn`（写进 `LOG_QUEUE`）
+制造日志，对比不同连接数：
+
+| 场景 | 连接 A | 连接 B |
+|---|---|---|
+| 仅一条连接 | 6 条全收到 | — |
+| 两条连接同时开 | **0 条** | 6 条 |
+
+即：后加入的连接把先加入的「饿死」了。
+
+### 改动（2 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `log.py` | 新增单调递增的 `LOG_SEQ`，每条入队日志带 `"seq"`；新增 `get_logs_since(since, source)` —— 按调用方自己的游标返回 `seq > since` 的日志与最新游标 |
+| `web/main.py` | `/stream-logging` 改为**每条连接各自持游标**（`cursor = 0` 起步，循环里 `logs, cursor = log.get_logs_since(cursor, …)`），不再读 / 写全局 `LOG_INDEX`；`time.sleep` 与 `yield` 移出锁；响应头加 `X-Accel-Buffering: no` + `Cache-Control: no-cache`；删除已无用的 `LoggingSource` / `LoggingLock` |
+
+首次连接仍会先把队列里现有的日志补一遍（`since=0` 时从现存最早一条开始给），
+打开弹窗即可看到最近记录，行为与原来一致。
+
+### 验证
+
+- `py_compile` 通过；算法模拟：修复前两条连接各只拿到约一半（实测更极端，一条 0 条），修复后**两条都拿到全部**。
+- 热更新到 NAS 容器后实测：**1 条「僵尸」旧连接 + 2 条正常连接**同时存在，两条正常连接
+  均完整收到全部 6 条新日志（另各补 31 条历史），不再互相影响 —— 修复生效。
+
 # v6.5.2 — 目录清理支持包含子目录（多级递归）
 
 ## 目录清理支持包含子目录（多级递归）
