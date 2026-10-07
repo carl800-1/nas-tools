@@ -22,7 +22,7 @@ class MetaVideoV2(MetaBase):
     _original_subtitle = None
 
     _name_no_begin_re = r"^\[.+?]"
-    _name_nostring_re = r"^PTS|^JADE|^ViuTV|^AOD|^CHC|^[A-Z]{1,4}TV[\-0-9UVHDK]*" \
+    _name_nostring_re = r"^PTS|^JADE(?=[\s._\-]*[\u4e00-\u9fff])|^ViuTV|^AOD|^CHC|^[A-Z]{1,4}TV[\-0-9UVHDK]*" \
                     r"|HBO$|\s+HBO|\d{1,2}th|\d{1,2}bit|NETFLIX|AMAZON|IMAX|^3D|\s+3D|^BBC\s+|\s+BBC|BBC$|DISNEY\+?|XXX|\s+DC$" \
                     r"|[第\s共]+[0-9一二三四五六七八九十\-\s]+季" \
                     r"|[第\s共]+[0-9一二三四五六七八九十百零\-\s]+[集话話]" \
