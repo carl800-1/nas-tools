@@ -3,6 +3,145 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.5.0 — 动漫降为二级分类 + 默认策略换成定稿方案
+
+## 背景
+
+定稿的模型是：**一级目录只对齐 TMDB 的 `media_type`（movie / tv 两个物理根）**，
+「动漫」不再是一个**类型 / 物理根**，而是**各自根下面的一个二级分类**
+（电影端的「动漫电影」、剧集端的「动漫剧集」）。
+
+关键点是：**「把 `anime:` 段从策略里删掉」并不等于「动漫降级」**。分派点在
+`app/media/meta/_base.py:577-580`：
+
+```python
+if self.type == MediaType.TV:
+    self.category = self.category_handler.get_tv_category(info)
+else:
+    self.category = self.category_handler.get_anime_category(info)   # ANIME 只走这一支
+```
+
+`get_anime_category` 读的是 `_anime_categorys`（即策略文件的 `anime:` 段）。段一删，
+它拿到的分类名就是 **空字符串**，路径变成 `os.path.join(tv_path, "", dir_name)`
+⇒ 动漫剧集**全部平铺在剧集根目录下**，一个分类都不进（实测见「验证」第 6 组）。
+
+所以「删 `anime:` 段」必须与「`anime:` 段缺失时回落到 `tv:` 段」**同时成立**，
+动漫才会落进剧集端的二级分类里。
+
+> ⚠️ 这里删的只是**配置里的 `anime:` 段**。`MediaType.ANIME` 这个枚举**保留不动**——
+> 它退化成"物理根开关"（`filetransfer.py:106-107`：`anime_path` 留空 ⇒ 根回落 `_tv_path`、
+> `_anime_category_flag` 回落 `_tv_category_flag`），删掉它只会白丢「动漫可独立成库」与
+> 「站点 anime 路径」两个选项，换不到任何分类收益。
+
+## 改动（3 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/media/category.py` | `init_config` 增 4 行：策略里没有 `anime` 段时，`_anime_categorys` 别名 `_tv_categorys` |
+| `config/default-category.yaml` | movie 段 4 档、tv 段 5 档，见下 |
+| `config/my-category.yaml` | **删除**（内容并入默认策略，仓库只留一份） |
+
+```python
+            self._anime_categorys = self._categorys.get('anime')
+            # 动漫（ANIME，即 genre 含 16 的剧集）与剧集共用二级分类，不再单列：
+            # 策略文件里不写 anime 段时沿用 tv 段，避免分类名变成空字符串后
+            # 动漫剧集平铺在剧集根目录下（一个分类都不进）。
+            if not self._anime_categorys:
+                self._anime_categorys = self._tv_categorys
+```
+
+## 为什么改 category.py 而不是 _base.py
+
+| 方案 | 评价 |
+|---|---|
+| 改 `_base.py` 让 ANIME 调 `get_tv_category` | 只修了「分类名」一处；`anime_category_flag`、`anime_categorys`（下载目录设置页那张「动漫」下拉的数据源，`web/action.py:3591`）仍走 `anime` 段，会各自失配 |
+| **改 `category.py` 一处别名（采用）** | 三个消费者（`get_anime_category` / `anime_category_flag` / `anime_categorys`）**一并跟着走 tv**；`_base.py` 一行未动 ⇒ ANIME 的识别、命名、刮削规则完全不受影响 |
+
+别名只在「策略里没有 `anime` 段」时触发 ⇒ **向后兼容**：想恢复单列，把 `anime:` 段写回策略文件即可。
+
+## 追加的默认策略
+
+```yaml
+movie:                                       # 儿童优先
+  儿童电影:  { genre_ids: '10751' }          # 电影端只有 Family，10762 是剧集端的
+  动漫电影:  { genre_ids: '16' }             # 秒杀儿童之后：儿童动画电影已归「儿童电影」
+  # ★ 纪录片(99) / 音乐(10402) 都不单独成档，按语种落「华语电影」/「外语电影」。
+  华语电影:  { original_language: 'zh,cn,bo,za' }
+  外语电影:                                   # 兜底，必须最后
+
+tv:                                          # 动漫（ANIME）共用本段；儿童优先
+  儿童电视剧: { genre_ids: '10762' }          # 儿童动漫（16+10762）也落这里
+  动漫剧集:   { genre_ids: '16' }             # 国漫、日漫统一落这里，不按产地散
+  综艺:       { genre_ids: '10764,10767' }    # 真人秀 + 脱口秀
+  # ★ 纪录片(99) 不单独成档：直接落「国产剧」/「外语电视剧」，混在正常分类里便于发现后手删。
+  国产剧:     { origin_country: 'CN,TW,HK' }
+  外语电视剧:                                  # 兜底，必须最后
+```
+
+三条铁律（配错是**静默**的：不报错、只是分错）：① 顺序即优先级、命中即停；
+② 空 value 项 = 兜底（`if not item: return key`），必须放最后；
+③ `genre_ids` 在电影端与剧集端是两套编号，只有 `16`（动画）两端同号。
+
+★ **两端都遵循「儿童优先」**：儿童电影(10751) 排在动漫电影(16) 之前、儿童电视剧(10762) 排在
+动漫剧集(16) 之前 ⇒ 儿童动画电影归「儿童电影」、儿童动漫归「儿童电视剧」；
+剩下只有 `16`（没有 Kids/Family 标签）的才进「动漫电影」/「动漫剧集」。
+
+## 落盘结果（不配 `anime_path`，共 2 个物理根）
+
+| 内容 | 落点 |
+|---|---|
+| 儿童动画电影（16 + 10751） | `movie_path/儿童电影` |
+| 其余动画电影（含国漫电影、日漫电影） | `movie_path/动漫电影` |
+| 华语非动画电影 | `movie_path/华语电影` |
+| 音乐片 | `movie_path/华语电影` / `movie_path/外语电影`（按语种） |
+| 华语纪录片 | `movie_path/华语电影` |
+| 外文纪录片 | `movie_path/外语电影` |
+| 儿童动漫（汪汪队、小猪佩奇） | `tv_path/儿童电视剧` |
+| 国漫（诛仙、凡人修仙传） | `tv_path/动漫剧集` |
+| 日漫 | `tv_path/动漫剧集` |
+| 综艺（真人秀 / 脱口秀） | `tv_path/综艺` |
+| 国产纪录片 | `tv_path/国产剧` |
+| 外文纪录片 | `tv_path/外语电视剧` |
+| 非动画国产剧（狂飙） | `tv_path/国产剧` |
+| 非动画外语剧（怪奇物语） | `tv_path/外语电视剧` |
+
+## 验证
+
+`_verify_650.py`：用桩顶掉 `log` / `config` 后**真跑** `Category.init_config()` 与三个
+`get_*_category()`（`ruamel.yaml` 为真实依赖），在临时目录里模拟 `inner` / `user` 两个目录，
+**63/63** 通过。
+
+| 组 | 覆盖内容 | 结果 |
+|---|---|---|
+| 0 | 源码与策略文件的静态断言（别名恰一处、策略无顶层 `anime:`、含动漫电影/动漫剧集、无「其它剧集」、无纪录片档） | ✓ |
+| 2 | 段结构与顺序：movie 4 项、tv 5 项；两端都是「儿童优先」 | ✓ |
+| 3 | 别名生效：`anime_categorys == tv_categorys`、两个 flag 相等、`get_anime_category == get_tv_category` | ✓ |
+| 4 | 18 条分发用例 + 7 条 ★ 命题：**国漫/日漫同落「动漫剧集」**、儿童动漫落「儿童电视剧」、动漫不被国产剧/外语电视剧抢走、非动画内容仍归各自档 | ✓ |
+| 5 | **反向对照 A**：策略里写回 `anime:` 段 ⇒ 别名不触发（配置优先） | ✓ |
+| 6 | **反向对照 B**：剥掉别名的旧 `category.py` + 新策略 ⇒ 动漫分类名为空串（**证明这一行不是可选项**） | ✓ |
+| 7 | 零回归：顺序即优先级、兜底、`tmdb_info` 为空不抛异常、复制出的文件逐字节一致 | ✓ |
+
+## 升级须知
+
+`/config/default-category.yaml` 是宿主机上的**存量文件**，而 `category.py:32` 的
+`if not os.path.exists(self._category_path)` 守卫只认「文件在不在」⇒ **不会自动覆盖**。
+
+因此 NAS 上要先删掉它（或把新内容粘进去）再重启容器，新策略才会生效。
+代码侧的改动不受此影响 —— 它随镜像走，`docker compose pull` 后即生效。
+
+## 已知边界
+
+- **纪录片 / 音乐已不再单独成档**：直接落常规分类（电影端 华语 / 外语，剧集端 国产 / 外语），
+  混在正常分类里便于发现后手工删除。分类配置**只能决定进哪个目录，不能决定转不转**；
+  真要"不转移"只能用「基础设置 → 转移忽略词」（`media.ignored_paths` / `media.ignored_files`，
+  正则），而它**只按文件名 / 路径匹配、不看 TMDB 类型**，无法按"纪录片"这种类型精准拦截。
+- **动漫仍可单独成库**：`MediaType.ANIME` 枚举保留，配 `anime_path` 即可让动漫剧集落到
+  独立物理根（此时它的二级分类名仍取自 `tv:` 段）。「不单列成一级」与「独立成库」两条线是正交的。
+- **分类不回溯**：只在转移那一刻算一次，库里已有的存量文件要手工归位。
+- 若想恢复动漫独立分类，把 `anime:` 段写回策略文件即可（无需改代码）。
+- **仓库里已不存在「不建库的桶」**：纪录片(99)、音乐(10402) 的特殊档全部移除，
+  电影端 4 档、剧集端 5 档全部指向真实媒体库，媒体库里看到的就是盘上全部。
+
 # v6.4.9 — 二级分类策略「同名模板优先」兜底
 
 ## 背景
