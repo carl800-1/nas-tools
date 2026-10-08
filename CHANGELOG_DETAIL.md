@@ -3,6 +3,83 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.8.0 — 字幕清理服务 + 动漫类型入口彻底下线（并入 v6.7.1 的两处 UI/交互修补）
+
+## 一、起因
+
+1. **重复字幕泛滥**：同一集下常有 `.chs.srt`、`.chs.简体中文(1).srt`、`.chs.简体中文(2).ass`
+   多条同语言字幕，只能手工比对删除。
+2. **「动漫」入口收口未彻底**：「媒体库」设置页（v6.5.1）、识别弹窗（v6.7.1）都已撤，
+   但「下载目录设置 → 类型」还留着一档「动漫」。
+3. 本机另有 2 处 v6.7.1 修补（目录清理按钮卡死、目录同步开关折行）一直未提交，随本版一并发布。
+
+## 二、改动（14 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/helper/subtitle_helper.py`（**新增**） | 字幕清理核心：`scan()` / `clean(dry_run)` / 语言判定 / 身份归组 / 保留排序 / 结果文案 |
+| `app/helper/__init__.py` | 导出 `SubtitleHelper` |
+| `web/backend/pro_user.py` | `SERVICE_CONF` 新增 `clean_subs` 服务卡（插在 `clean_dirs` 之后） |
+| `web/action.py` | 导入 + `_actions` 新增 `clean_subs_scan` / `clean_subs_run`，并补两个 `@staticmethod` |
+| `web/apiv1.py` | 新增 REST `/clean_subs/scan`、`/clean_subs/run`（同样走 `ApiResource` 密钥认证） |
+| `web/main.py` | `service()` 传 `SubDefaultRoot` / `SubDefaultPolicy` / `SubDefaultRecursive`；`Categories` 收窄为「电影 / 电视剧」 |
+| `config/config.yaml` | 新增 `clean_subs:` 段（`root_path` / `keep_policy` / `recursive`） |
+| `web/templates/service.html` | 新增 `#modal-clean-subs` 弹窗 + 交互 JS；目录清理段改走 `clean_dirs_scan(silent)` 与异常兜底 |
+| `web/templates/setting/downloader.html` | 「类型」下拉去掉「动漫」档，`add_downloaddir()` 里把「动漫」归一为「电视剧」 |
+| `app/downloader/downloader.py` | 仅补注释：`AUTO_CATEGORY_TYPE_MAP` / `CATEGORY_MEDIA_TYPE_MAP` 保留「动漫」键（内核兼容） |
+| `web/static/js/util.js` | `ajax_post` 新增可选第 6 形参 `error_handler`（非 200 / 网络失败时回调调用方） |
+| `web/templates/setting/directorysync.html` | 开关排 `<div class="col mb-1">` -> `col-auto` + `justify-content-between` + `text-nowrap` |
+| `web/templates/navigation.html` | 识别弹窗 `rename_type` 由三档（电影/电视剧/动漫）改为两档 |
+| `web/static/js/functions.js` | 历史记录里遗留的 `TYPE='动漫'` 并入「电视剧」分支，防「一个都没选中」 |
+
+## 三、字幕清理的判定口径
+
+- **字幕扩展名**：只认 `.srt / .ass / .ssa`（`config.RMT_SUBEXT`）。
+  **刻意不含** `.sub / .idx / .sup` —— VobSub 是「字幕体 + 索引」成对使用，删一半就废。
+- **语言判定**：对齐 `filetransfer.py::__transfer_subtitles` 的口径——
+  `chs`（简中 / 简体 / 中字 / 双语 / 国语）、`cht`（繁体 / 繁中 / 台繁 / 港繁）、
+  `eng`、`jpn`、`kor`；判定顺序「先简、再繁、后英」。
+  ⚠️ `chs` **刻意不含裸「中文」**，否则「繁体中文」会同时命中简繁。
+  ⚠️ 切词用 `[._ ]`，**不能按 `-` 切**，否则 `zh-TW` 会裂成 `zh` + `TW` 同时命中简繁。
+- **身份归组**：从文件名尾部依次剥掉「语言标记 / 流序号 / `(n)` 计数」段，剩下的当身份；
+  去掉所有空白后再比较，使「第15集」与「第 15 集」并到同一组。
+  ⚠️ 1~2 位纯数字视为流序号（`.chs.2.srt`），4 位多为年份**不剥**。
+- **保留策略**：`quality`（默认）= 格式（ASS/SSA > SRT）→ 体积 → 名短 → 字典序；
+  `size` = 体积 → 格式 → 名短 → 字典序。
+- **认不出语言（`und`）的一律不动**，只在预览里单独列出——
+  同一集下无语言标记的 `.ass` / `.srt` 可能是两种不同语言，删错无法恢复。
+- **安全阀**：拒绝文件系统根目录（`/` 或盘符根）；`os.walk` 顺序不稳 ⇒ 归组后排序，结果可复现；
+  明细截断上限 1000 组（计数保真）。
+
+## 四、验证
+
+- `_verify_v680_sub.py` **82/82**：真实目录端到端（预览不落盘 → 执行后每种语言仅留一条、
+  视频 / nfo / 图片 / VobSub 不受影响、符号链接跳过、幂等、边界与错误分支、明细截断）。
+- `_verify_v680_wire.py` **62/62**：从 AST 抽出**真实**的 `__clean_subs_scan` / `__clean_subs_run`
+  执行，并对路由 / 服务卡 / 模板 / 配置逐项断言。
+- `_jinja_check680.py` **17/17**：用真实 Jinja2 渲染弹窗，核验「包含子目录」默认勾选、
+  两个 `<option selected>` 不会同时命中、`uncheckedchecked` 之类的拼接不会出现。
+- 无头渲染 + 交互 `shot680.js` **34/34**：弹窗真实宽 720px（Tabler 变量）、无横向溢出、
+  预览表「保留 / 删除」两列、执行二次确认与成功提示、HTTP 500 时按钮不卡死、
+  **反向对照**（旧版 `ajax_post` 下按钮确实永久停在「扫描中...」）。
+- 回归：`_verify_v671` 27/27 · `_verify_v671_clean` 48/48 · `_verify_v671d` 38/38 ·
+  `_verify_643` 54/54 · `_verify_642` 57/57 · `_verify_641_lack_fallback` 35/35 ·
+  `_verify_640_subscribe` 55/55 · `_verify_log_api_usage` 7/7。
+
+## 五、坑
+
+- **`ajax_post` 的 error 分支**：原实现只在 `xhr.status === 200` 时回调，
+  其余（500 / 网关超时 / 连接中断）什么都不做 ⇒ 调用方的 success 回调永不执行、按钮永久卡死。
+  修法是新增**可选**第 6 形参 `error_handler`（全仓 127 个调用点只用 1~3 参 ⇒ 零影响）。
+- **语言判定串味**：`zh-TW` 被按 `-` 切开后 `zh` + `TW` 同时命中简繁；
+  「繁体中文」因 `chs` 含裸「中文」而同时命中。两处都要按词边界处理。
+- **验证脚本的 log 桩**：`log.py` 只有 `warn`、**没有 `warning`**；
+  桩若凭空多暴露一个名字，会让「产品代码用了 `log.warning`」这类真机事故在离线全绿中漏网
+  （由 `_verify_log_api_usage.py` 双向设防）。
+- **预览页不能用正则剥 Jinja 标签**：`{% if %}unchecked{% else %}checked{% endif %}`
+  会被拼成 `uncheckedchecked`，两个 `selected` 会同时命中 ⇒ 默认态造假、假失败。
+  必须走真实 Jinja2 渲染。
+
 # v6.7.1 — 移动模式下「源文件已不存在」的幂等处理
 
 ## 一、起因
