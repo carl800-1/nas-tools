@@ -2497,12 +2497,10 @@ class DbHelper:
 
     @DbPersist(_db)
     def insert_config_sync_path(self, source, dest, unknown, mode, compatibility, rename, enabled, locating, note=None,
-                                scrape=1, overwrite=0):
+                                scrape=1):
         """
         增加目录同步
         :param scrape: 刮削策略，1=刮削新的信息，0=复用已有信息不刮削
-        :param overwrite: 目的文件已存在时，0=跳过 / 1=删除原有文件并用新文件替换 /
-                          2=删除本次要转移的源文件（媒体库中原文件保留）
         """
         return self._db.insert(CONFIGSYNCPATHS(
             SOURCE=source,
@@ -2514,8 +2512,7 @@ class DbHelper:
             ENABLED=int(enabled),
             LOCATING=int(locating),
             NOTE=note,
-            SCRAPE=int(scrape),
-            OVERWRITE=int(overwrite)
+            SCRAPE=int(scrape)
         ))
 
     @DbPersist(_db)
@@ -2537,7 +2534,7 @@ class DbHelper:
 
     @DbPersist(_db)
     def check_config_sync_paths(self, sid=None, compatibility=None, rename=None, enabled=None, locating=None,
-                                scrape=None, overwrite=None):
+                                scrape=None):
         """
         设置目录同步状态
         """
@@ -2569,12 +2566,6 @@ class DbHelper:
             self._db.query(CONFIGSYNCPATHS).filter(CONFIGSYNCPATHS.ID == int(sid)).update(
                 {
                     "SCRAPE": int(scrape)
-                }
-            )
-        elif sid and overwrite is not None:
-            self._db.query(CONFIGSYNCPATHS).filter(CONFIGSYNCPATHS.ID == int(sid)).update(
-                {
-                    "OVERWRITE": int(overwrite)
                 }
             )
             

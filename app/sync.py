@@ -76,10 +76,6 @@ class Sync(object):
             # 刮削策略：1=刮削新的信息，0=复用已有信息不刮削
             # 历史数据该列为空（None），按 1 处理，保持原有行为
             scrape = True if sync_conf.SCRAPE is None else bool(sync_conf.SCRAPE)
-            # 目的文件已存在时：0=跳过（默认）/ 1=删除原有文件并用新文件替换 /
-            # 2=删除本次要转移的源文件（媒体库中原文件保留）
-            # 历史数据该列为空（None），按 0 处理，保持原有行为
-            overwrite = 0 if sync_conf.OVERWRITE is None else int(sync_conf.OVERWRITE)
             # 转移方式
             syncmode = sync_conf.MODE
             syncmode_enum = ModuleConf.RMT_MODES.get(syncmode)
@@ -99,10 +95,6 @@ class Sync(object):
                 log_content2 += "，启用兼容模式"
             if not scrape:
                 log_content2 += "，不刮削（复用已有信息）"
-            if overwrite == 1:
-                log_content2 += "，已存在时删除原文件并替换"
-            elif overwrite == 2:
-                log_content2 += "，已存在时删除待转移的文件"
             log.info(f"【Sync】读取到监控目录：{monpath}，{log_content1}转移方式：{syncmode_enum.value}{log_content2}")
             if not enabled:
                 log.info(f"【Sync】{monpath} 不进行监控和同步：手动关闭")
@@ -124,8 +116,7 @@ class Sync(object):
                 'rename': rename,
                 'enabled': enabled,
                 'locating': locating,
-                'scrape': scrape,
-                'overwrite': overwrite
+                'scrape': scrape
             }
             if monpath and os.path.exists(monpath):
                 if enabled:
@@ -262,9 +253,8 @@ class Sync(object):
                 unknown_path = sync_path_conf.get('unknown')
                 rename = sync_path_conf.get('rename')
                 sync_mode = ModuleConf.RMT_MODES.get(sync_path_conf.get('syncmod'))
-                # 该目录的刮削策略与「已存在则替换」开关
+                # 该目录的刮削策略
                 scrape = sync_path_conf.get('scrape')
-                overwrite = sync_path_conf.get('overwrite')
 
                 # 不做识别重命名
                 if not rename:
@@ -296,8 +286,7 @@ class Sync(object):
                                                                         target_dir=target_path,
                                                                         unknown_dir=unknown_path,
                                                                         rmt_mode=sync_mode,
-                                                                        scrape=scrape,
-                                                                        overwrite_exist=overwrite)
+                                                                        scrape=scrape)
                         if not ret:
                             log.warn("【Sync】%s 转移失败：%s" % (event_path, ret_msg))
                     else:
@@ -318,7 +307,6 @@ class Sync(object):
                                                                    'unknown': unknown_path,
                                                                    'syncmod': sync_mode,
                                                                    'scrape': scrape,
-                                                                   'overwrite': overwrite,
                                                                    'files': [event_path]}
                         finally:
                             lock.release()
@@ -352,7 +340,6 @@ class Sync(object):
                     unknown_path = target_info.get('unknown')
                     sync_mode = target_info.get('syncmod')
                     scrape = target_info.get('scrape')
-                    overwrite = target_info.get('overwrite')
                     # 判断是否根目录
                     is_root_path = False
                     for sid in self._monitor_sync_path_ids:
@@ -368,8 +355,7 @@ class Sync(object):
                                                                         unknown_dir=unknown_path,
                                                                         rmt_mode=sync_mode,
                                                                         root_path=is_root_path,
-                                                                        scrape=scrape,
-                                                                        overwrite_exist=overwrite)
+                                                                        scrape=scrape)
                         if not ret:
                             log.warn("【Sync】%s转移失败：%s" % (path, ret_msg))
                 self._need_sync_paths.pop(path)
@@ -424,13 +410,11 @@ class Sync(object):
                     print(str(e))
         self._observer = []
 
-    def transfer_sync(self, sid=None, scrape=None, overwrite=None):
+    def transfer_sync(self, sid=None, scrape=None):
         """
         全量转移Sync目录下的文件，WEB界面点击目录同步时获发
         :param sid: 同步目录ID，可为单个ID、ID列表，为空时处理全部启用中的目录
         :param scrape: 临时覆盖刮削策略，True=刮削 / False=不刮削，None=按各目录配置
-        :param overwrite: 临时覆盖「目的已存在时」策略，0=跳过 / 1=删除原文件并替换 /
-                          2=删除所需转移的文件（删源、保留媒体库原文件），None=按各目录配置
         """
         if not sid:
             sids = self._monitor_sync_path_ids
@@ -445,9 +429,8 @@ class Sync(object):
             unknown_path = sync_path_conf.get("unknown")
             rename = sync_path_conf.get("rename")
             sync_mode = ModuleConf.RMT_MODES.get(sync_path_conf.get("syncmod"))
-            # 刮削 / 覆盖：优先用本次传入的临时值，未传时按该目录自己的配置
+            # 刮削：优先用本次传入的临时值，未传时按该目录自己的配置
             _scrape = sync_path_conf.get("scrape") if scrape is None else scrape
-            _overwrite = sync_path_conf.get("overwrite") if overwrite is None else overwrite
             # 不做识别重命名
             if not rename:
                 for link_file in PathUtils.get_dir_files(mon_path):
@@ -471,8 +454,7 @@ class Sync(object):
                                                                     target_dir=target_path,
                                                                     unknown_dir=unknown_path,
                                                                     rmt_mode=sync_mode,
-                                                                    scrape=_scrape,
-                                                                    overwrite_exist=_overwrite)
+                                                                    scrape=_scrape)
                     if not ret:
                         log.error("【Sync】%s 处理失败：%s" % (mon_path, ret_msg))
 
@@ -506,7 +488,7 @@ class Sync(object):
         return ret
 
     def insert_sync_path(self, source, dest, unknown, mode, compatibility, rename, enabled, locating, note=None,
-                         scrape=1, overwrite=0):
+                         scrape=1):
         """
         添加同步目录配置
         """
@@ -519,13 +501,12 @@ class Sync(object):
                                                     enabled=enabled,
                                                     locating=locating,
                                                     note=note,
-                                                    scrape=scrape,
-                                                    overwrite=overwrite)
+                                                    scrape=scrape)
         self.init_config()
         return ret
 
     def check_sync_paths(self, sid=None, compatibility=None, rename=None, enabled=None, locating=None,
-                         scrape=None, overwrite=None):
+                         scrape=None):
         """
         检查配置的同步目录
         """
@@ -535,8 +516,7 @@ class Sync(object):
             rename=rename,
             enabled=enabled,
             locating=locating,
-            scrape=scrape,
-            overwrite=overwrite
+            scrape=scrape
         )
         self.init_config()
         return ret

@@ -503,8 +503,7 @@ class FileTransfer:
                        udf_flag=False,
                        root_path=False,
                        ignore_download_history=False,
-                       scrape=True,
-                       overwrite_exist=0):
+                       scrape=True):
         """
         识别并转移一个文件、多个文件或者目录
         :param in_from: 来源，即调用该功能的渠道
@@ -523,8 +522,6 @@ class FileTransfer:
         :param ignore_download_history: 是否忽略下载历史识别
         :param scrape: 是否刮削元数据。False 时不生成 nfo/图片，直接复用目录中已有的信息
                        （目录同步场景下可避免重复下载图片）
-        :param overwrite_exist: 目的文件已存在时的处理策略，0=跳过（默认，原文件与源文件都保留）/
-                               1=删除原有文件并用新文件替换 / 2=删除本次要转移的源文件（媒体库中原文件保留）
         :return: 处理状态，错误信息
         """
 
@@ -792,33 +789,13 @@ class FileTransfer:
                     if file_exist_flag:
                         exist_filenum = exist_filenum + 1
                         if rmt_mode != RmtMode.SOFTLINK:
-                            # 目的已存在时的处理策略：0=跳过 / 1=删除原文件并替换 / 2=删除本次要转移的源文件
-                            overwrite_mode = int(overwrite_exist) if overwrite_exist else 0
-                            if overwrite_mode == 2:
-                                # 媒体库里的原文件保留，只把本次要转移的源文件删掉，
-                                # 这样目录同步下一轮扫描不会再把它当成新文件重新识别一遍
-                                log.info("【Rmt】文件 %s 已存在，按配置删除待转移的文件：%s"
-                                         % (ret_file_path, file_item))
-                                try:
-                                    os.remove(file_item)
-                                    handler_flag = True
-                                except Exception as err:
-                                    ExceptionUtils.exception_traceback(err)
-                                    log.error("【Rmt】删除待转移文件失败：%s，%s" % (file_item, str(err)))
-                                    success_flag = False
-                                    error_message = "删除待转移文件失败：%s" % file_item
-                                    failed_count += 1
-                                    alert_count += 1
-                                    if error_message not in alert_messages:
-                                        alert_messages.append(error_message)
-                                continue
                             orgin_file_size = os.path.getsize(ret_file_path)
-                            # 会走覆盖的三种情形：
-                            #   1) overwrite_exist：本次同步显式要求「已存在则替换」，不再比较大小
-                            #   2) udf_flag：自定义转移
-                            #   3) 新文件更大且开启了洗版（filesize_cover）
-                            if overwrite_mode == 1 or udf_flag or (
-                                    media.size > orgin_file_size and self._filesize_cover):
+                            # 会走覆盖的两种情形：
+                            #   1) udf_flag：自定义转移（手动转移以新文件为准）
+                            #   2) 新文件更优（体积更大）且开启了「高质量文件覆盖」
+                            #      （全局配置 media.filesize_cover，见基础设置界面）
+                            # 「无条件替换」档位已下线：覆盖一律要求新文件体积更大。
+                            if udf_flag or (media.size > orgin_file_size and self._filesize_cover):
                                 # 原文件
                                 old_file = ret_file_path
                                 # 拆分后缀
@@ -844,10 +821,29 @@ class FileTransfer:
                                     continue
                                 handler_flag = True
                             else:
-                                # 目的文件已存在且大小一致：确认就是这个文件已经整理过了，
-                                # 补记为「已整理过」。否则目录同步每一轮全量扫描都会把它当成
-                                # 新文件重新识别一遍、并重复告警。大小不一致时不登记，
-                                # 保留洗版（新文件更大时覆盖）的机会。
+                                # 目的已存在且新文件未更优。
+                                # 移动(MOVE)模式：源文件本次本来就要被挪走，库里已有同名文件
+                                # 时直接删掉它；不删的话目录同步每一轮全量扫描都会把它当成
+                                # 新文件重新识别一遍、重复报错（黑名单只在转移成功时才写入，
+                                # 这里正是失败分支，靠它挡不住）。
+                                if rmt_mode == RmtMode.MOVE:
+                                    log.info("【Rmt】文件 %s 已存在，移动模式下删除待转移的文件：%s"
+                                             % (ret_file_path, file_item))
+                                    try:
+                                        os.remove(file_item)
+                                        handler_flag = True
+                                    except Exception as err:
+                                        ExceptionUtils.exception_traceback(err)
+                                        log.error("【Rmt】删除待转移文件失败：%s，%s" % (file_item, str(err)))
+                                        success_flag = False
+                                        error_message = "删除待转移文件失败：%s" % file_item
+                                        failed_count += 1
+                                        alert_count += 1
+                                        if error_message not in alert_messages:
+                                            alert_messages.append(error_message)
+                                    continue
+                                # 其它模式（硬链接/复制/软链接/Rclone/Minio）：源文件要留着做种，
+                                # 行为保持不变 —— 大小一致时补记「已整理过」避免重复告警。
                                 log.warn("【Rmt】文件 %s 已存在" % ret_file_path)
                                 if media.size == orgin_file_size:
                                     self.dbhelper.insert_transfer_blacklist(file_item)

@@ -1451,18 +1451,6 @@ class WebAction:
         locating = data.get("locating")
         # 刮削策略：勾选=刮削新的信息，不勾=复用目录中已有的信息（不重新刮削，省流量）
         scrape = data.get("scrape")
-        # 目的文件已存在时的处理策略：0=跳过 / 1=删除原文件并替换 / 2=删除所需转移的文件（删源、保留原文件）
-        overwrite = data.get("overwrite")
-
-        def _to_overwrite_mode(value):
-            if value is None or value == "" or value == "auto":
-                return 0
-            if value in ("delete_source", "delete_src", "source", 2, "2"):
-                return 2
-            if value in ("on", "true", True, 1, "1"):
-                return 1
-            return 0
-
         _sync = Sync()
 
         # 源目录检查
@@ -1486,6 +1474,17 @@ class WebAction:
             if not common_path or common_path == "/":
                 return {"code": 1, "msg": "硬链接不能跨盘"}
 
+        # 自动定位：编辑时若未传该字段则沿用原值，避免保存后被重置为关；新建时未传则默认关。
+        # 该开关仅在「硬链接」同步方式下可用，其它方式前端会置灰并自动取消勾选。
+        if "locating" not in data:
+            locating = None
+            if sid:
+                try:
+                    locating = _sync.get_sync_path_conf(sid).get("locating")
+                except Exception:
+                    locating = None
+        locating = bool(locating)
+
         # 编辑先删再增
         if sid:
             _sync.delete_sync_path(sid)
@@ -1501,9 +1500,8 @@ class WebAction:
                                rename=rename,
                                enabled=enabled,
                                locating=locating,
-                               # 缺省（老前端）时保持原有行为：刮削、跳过
-                               scrape=1 if scrape is None else int(bool(scrape)),
-                               overwrite=_to_overwrite_mode(overwrite))
+                               # 缺省（老前端）时保持原有行为：刮削
+                               scrape=1 if scrape is None else int(bool(scrape)))
         return {"code": 0, "msg": ""}
 
     @staticmethod
@@ -1555,16 +1553,6 @@ class WebAction:
         elif flag == "scrape":
             _sync.check_sync_paths(sid=sid, scrape=1 if checked else 0)
             return {"code": 0}
-        elif flag == "overwrite":
-            # 目的已存在时：0=跳过 / 1=删除原文件并替换 / 2=删除所需转移的文件
-            if checked in ("delete_source", "delete_src", "source", 2, "2"):
-                _ow = 2
-            elif checked in (True, "on", "true", 1, "1"):
-                _ow = 1
-            else:
-                _ow = 0
-            _sync.check_sync_paths(sid=sid, overwrite=_ow)
-            return {"code": 0}        
         else:
             return {"code": 1}
 
@@ -5266,11 +5254,8 @@ class WebAction:
         执行单个目录的目录同步
         :param sid: 同步目录ID列表，为空时处理全部启用中的目录
         :param scrape: 临时刮削策略，on=刮削 / off=不刮削 / 其他（含缺省）=按各目录配置
-        :param overwrite: 临时「目的已存在时」策略，on=删除原文件并替换 /
-                          delete_source=删除所需转移的文件 / off=跳过 / 其他（含缺省）=按各目录配置
         """
         scrape = data.get("scrape")
-        overwrite = data.get("overwrite")
 
         def _parse_flag(value):
             if value is None or value == "" or value == "auto":
@@ -5278,21 +5263,9 @@ class WebAction:
                 return None
             return value is True or value == "on" or value == "true"
 
-        def _parse_overwrite(value):
-            # 目的已存在时：0=跳过 / 1=删除原文件并替换 / 2=删除所需转移的文件
-            if value is None or value == "" or value == "auto":
-                # 按各目录自己的配置
-                return None
-            if value in ("delete_source", "delete_src", "source", 2, "2"):
-                return 2
-            if value is True or value in ("on", "true", 1, "1"):
-                return 1
-            return 0
-
         ThreadHelper().start_thread(Sync().transfer_sync, (
             data.get("sid"),
-            _parse_flag(scrape),
-            _parse_overwrite(overwrite)
+            _parse_flag(scrape)
         ))
         return {"code": 0, "msg": "执行成功"}
 
