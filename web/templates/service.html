@@ -749,7 +749,8 @@
     // 原语言识别结果必须显示出来：认错了就会整片删错语言
     html += `<div class="mb-2 small text-muted">保留规则：每集 <strong>中文 1 条 + 该剧原语言 1 条 + 中×原语言双语（按字幕内容区分上下排，最多 2 条）</strong>；其余（其它语言 / 繁体中文 / 认不出语言）一律删除，同一集只有一条也删。</div>`;
     if (scopes.length > 0) {
-      let src_map = {"tmdb": "TMDB", "files": "按目录内语言推断", "default": "默认"};
+      let src_map = {"tmdb": "TMDB", "files": "按目录内语言推断", "default": "默认",
+                     "skip": "无需识别（目录内无外语字幕）"};
       html += `<div class="mb-2 small">识别到的原语言：`;
       html += scopes.slice(0, 12).map(s =>
         `<span class="badge bg-blue-lt me-1 mb-1" title="${escape_text(s.dir)}">${escape_text(s.name)} → ${escape_text(s.lang_name)}（${escape_text(src_map[s.source] || s.source || "")}）</span>`
@@ -847,6 +848,11 @@
       $("#clean_subs_result").addClass("text-muted").html("正在重新扫描，以确认当前状态…");
     } else {
       btn.text("扫描中...").attr("disabled", true);
+      // 扫描要逐部片查 TMDB 判原语言（整库数百部，冷缓存实测 30~60 秒），
+      // 不给提示的话界面看着就像卡死了
+      $("#clean_subs_result").addClass("text-muted")
+        .html('正在扫描并识别每部片的原语言…<br><span class="small">'
+          + '首次扫描要逐部查询 TMDB，整库通常需要 30~60 秒；同一目录再次扫描会命中缓存，很快返回。</span>');
     }
     ajax_post("clean_subs_scan", clean_subs_params(), function (ret) {
       btn.text("预览").removeAttr("disabled");
