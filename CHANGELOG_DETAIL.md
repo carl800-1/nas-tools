@@ -3,6 +3,50 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.7.0 — 目录同步设置收口（去重 / 自动定位回归 / 覆盖判定改「质量优先」）
+
+## 一、起因
+
+三件事凑到一个版本：
+
+1. 「手动目录同步」弹窗与「目录同步」配置页各有一份「刮削信息」「已存在时」设置，两处能配出不一致的值。
+2. 「自动定位」在 v6.6.2 的版面整理中被从界面摘掉，用户要求恢复。
+3. 「目的已存在时」里的「删除原文件并替换」是不看质量的强制覆盖，源目录里若是低码率重压版，
+   会把媒体库里更好的版本顶掉。
+
+## 二、改动（6 个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `web/templates/service.html` | 923→889 行：删「手动目录同步」弹窗里重复的「刮削信息 / 已存在时」两处设置（含 `case "sync"` 的三行复位、`run_sync_now()` 的多余参数） |
+| `web/templates/setting/directorysync.html` | 378→342 行：删「文件处理」控件；**恢复「自动定位」**（卡片徽标 + 弹窗开关 + `refresh_locating_state()` 联动）；5 个开关由两排合并为一排（`col-lg-4` → `col`） |
+| `web/action.py` | 删 `_to_overwrite_mode` / `_parse_overwrite` / `flag == "overwrite"` 三处（−38 行）；`__add_or_edit_sync_path` 的 `locating` 未传时沿用原值（否则 `int(None)` 抛 TypeError） |
+| `app/filetransfer.py` | 删 `overwrite_exist` 参数与 `overwrite_mode` 分流；覆盖条件收口为 `udf_flag or (media.size > orgin_file_size and self._filesize_cover)`；`else` 分支内新增「同步方式 = 移动 ⇒ 删待转移源文件」 |
+| `app/sync.py` | 去掉 overwrite 的取参 / 启动日志 / 登记字典 / 回调 / `transfer_sync` 签名 / `insert`·`check` 传参（−20 行） |
+| `app/helper/db_helper.py` | 不再写 `OVERWRITE` 列、去掉 overwrite 更新分支（−9 行） |
+
+### 关键设计
+
+**为什么不用「体积更大」以外的口径**：识别结果里没有分辨率 / 码率字段，
+要判真实画质得额外解析文件名或读媒体元信息，工作量大且误判风险高。
+直接复用既有全局开关 `media.filesize_cover`（基础设置里的「高质量文件覆盖」），零新增逻辑。
+
+**为什么删源只对「移动」模式生效**：硬链接 / 复制 / 软链接模式下源文件是故意留着的
+（硬链接正是靠不动源文件来保种）。若一律删源 = 删做种文件 = 断种；
+且「服务 → 清理转移缓存」后的一轮全量扫描会把源目录里已入库的文件批量删掉。
+
+**保留项**：DB 列 `CONFIG_SYNCPATHS.OVERWRITE` 与全局 `media.filesize_cover` 都没删
+（前者不再写入、老值不再生效 ⇒ 无需迁移）；`LOCATING` 键与硬链接定位能力原样保留。
+
+## 三、验证
+
+- `_verify_v670.py` **65/65**：把源码里真实的覆盖条件式正则抽出丢进 `eval` 跑 6 条决策用例
+  （更优+开关开/关、更小、等大、手动转移两条）；模板结构 14 条（含卡片 9 项、一排 5 个 `col`、
+  自动定位联动 4 处）；`node --check` 全量内联 JS；6 文件行尾（工作树 CRLF / 索引 LF）与改动面复核；
+  4 个 py 文件编译通过；备份反证改造前确有 `overwrite_mode == 1`。
+- 全仓 grep 确认 `overwrite_exist` / `overwrite_mode` / `sync_path_overwrite` / `_to_overwrite_mode`
+  / `_parse_overwrite` **零残留**。
+
 # v6.6.1 — 「目的已存在时」新增「删除所需转移的文件」档
 
 ## 一、起因
