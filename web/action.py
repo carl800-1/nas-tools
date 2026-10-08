@@ -282,6 +282,8 @@ class WebAction:
             "clean_subs_run": self.__clean_subs_run,
             "clean_subs_progress": self.__clean_subs_progress,
             "clean_subs_clear_cache": self.__clean_subs_clear_cache,
+            "clean_subs_cache_stats": self.__clean_subs_cache_stats,
+            "clean_subs_prune_cache": self.__clean_subs_prune_cache,
         }
         # 远程命令响应
         self._commands = {
@@ -2993,6 +2995,31 @@ class WebAction:
         return {"code": 0 if ok else -1,
                 "msg": "原语言缓存已清空，下次扫描将重新识别每部片" if ok
                        else "清空失败，详见运行日志"}
+
+    @staticmethod
+    def __clean_subs_cache_stats():
+        """字幕清理：语言库概况（条数 / 体积 / 回收期限），供界面显示"""
+        return {"code": 0, "data": SubtitleHelper.lang_cache_stats()}
+
+    @staticmethod
+    def __clean_subs_prune_cache():
+        """
+        字幕清理：手动清理语言库里的失效条目。
+
+        「失效」= 超过回收期限没在任何一次扫描里出现过（影片已被删除 / 洗版改名）。
+        正常扫描结束时也会自动做一次，这个入口只是给用户一个「立刻清一下」的手动开关。
+        """
+        try:
+            stat = SubtitleHelper.prune_lang_cache_now()
+        except Exception as err:  # noqa: BLE001
+            ExceptionUtils.exception_traceback(err)
+            return {"code": -1, "msg": "清理失败，详见运行日志"}
+        removed = int(stat.get("removed") or 0)
+        return {"code": 0, "data": stat,
+                "msg": "已清理 %d 条失效条目，当前语言库共 %d 条"
+                       % (removed, int(stat.get("count") or 0)) if removed
+                       else "没有发现失效条目，语言库保持 %d 条"
+                            % int(stat.get("count") or 0)}
 
     @staticmethod
     def __start_mediasync(data):

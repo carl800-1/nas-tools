@@ -65,6 +65,16 @@ _LANG_CACHE_VERSION = 1
 # 的产物，给个过期时间，等 TMDB 恢复或片名补全后能自动重查。TMDB 命中的条目不设期限。
 _LANG_CACHE_FALLBACK_TTL = 7 * 24 * 3600
 
+# 孤儿回收：条目超过这么久没在任何一次扫描里出现，就认定它对应的影片已经不在媒体库
+# （被删除，或洗版 / 改名后由新键取代），下次扫描顺手回收 —— 否则键会只增不减地堆积。
+_LANG_CACHE_STALE_TTL = 90 * 24 * 3600
+
+# 容量硬顶：万一孤儿回收跟不上（媒体库本身上万部，或 TTL 内涌入大量新片），
+# 按「最后一次出现时间」淘汰最久未见的条目、削到低水位，保证文件体量始终可控。
+# 活跃条目每轮扫描都会刷新出现时间，永远是最后被淘汰的那批。
+_LANG_CACHE_MAX = 20000
+_LANG_CACHE_LOW_WATER = 0.8
+
 # 扫描进度快照（供前端轮询显示「已识别 x / y 部」）。后端是同步扫描、没有流式通道，
 # 前端只能轮询这个快照。锁只包住整体替换，不参与任何业务逻辑。
 _PROGRESS_LOCK = threading.Lock()
@@ -622,6 +632,9 @@ class SubtitleHelper:
           · `src == "tmdb"` —— TMDB 的权威结果，**永久有效**（原语言是影片的固有属性，不会变）；
           · 其它来源（文件推断 / 英语兜底）—— 这类多半是「TMDB 当时没查到」的产物，
             超过 _LANG_CACHE_FALLBACK_TTL 就丢掉重查，免得把一次失败永久固化下来。
+
+        命中时顺手把 `seen` 刷成本次扫描时间 —— 它标记「最后一次在扫描中出现」，
+        只服务于孤儿回收；和管过期重查的 `ts` 各管一摊，互不干扰。
         """
         item = disk.get(cls._lang_cache_key(title, year))
         if not isinstance(item, dict) or not item.get("lang"):
@@ -633,17 +646,87 @@ class SubtitleHelper:
                 ts = 0
             if ts and time.time() - ts > _LANG_CACHE_FALLBACK_TTL:
                 return None
+        item["seen"] = int(time.time())
         return item
 
     @classmethod
     def _cache_store(cls, disk, title, year, meta):
         """把一次判定结果写进内存中的持久化库（由调用方统一落盘）"""
+        now = int(time.time())
         disk[cls._lang_cache_key(title, year)] = {
             "lang": meta.get("original_language") or _DEFAULT_ORIGINAL_LANG,
             "src": meta.get("source") or "default",
             "matched": meta.get("matched") or "",
-            "ts": int(time.time()),
+            "ts": now,
+            "seen": now,
         }
+
+    @staticmethod
+    def _entry_seen(item):
+        """条目的「最后一次出现时间」；老库条目没有 seen 时回落到 ts（都不合法则 0）"""
+        if not isinstance(item, dict):
+            return 0
+        for key in ("seen", "ts"):
+            try:
+                val = int(item.get(key) or 0)
+            except (TypeError, ValueError):
+                val = 0
+            if val:
+                return val
+        return 0
+
+    @classmethod
+    def _prune_lang_cache(cls, disk):
+        """
+        语言库治理（每轮扫描结束顺手做一次，纯内存，由调用方决定何时落盘）：
+          ① 孤儿回收 —— 删掉 `seen` 超过 _LANG_CACHE_STALE_TTL 的条目（影片已不在媒体库）；
+          ② 容量硬顶 —— 仍超 _LANG_CACHE_MAX 时，按 `seen` 淘汰最久未见的到低水位。
+        返回 (回收的孤儿数, 因超限淘汰的数)。
+        """
+        if not disk:
+            return 0, 0
+        deadline = time.time() - _LANG_CACHE_STALE_TTL
+        orphans = []
+        for key, item in disk.items():
+            seen = cls._entry_seen(item)
+            if seen and seen < deadline:
+                orphans.append(key)
+        for key in orphans:
+            disk.pop(key, None)
+        overflow = 0
+        if len(disk) > _LANG_CACHE_MAX:
+            target = int(_LANG_CACHE_MAX * _LANG_CACHE_LOW_WATER)
+            ordered = sorted(disk.items(), key=lambda kv: cls._entry_seen(kv[1]))
+            for key, _ in ordered[:len(disk) - target]:
+                disk.pop(key, None)
+                overflow += 1
+        return len(orphans), overflow
+
+    @classmethod
+    def lang_cache_stats(cls):
+        """语言库概况（供界面显示「N 条 · XX KB」）"""
+        path = cls._lang_cache_path()
+        try:
+            size = os.path.getsize(path) if os.path.exists(path) else 0
+        except OSError:
+            size = 0
+        return {"count": len(cls.load_lang_cache()), "bytes": size,
+                "stale_days": _LANG_CACHE_STALE_TTL // 86400,
+                "max": _LANG_CACHE_MAX}
+
+    @classmethod
+    def prune_lang_cache_now(cls):
+        """手动触发一次治理（供界面的「清理失效条目」按钮）"""
+        disk = cls.load_lang_cache()
+        if not disk:
+            return {"count": 0, "removed": 0, "orphan": 0, "overflow": 0}
+        orphan, overflow = cls._prune_lang_cache(disk)
+        if disk:
+            cls.save_lang_cache(disk)
+        else:
+            cls.clear_lang_cache()
+        return {"count": len(disk), "removed": orphan + overflow,
+                "orphan": orphan, "overflow": overflow}
 
     # --------------------------------------------------------------- 扫描进度
 
@@ -956,7 +1039,16 @@ class SubtitleHelper:
                                       langs_by_show, cache, disk_cache)
         finally:
             self._set_progress(active=False)
-            self.save_lang_cache(disk_cache)
+            # 治理与落盘都放在 finally：即便某部片查询抛异常，本轮识别成果也不能丢。
+            # 治理会回收「已不在媒体库」的孤儿条目，保证语言库不会只增不减。
+            orphan, overflow = self._prune_lang_cache(disk_cache)
+            if disk_cache:
+                self.save_lang_cache(disk_cache)
+            else:
+                self.clear_lang_cache()
+            if orphan or overflow:
+                log.info("【Sub】语言库治理：回收 %d 条（超期 %d、超限 %d），剩余 %d 条",
+                         orphan + overflow, orphan, overflow, len(disk_cache))
         for (show_dir, show_files), meta in zip(sorted_shows, metas):
             show_meta[show_dir] = meta
             result["scopes"].append({

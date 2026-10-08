@@ -291,6 +291,13 @@
           </label>
         </div>
         <hr>
+        <div class="mb-2 d-flex align-items-center flex-wrap">
+          <span class="text-muted small me-auto" id="clean_subs_cache_info">语言库：读取中…</span>
+          <button type="button" class="btn btn-sm btn-outline-secondary me-2"
+                  id="clean_subs_prune_btn">清理失效条目</button>
+          <button type="button" class="btn btn-sm btn-outline-danger"
+                  id="clean_subs_clear_btn">清空语言库</button>
+        </div>
         <div id="clean_subs_result" class="text-muted">请先点击「预览」查看待删除清单。</div>
       </div>
       <div class="modal-footer">
@@ -696,6 +703,7 @@
   // 打开字幕清理弹窗
   function show_clean_subs_modal() {
     clean_subs_reset(true);
+    clean_subs_refresh_cache_info();
     $('#modal-clean-subs').modal('show');
   }
 
@@ -716,6 +724,29 @@
     if (clearForm) {
       $("#clean_subs_root").removeClass("is-invalid");
     }
+  }
+
+  // 语言库概况文案：N 条 · XX KB（并说明回收规则）
+  function clean_subs_cache_info_text(d) {
+    d = d || {};
+    let kb = (Number(d.bytes || 0) / 1024).toFixed(1);
+    let days = Number(d.stale_days || 0);
+    return "语言库：" + Number(d.count || 0) + " 条 · " + kb + " KB"
+      + (days > 0 ? "（超过 " + days + " 天未出现的条目会自动回收）" : "");
+  }
+
+  // 拉取语言库概况
+  function clean_subs_refresh_cache_info() {
+    $("#clean_subs_cache_info").text("语言库：读取中…");
+    ajax_post("clean_subs_cache_stats", {}, function (ret) {
+      if (ret && ret.code === 0 && ret.data) {
+        $("#clean_subs_cache_info").text(clean_subs_cache_info_text(ret.data));
+      } else {
+        $("#clean_subs_cache_info").text("语言库：读取失败");
+      }
+    }, true, false, function () {
+      $("#clean_subs_cache_info").text("语言库：读取失败");
+    });
   }
 
   // 校验参数，非法则标红并返回 false
@@ -891,6 +922,8 @@
         return;
       }
       clean_subs_render(ret.data, true);
+      // 扫描结束时后端会顺手治理语言库（回收孤儿），条数要跟着刷新
+      clean_subs_refresh_cache_info();
       // 有命中才允许执行（用 remove_count：matched 明细会被截断，计数不会）
       $("#clean_subs_run_btn").prop("disabled", !(Number(ret.data.remove_count || 0) > 0));
     }, true, true, function (xhr, textStatus) {
@@ -918,6 +951,43 @@
         clean_subs_scan(true);
       });
   }
+
+  // 清理语言库里的失效条目：删掉「已不在媒体库」的影片留下的记录
+  $("#clean_subs_prune_btn").unbind("click").click(function () {
+    let btn = $(this);
+    btn.attr("disabled", true);
+    ajax_post("clean_subs_prune_cache", {}, function (ret) {
+      btn.removeAttr("disabled");
+      if (ret && ret.code === 0) {
+        show_success_modal(ret.msg || "清理完成");
+      } else {
+        show_fail_modal((ret && ret.msg) || "清理失败");
+      }
+      clean_subs_refresh_cache_info();
+    }, true, true, function (xhr, textStatus) {
+      btn.removeAttr("disabled");
+      show_fail_modal("清理失败：" + clean_subs_err_text(xhr, textStatus));
+    });
+  });
+
+  // 清空语言库（下次扫描需重新逐部查询 TMDB，整库约 2 分钟）
+  $("#clean_subs_clear_btn").unbind("click").click(function () {
+    show_confirm_modal(
+      "将清空整个语言库，下次扫描需要重新逐部查询 TMDB（整库约 2 分钟）。是否确认？",
+      function () {
+        hide_confirm_modal();
+        ajax_post("clean_subs_clear_cache", {}, function (ret) {
+          if (ret && ret.code === 0) {
+            show_success_modal(ret.msg || "已清空语言库");
+          } else {
+            show_fail_modal((ret && ret.msg) || "清空失败");
+          }
+          clean_subs_refresh_cache_info();
+        }, true, true, function (xhr, textStatus) {
+          show_fail_modal("清空失败：" + clean_subs_err_text(xhr, textStatus));
+        });
+      });
+  });
 
   // 预览
   $("#clean_subs_scan_btn").unbind("click").click(function () {
