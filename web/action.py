@@ -280,6 +280,8 @@ class WebAction:
             "clean_dirs_run": self.__clean_dirs_run,
             "clean_subs_scan": self.__clean_subs_scan,
             "clean_subs_run": self.__clean_subs_run,
+            "clean_subs_progress": self.__clean_subs_progress,
+            "clean_subs_clear_cache": self.__clean_subs_clear_cache,
         }
         # 远程命令响应
         self._commands = {
@@ -2973,6 +2975,24 @@ class WebAction:
         return {"code": 0,
                 "msg": SubtitleHelper.format_result_message(result),
                 "data": result}
+
+    @staticmethod
+    def __clean_subs_progress():
+        """
+        字幕清理：扫描进度快照。
+
+        扫描是一次同步请求、没有流式通道，而首次建库要逐部片查 TMDB（整库实测约 2 分钟），
+        前端靠轮询这个接口显示「已识别 x / y 部」，否则那两分钟看着就是卡死。
+        """
+        return {"code": 0, "data": SubtitleHelper.get_progress()}
+
+    @staticmethod
+    def __clean_subs_clear_cache():
+        """字幕清理：清空「原语言」的持久化缓存，下次扫描重新逐部查询"""
+        ok = SubtitleHelper.clear_lang_cache()
+        return {"code": 0 if ok else -1,
+                "msg": "原语言缓存已清空，下次扫描将重新识别每部片" if ok
+                       else "清空失败，详见运行日志"}
 
     @staticmethod
     def __start_mediasync(data):

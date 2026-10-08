@@ -750,7 +750,7 @@
     html += `<div class="mb-2 small text-muted">保留规则：每集 <strong>中文 1 条 + 该剧原语言 1 条 + 中×原语言双语（按字幕内容区分上下排，最多 2 条）</strong>；其余（其它语言 / 繁体中文 / 认不出语言）一律删除，同一集只有一条也删。</div>`;
     if (scopes.length > 0) {
       let src_map = {"tmdb": "TMDB", "files": "按目录内语言推断", "default": "默认",
-                     "skip": "无需识别（目录内无外语字幕）"};
+                     "cache": "语言库命中"};
       html += `<div class="mb-2 small">识别到的原语言：`;
       html += scopes.slice(0, 12).map(s =>
         `<span class="badge bg-blue-lt me-1 mb-1" title="${escape_text(s.dir)}">${escape_text(s.name)} → ${escape_text(s.lang_name)}（${escape_text(src_map[s.source] || s.source || "")}）</span>`
@@ -838,23 +838,52 @@
     return "未收到服务器响应（网络中断或网关超时）";
   }
 
+  // 等待文案：拿到进度就显示「已识别 x / y 部」，否则显示通用提示
+  function clean_subs_waiting_html(p) {
+    let tip = '首次扫描要逐部片查 TMDB 判原语言，整库通常 1~2 分钟；'
+      + '识别结果会存进语言库，<strong>之后每次扫描都是秒回</strong>。';
+    if (p && Number(p.total) > 0) {
+      let total = Number(p.total);
+      let done = Math.min(Number(p.done) || 0, total);
+      let pct = Math.round(done * 100 / total);
+      return '正在识别每部片的原语言…<br><span class="small">已识别 <strong>'
+        + done + '</strong> / ' + total + ' 部（' + pct + '%）'
+        + (Number(p.cached) > 0 ? '，另有 ' + p.cached + ' 部命中语言库' : '')
+        + '<br>' + tip + '</span>';
+    }
+    return '正在扫描并识别每部片的原语言…<br><span class="small">' + tip + '</span>';
+  }
+
   // 预览（silent = 异常兜底后的自动重扫，不显示「扫描中...」）
   function clean_subs_scan(silent) {
     if (!clean_subs_validate()) {
       return;
     }
     let btn = $("#clean_subs_scan_btn");
+    let tick = null;
     if (silent) {
       $("#clean_subs_result").addClass("text-muted").html("正在重新扫描，以确认当前状态…");
     } else {
       btn.text("扫描中...").attr("disabled", true);
-      // 扫描要逐部片查 TMDB 判原语言（整库数百部，冷缓存实测 30~60 秒），
-      // 不给提示的话界面看着就像卡死了
-      $("#clean_subs_result").addClass("text-muted")
-        .html('正在扫描并识别每部片的原语言…<br><span class="small">'
-          + '首次扫描要逐部查询 TMDB，整库通常需要 30~60 秒；同一目录再次扫描会命中缓存，很快返回。</span>');
+      // 扫描要逐部片查 TMDB 判原语言（整库实测约 2 分钟），期间轮询进度。
+      // 不提示的话这两分钟界面看着就像卡死了；结果落进 /config 语言库后，之后每次都是秒回。
+      $("#clean_subs_result").addClass("text-muted").html(clean_subs_waiting_html(null));
+      tick = setInterval(function () {
+        ajax_post("clean_subs_progress", {}, function (ret) {
+          if (ret && ret.code === 0 && ret.data && ret.data.active) {
+            $("#clean_subs_result").html(clean_subs_waiting_html(ret.data));
+          }
+        }, true, false);
+      }, 1500);
+    }
+    function stop_tick() {
+      if (tick) {
+        clearInterval(tick);
+        tick = null;
+      }
     }
     ajax_post("clean_subs_scan", clean_subs_params(), function (ret) {
+      stop_tick();
       btn.text("预览").removeAttr("disabled");
       if (!clean_subs_is_ok(ret)) {
         $("#clean_subs_result").addClass("text-muted").html((ret && ret.msg) || "扫描失败，请重试");
@@ -866,6 +895,7 @@
       $("#clean_subs_run_btn").prop("disabled", !(Number(ret.data.remove_count || 0) > 0));
     }, true, true, function (xhr, textStatus) {
       // 网络层失败：必须恢复按钮，否则会永久停在「扫描中...」
+      stop_tick();
       btn.text("预览").removeAttr("disabled");
       $("#clean_subs_result").addClass("text-muted")
         .html("扫描失败：" + clean_subs_err_text(xhr, textStatus));

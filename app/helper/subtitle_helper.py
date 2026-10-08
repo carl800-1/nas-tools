@@ -1,6 +1,8 @@
+import json
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import log
@@ -46,6 +48,27 @@ _DEFAULT_ORIGINAL_LANG = "eng"
 
 # 原语言判定的结果缓存会被并发线程同时读写；锁只包住字典读写，网络请求始终在锁外。
 _CACHE_LOCK = threading.Lock()
+
+# ─────────────────── 原语言的持久化缓存（跨进程 / 跨重启） ───────────────────
+#
+# TMDB 查询是整条链路唯一的外部耗时：实测整库 825 个剧名目录冷查 **136 秒**
+# （8 线程并发、0.165 秒/部）。更要命的是 tmdbv3api 那层 ttl_lru 缓存对
+# `Search.multi` **不生效**（实测同进程二次查询仍需 129 秒），也就是说
+# 「扫描慢」不是偶发，而是每次都要从头再查一遍。
+#
+# 原语言是影片的固有属性、不会随时间变化，所以按「归一化标题|年份」落一份到
+# /config，跨进程跨重启生效：首次扫描建库（一次性），之后每次都是 0 网络。
+_LANG_CACHE_FILE = "subtitle_language.json"
+_LANG_CACHE_VERSION = 1
+
+# 非 TMDB 来源（文件推断 / 英语兜底）的条目保留期限：这类结果是「TMDB 当时查不到」
+# 的产物，给个过期时间，等 TMDB 恢复或片名补全后能自动重查。TMDB 命中的条目不设期限。
+_LANG_CACHE_FALLBACK_TTL = 7 * 24 * 3600
+
+# 扫描进度快照（供前端轮询显示「已识别 x / y 部」）。后端是同步扫描、没有流式通道，
+# 前端只能轮询这个快照。锁只包住整体替换，不参与任何业务逻辑。
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS = {"active": False, "total": 0, "done": 0, "cached": 0}
 
 # ─────────────────────────── 语言词表 ───────────────────────────
 # 拉丁标记 → 归一化语言键。口径对齐 app/filetransfer.py 的 __transfer_subtitles
@@ -141,6 +164,14 @@ def _segment_langs(seg):
     if re.fullmatch(r"[\(\[\s]*\d+[\)\]\s]*", raw):
         return []
     cleaned = _clean_segment(raw)
+    # ⚠️ `_clean_segment` 会把括号内的文本一并删掉（本意只是去掉 `(1)` 这类计数），
+    #    语言标记写在括号里就跟着丢了：`chinese(简英)` 只剩 `chinese` → 判成**纯简体**，
+    #    于是「中英双语」被当成同类多余，跟真正的简体一起进去重、**双语那条被删**。
+    #    实测 /video/02.电视剧 的 2147 个字幕里有 27 个踩中（全是 `chinese(简英)`）。
+    #    这里把括号内的文本补回待匹配串；`(1)` / `(2020)` 这类不含语言词，补回来无影响。
+    inner = " ".join(re.findall(r"[\(\[]([^\)\]]*)[\)\]]", raw)).strip().lower()
+    if inner:
+        cleaned = (cleaned + " " + inner).strip()
     if not cleaned:
         return []
     # zh_CN / zh-TW 这类带地区的写法先并成整段，避免被下面的 - 切开后误判
@@ -399,7 +430,10 @@ class SubtitleHelper:
         """目录名 → (剧名, 年份)，供 TMDB 查询用"""
         name = str(dirname or "")
         year = None
-        m = _YEAR_RE.search(name)
+        # 年份优先取**括号里的**那个：`银翼杀手2049 (2017)` 里 2049 是片名的一部分，
+        # 若按「第一个出现的四位数字」取会得到 year=2049、剧名被切成「银翼杀手」，
+        # 查询必然落空。有括号就信括号（实测这一类踩中 1 部）。
+        m = re.search(r"[\(\[]\s*((?:19|20)\d{2})\s*[\)\]]", name) or _YEAR_RE.search(name)
         if m:
             year = m.group(1)
             name = name[:m.start()] + " " + name[m.end():]
@@ -410,11 +444,59 @@ class SubtitleHelper:
         return (name or str(dirname or "").strip(), year)
 
     @staticmethod
-    def _tmdb_original_language(title, year=None):
+    def _norm_title(name):
+        """标题归一（用于「候选到底是不是这部片」的比对）：去空格标点、统一小写"""
+        text = str(name or "").lower()
+        text = re.sub(r"[\s\u3000]+", "", text)
+        text = re.sub(r"[：:·・\-_—－,，.。!！?？'\"“”‘’()（）\[\]【】]+", "", text)
+        return text
+
+    @classmethod
+    def _pick_tmdb_candidate(cls, cands, title, year=None):
+        """
+        在 TMDB 搜索结果里挑「确实是这部片」的那一条；挑不出返回 None。
+
+        ⚠️ **不能直接取第一条**：TMDB 的相关性排序对系列片 / 生僻片很不可靠，实测
+        `冰川时代2：融冰之灾` 的第一条是 `冰川时代`、`功夫熊猫2` 的第一条是 `功夫熊猫`、
+        `51号星球` 的第一条是 `丛林有情狼` —— 取第一条会让这部片被别的片子顶掉，
+        原语言跟着判错（且白删或漏删字幕）。
+
+        两条判据，缺一不可（宁缺毋滥，挑不出就转下一级兜底）：
+          ① 标题里的**数字必须完全一致** —— 续集序号对不上就绝不是同一部；
+          ② 归一化后标题相等，或一方包含另一方（容忍副标题 / 译名差异）。
+        年份只加分、不当门槛：TMDB 中文条目常缺年份，拿它当门槛会把一堆正确的片子误杀。
+        """
+        want = cls._norm_title(title)
+        if not want:
+            return None
+        want_nums = set(re.findall(r"\d+", str(title or "")))
+        best, best_score = None, 0
+        for r in cands:
+            name = r.get("title") or r.get("name") or ""
+            got = cls._norm_title(name)
+            if not got:
+                continue
+            if set(re.findall(r"\d+", name)) != want_nums:
+                continue
+            if got == want:
+                score = 3
+            elif want in got or got in want:
+                score = 2
+            else:
+                continue
+            date = str(r.get("release_date") or r.get("first_air_date") or "")
+            if year and date[:4] == str(year):
+                score += 1
+            if score > best_score:
+                best, best_score = r, score
+        return best
+
+    @classmethod
+    def _tmdb_original_language(cls, title, year=None):
         """
         按剧名查 TMDB 的 original_language（ISO 639-1），映射到本工具的语言键。
-        查不到 / 未配置 API Key / 网络异常 / 语种不在词表内，一律返回 None（转下一级兜底）。
-        返回 (语言键, TMDB 命中的标题)。
+        查不到 / 未配置 API Key / 网络异常 / 语种不在词表内 / **候选标题对不上**，
+        一律返回 None（转下一级兜底）。返回 (语言键, TMDB 命中的标题)。
         """
         if not title:
             return None, None
@@ -436,12 +518,9 @@ class SubtitleHelper:
         cands = [r for r in results if r.get("media_type") in ("movie", "tv")]
         if not cands:
             return None, None
-        if year:
-            exact = [r for r in cands
-                     if str(r.get("release_date") or r.get("first_air_date") or "")[:4] == str(year)]
-            if exact:
-                cands = exact
-        picked = cands[0]
+        picked = cls._pick_tmdb_candidate(cands, title, year)
+        if not picked:
+            return None, None
         iso = str(picked.get("original_language") or "").strip().lower()
         key = _TMDB_ISO_MAP.get(iso)
         if not key:
@@ -475,65 +554,164 @@ class SubtitleHelper:
             cache[show_dir] = info
         return info
 
+    # ------------------------------------------------------- 原语言的持久化缓存
+
     @staticmethod
-    def _needs_original_language(lang_count):
-        """
-        该剧是否真的需要去查原语言。
+    def _lang_cache_key(title, year):
+        """持久化缓存的键：归一化标题 + 年份（用标题而不是目录路径，洗版/改名后仍能命中）"""
+        return "%s|%s" % (re.sub(r"\s+", "", str(title or "")).lower(), year or "")
 
-        判据只用「这个目录里出现过哪些语言」（`_scan_full` 已经排除了 chs/cht；
-        泛双语 `bi` 会贡献一个空串键）：
-
-          · **没有任何非中文语言**（只有中文字幕 / 泛双语）→ 原语言取什么都不改变结论：
-            中文同类留 1 条、泛双语展开后恒为「中文 × 原语言」双语照样留。
-            实测儿童电影整库 319 部全属于这一类，跳过查询后扫描从 34 秒降到 0.1 秒，
-            且待删 path 集合、分类计数、保留项与逐部查询版**逐条一致**。
-          · **有外语字幕** → 必须查，否则分不清「这门外语是原语言还是外来字幕」，
-            会该删的不删 / 该留的删掉。
-        """
-        if not lang_count:
-            return False
-        return any(key for key in lang_count)
+    @staticmethod
+    def _lang_cache_path():
+        return os.path.join(Config().get_config_path(), _LANG_CACHE_FILE)
 
     @classmethod
-    def _detect_many(cls, show_dirs, langs_by_show, cache):
+    def load_lang_cache(cls):
         """
-        批量判定原语言。返回与 show_dirs 等长的列表（顺序一致）。
+        读取持久化语言库。文件缺失 / 损坏 / 版本不符一律当空库返回 ——
+        缓存自身的问题绝不能让整个扫描失败。
+        """
+        try:
+            path = cls._lang_cache_path()
+            if not os.path.exists(path):
+                return {}
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or data.get("version") != _LANG_CACHE_VERSION:
+                log.info("【Sub】原语言缓存的版本不符，将重新建立")
+                return {}
+            items = data.get("items")
+            return items if isinstance(items, dict) else {}
+        except Exception as err:  # noqa: BLE001
+            ExceptionUtils.exception_traceback(err)
+            return {}
 
-        两条加速路径叠加：
-          ① **先预筛**：目录里没有任何外语字幕的直接跳过查询（见 _needs_original_language），
-             实测能把整库扫描从 34 秒压到 0.1 秒；
-          ② **再并发**：剩下的确实要查的，耗时几乎全在 TMDB 网络等待上
-             （一部一次串行约 0.5 秒，整库 300 部要 2~4 分钟，实测 319 部冷缓存 261 秒），
-             用线程池把等待重叠起来，实测 8 线程压到 1/3 左右，且 TMDB 未出现限流或报错。
+    @classmethod
+    def save_lang_cache(cls, items):
+        """整库覆盖写（扫描结束时调用一次，避免查一部就写一次盘）"""
+        if not items:
+            return False
+        path = cls._lang_cache_path()
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"version": _LANG_CACHE_VERSION, "items": items},
+                          f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, path)
+            return True
+        except Exception as err:  # noqa: BLE001
+            ExceptionUtils.exception_traceback(err)
+            return False
 
-        单部 / 并发度被关掉时退回串行，保证行为可预期。
+    @classmethod
+    def clear_lang_cache(cls):
+        """清空持久化语言库（下次扫描会重新逐部查询）"""
+        try:
+            path = cls._lang_cache_path()
+            if os.path.exists(path):
+                os.remove(path)
+            return True
+        except Exception as err:  # noqa: BLE001
+            ExceptionUtils.exception_traceback(err)
+            return False
+
+    @classmethod
+    def _cache_lookup(cls, disk, title, year):
+        """
+        查持久化库。只有两种情况算命中：
+          · `src == "tmdb"` —— TMDB 的权威结果，**永久有效**（原语言是影片的固有属性，不会变）；
+          · 其它来源（文件推断 / 英语兜底）—— 这类多半是「TMDB 当时没查到」的产物，
+            超过 _LANG_CACHE_FALLBACK_TTL 就丢掉重查，免得把一次失败永久固化下来。
+        """
+        item = disk.get(cls._lang_cache_key(title, year))
+        if not isinstance(item, dict) or not item.get("lang"):
+            return None
+        if item.get("src") != "tmdb":
+            try:
+                ts = int(item.get("ts") or 0)
+            except (TypeError, ValueError):
+                ts = 0
+            if ts and time.time() - ts > _LANG_CACHE_FALLBACK_TTL:
+                return None
+        return item
+
+    @classmethod
+    def _cache_store(cls, disk, title, year, meta):
+        """把一次判定结果写进内存中的持久化库（由调用方统一落盘）"""
+        disk[cls._lang_cache_key(title, year)] = {
+            "lang": meta.get("original_language") or _DEFAULT_ORIGINAL_LANG,
+            "src": meta.get("source") or "default",
+            "matched": meta.get("matched") or "",
+            "ts": int(time.time()),
+        }
+
+    # --------------------------------------------------------------- 扫描进度
+
+    @classmethod
+    def get_progress(cls):
+        """当前扫描进度快照（供前端轮询显示「已识别 x / y 部」）"""
+        with _PROGRESS_LOCK:
+            return dict(_PROGRESS)
+
+    @staticmethod
+    def _set_progress(**kwargs):
+        with _PROGRESS_LOCK:
+            _PROGRESS.update(kwargs)
+
+    # ----------------------------------------------------------- 原语言批量判定
+
+    @classmethod
+    def _detect_many(cls, show_dirs, langs_by_show, cache, disk=None):
+        """
+        批量判定原语言。返回与 show_dirs 等长的列表（顺序严格对齐）。
+
+        查表顺序：**持久化库 → TMDB（并发）→ 目录内语言推断 → 英语兜底**。
+
+        关于「慢」：TMDB 是本链路唯一的外部耗时，整库 825 部冷查实测 **136 秒**
+        （8 线程、0.165 秒/部）；而且 tmdbv3api 的 ttl_lru 对 `Search.multi` 不生效
+        （同进程二次查询仍需 129 秒），所以**必须自己落盘**（见模块顶部说明）：
+        首次扫描建库是一次性成本，之后每次（含容器重启）整库都是 0 网络。
         """
         if not show_dirs:
             return []
+        disk = cls.load_lang_cache() if disk is None else disk
         results = {}
         pending = []
         for show_dir in show_dirs:
-            if cls._needs_original_language(langs_by_show.get(show_dir)):
-                pending.append(show_dir)
+            title, year = cls._split_title_year(os.path.basename(show_dir))
+            hit = cls._cache_lookup(disk, title, year)
+            if hit:
+                results[show_dir] = {"original_language": hit["lang"], "source": "cache",
+                                     "query": title, "matched": hit.get("matched") or ""}
             else:
-                # 不查也要给出与查询路径同口径的 query（解析后的剧名），前端展示才一致
-                title, _ = cls._split_title_year(os.path.basename(show_dir))
-                results[show_dir] = {"original_language": _DEFAULT_ORIGINAL_LANG,
-                                     "source": "skip", "query": title, "matched": ""}
+                pending.append(show_dir)
+
+        cls._set_progress(active=True, total=len(pending), done=0,
+                          cached=len(show_dirs) - len(pending))
         if not pending:
             return [results[d] for d in show_dirs]
+
+        counter = {"n": 0}
+
+        def _work(show_dir):
+            meta = cls._detect_original_language(show_dir, langs_by_show.get(show_dir) or {}, cache)
+            title, year = cls._split_title_year(os.path.basename(show_dir))
+            cls._cache_store(disk, title, year, meta)
+            with _PROGRESS_LOCK:
+                counter["n"] += 1
+                n = counter["n"]
+            if n % 10 == 0 or n == len(pending):
+                cls._set_progress(done=n)
+            return meta
 
         workers = min(cls.TMDB_WORKERS, len(pending))
         if workers <= 1:
             for show_dir in pending:
-                results[show_dir] = cls._detect_original_language(
-                    show_dir, langs_by_show.get(show_dir) or {}, cache)
+                results[show_dir] = _work(show_dir)
             return [results[d] for d in show_dirs]
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(cls._detect_original_language, d,
-                                   langs_by_show.get(d) or {}, cache): d
-                       for d in pending}
+            futures = {pool.submit(_work, d): d for d in pending}
             for future in as_completed(futures):
                 show_dir = futures[future]
                 try:
@@ -706,6 +884,8 @@ class SubtitleHelper:
 
     def _scan_full(self, root_path, keep_policy, recursive, follow_links):
         """全量扫描（内部用，不做明细截断）"""
+        # 清掉上一次扫描可能残留的进度，免得前端轮询到一个「僵尸进度」
+        self._set_progress(active=False, total=0, done=0, cached=0)
         policy = self.normalize_keep_policy(keep_policy)
         result = {
             "root_path": root_path,
@@ -753,7 +933,8 @@ class SubtitleHelper:
             f["lang_key"] = lang_key
 
         # ② 按「剧名目录」聚合语言分布，逐剧判定原语言
-        #    （TMDB 查询是整条链路唯一的外部耗时，统一交给 _detect_many 并发跑）
+        #    （TMDB 查询是整条链路唯一的外部耗时，统一交给 _detect_many 并发跑；
+        #    结果会落进 /config 的持久化语言库，下次扫描直接命中、0 网络）
         by_show = {}
         for f in files:
             by_show.setdefault(self._show_dir(f["dir"], root_path), []).append(f)
@@ -769,8 +950,13 @@ class SubtitleHelper:
                         continue
                     lang_count[key] = lang_count.get(key, 0) + 1
             langs_by_show[show_dir] = lang_count
-        metas = self._detect_many([show_dir for show_dir, _ in sorted_shows],
-                                  langs_by_show, cache)
+        disk_cache = self.load_lang_cache()
+        try:
+            metas = self._detect_many([show_dir for show_dir, _ in sorted_shows],
+                                      langs_by_show, cache, disk_cache)
+        finally:
+            self._set_progress(active=False)
+            self.save_lang_cache(disk_cache)
         for (show_dir, show_files), meta in zip(sorted_shows, metas):
             show_meta[show_dir] = meta
             result["scopes"].append({
@@ -1022,7 +1208,8 @@ class SubtitleHelper:
         if len(scopes) == 1:
             # ⚠️ 必须用 .get 兜底：新增 source 取值时漏改这里会 KeyError → HTTP 500
             source_name = {"tmdb": "TMDB 识别", "files": "按目录内语言推断",
-                           "default": "默认", "skip": "无需识别（目录内无外语字幕）"
+                           "default": "默认", "skip": "无需识别（目录内无外语字幕）",
+                           "cache": "语言库命中"
                            }.get(scopes[0]["source"], scopes[0]["source"])
             head = "（原语言：%s，%s）" % (scopes[0]["lang_name"], source_name)
         elif scopes:
