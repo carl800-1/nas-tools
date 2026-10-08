@@ -832,6 +832,13 @@ class FileTransfer:
                                     try:
                                         os.remove(file_item)
                                         handler_flag = True
+                                    except FileNotFoundError:
+                                        # 源文件已不存在：通常是上一轮已转移并删除了源文件，
+                                        # 本轮又扫描到残留目录（只剩刮削元数据）重复处理。
+                                        # 目标文件已就位、删除目的已达成，按成功处理，
+                                        # 避免每一轮全量扫描都产生无意义的重复报错。
+                                        log.info("【Rmt】待转移的文件已不存在，无需删除：%s" % file_item)
+                                        handler_flag = True
                                     except Exception as err:
                                         ExceptionUtils.exception_traceback(err)
                                         log.error("【Rmt】删除待转移文件失败：%s，%s" % (file_item, str(err)))
