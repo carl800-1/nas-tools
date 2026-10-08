@@ -3,6 +3,100 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.9.1 — 字幕清理：修 HTTP 500（响应含 set）与冷缓存扫描提速（261s → 0.1s）
+
+## 一、起因
+
+用户在绿联 NAS（v6.9.0）上点「服务 → 字幕清理 → 预览」，两个问题同时暴露：
+
+1. **报 500**：容器日志栈顶 `flask/json/provider.py`，异常是
+   `TypeError: Object of type set is not JSON serializable`。
+2. **很慢**：首次扫描整库要 4 分钟以上。实测 **325 目录 / 581 字幕 / 319 部片**，
+   其中 **302 部要查 TMDB** 判原语言，单次约 **0.52 秒**、全串行 → **冷缓存 261.3 秒**。
+   同进程第二次扫描只要 0.2 秒（TMDB 层自带 6 小时 `ttl_lru` 缓存），
+   所以慢只出现在**首次 / 重启后**，用户观感就是「像卡死」。
+
+## 二、改动（2 个文件，+142/−36）
+
+### 1. `app/helper/subtitle_helper.py`
+
+- **新增 `_public_entry(item, extra)`：所有对外条目的唯一出口。**
+  `groups[].keeps / keep / remove`、`matched`、`rejected`、`deleted` 全部改走它，
+  只输出 `path / name / dir / lang / category / form / size_bytes / size_mb` 等基础类型，
+  不再把内部条目（带 `langs` set、`lang_key`、`ordered`）泄漏进响应。
+- **新增 `_needs_original_language(lang_count)` 预筛。**
+  判据只用「该目录里出现过哪些语言」（`_scan_full` 已排除 chs/cht，泛双语 `bi` 贡献空串键）：
+  - 没有任何非中文语言 → 原语言取什么都**不改变结论**（中文同类留 1 条；泛双语展开后
+    恒为「中文 × 原语言」双语，照样保留）→ **跳过 TMDB 查询**，`source="skip"`。
+  - 有外语字幕 → 必须查，否则分不清「这门外语是原语言还是外来字幕」。
+- **新增 `_detect_many(show_dirs, langs_by_show, cache)`。**
+  先预筛，剩下要查的走 `ThreadPoolExecutor`（`TMDB_WORKERS = 8`）并发；
+  **返回顺序严格对齐输入**（用 dict 按 show_dir 回填后按输入序取值），
+  单部失败只回落自己（query 口径与 `_detect_original_language` 默认分支一致：
+  「目录名解析出的剧名」），并发度 ≤1 时退回串行。
+- **`_CACHE_LOCK = threading.Lock()`** 包住原语言缓存字典的读写，**网络请求始终在锁外**。
+- **`format_result_message` 的 source 中文映射改 `.get(..., 原值)` 兜底。**
+  ⚠️ 新增 `skip` 取值后，原来的 `{"tmdb"/"files"/"default"}[source]` 直接索引会 **KeyError
+  → 又是一次 500**，这是本次改动引入的新隐患，已在同一提交里堵住。
+
+### 2. `web/templates/service.html`
+
+- 扫描期间在按钮区提示「正在扫描并识别每部片的原语言…首次 30~60 秒，再次命中缓存」。
+- `src_map` 补 `"skip": "无需识别（目录内无外语字幕）"`，与后端口径一致。
+
+## 三、验证
+
+### 单测（桩件 + 真实源码，`python 3.13.12`）
+
+`.workbuddy/tests/subtitle_clean_verify.py` → **52/52 通过**：
+
+| 组 | 项 | 覆盖 |
+|---|---|---|
+| A | 13 | 全量结果可 `json.dumps`；各字段类型均为基础类型 |
+| B | 4 | **反针**：把 `keep` 还原成 `keeps[0]` → `json.dumps` 必须抛 TypeError |
+| C | 14 | `_detect_many` 预筛跳过 / 并发顺序对齐 / 单部失败回落 / 并发度=1 退回串行 |
+| D | 6 | 分类回归（chs / reject / bilingual / 泛双语展开） |
+| E | 8 | 静态断言（含夹具 `RMT_SUBEXT` 与 `config.py` 真实值一致） |
+| G | 5 | `format_result_message` 对未知 source 不 KeyError（含「未来新增取值」） |
+| F | 2 | 明细截断（计数保真、明细上限 1000） |
+
+### 容器实测（绿联 v6.9.0，真连 TMDB，只读）
+
+改后源码放 `/tmp` 用 `importlib` 单独加载，**不动容器内生产源码**：
+
+```
+round1 elapsed = 0.1s   dirs=325 files=581 scopes=319 kept=366 matched=215
+json.dumps OK  len=337814
+原语言来源分布 = {'skip': 319}
+```
+
+### 行为等价性 A/B（同进程先后跑「逐部查询」与「预筛跳过」两版）
+
+| 方案 | 耗时 | 待删 | 保留 | 来源 |
+|---|---|---|---|---|
+| A 逐部查 TMDB | 34.2s | 215 | 366 | tmdb 301 / default 18 |
+| B 预筛跳过 | 0.1s | 215 | 366 | skip 319 |
+
+待删 **path 集合完全一致**；分类计数一致（chs 97 / reject 118）；
+保留项 **path + category 差异 0 条**。→ 只提速，不改判定。
+
+### 门禁
+
+- `.workbuddy/tests/subs_ui_verify.py` 7/7（Jinja 解析 + 整段脚本 `node --check`）
+- `decorator_structure_check.py` 6/6、`web_main_import_verify.py` 6/6
+- 两个改动文件行尾均 **0 裸 LF**
+
+## 四、踩到的坑
+
+1. **内部对象泄漏成 500**：修一个字段不够，必须统一出口。`_public_entry` 落地后
+   仍需检查「新加的每个对外字段是否都走了它」。
+2. **字典硬索引 + 新增取值 = 又一轮 500**。凡是「枚举值 → 展示名」的映射，
+   一律 `.get(k, k)` 兜底，并补一个「未知取值」用例守着。
+3. **并发度不是越高越好**：试过 16 / 24 线程，只有 12.6 req/s，收益递减，
+   所以保持 8；预筛上线后并发路径本身也很少被走到了。
+4. **预筛必须做等价性验证**，不能靠推理 —— 用同进程 A/B 对比
+   「待删 path 集合 + 分类计数 + 保留项」三项全等，才算证明「跳过查询不改变结论」。
+
 # v6.9.0 — 字幕清理改为「白名单」规则（中文 + 该剧原语言 + 中×原语言双语）
 
 ## 一、起因
