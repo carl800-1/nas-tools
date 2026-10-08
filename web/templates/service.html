@@ -256,8 +256,8 @@
         <div class="row">
           <div class="col-lg-8">
             <div class="mb-3">
-              <label class="form-label required">根目录 <span class="form-help"
-                  title="检查该目录下同一视频 / 同一集的字幕；同一集里每种语言只保留一条，其余删除"
+              <label class="form-label required">根目录 <span class="form-help" data-bs-html="true"
+                  title="按剧集清理字幕。<b>每集只保留三类</b>：中文 1 条 + 该剧原语言 1 条 + 中×原语言双语（按字幕内容区分上下排，最多 2 条）。<br><b>其余一律删除</b>：其它语言、繁体中文、认不出语言的字幕 —— 同一集只有这一条也删。<br>该剧原语言自动判定：先查 TMDB，查不到就按目录内实际出现的语言推断，再不行默认英语。"
                   data-bs-toggle="tooltip">?</span></label>
               <input type="text" id="clean_subs_root" class="form-control filetree-folders-only"
                      value="{{ SubDefaultRoot or '' }}" placeholder="如 /video">
@@ -729,67 +729,78 @@
     return true;
   }
 
-  // 渲染扫描结果：左边是保留下来的那条，右边是会被删掉的重复项
+  // 渲染扫描结果：左边是保留下来的（中文 / 原语言 / 中×原语言双语），右边是会被删掉的
   function clean_subs_render(result, isPreview) {
     result = result || {};
     // 兜底：服务端返回异常结构时也不能抛异常，否则整个弹窗会永久卡死
     let groups = result.groups || [];
-    let matched = result.matched || [];
     let deleted = result.deleted || [];
-    let unknown = result.unknown || [];
+    let scopes = result.scopes || [];
     let scope = result.recursive ? "根目录及其各级子目录" : "根目录自身";
     let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：检查 ${scope} 的 `
       + `<strong>${result.total_dirs || 0}</strong> 个目录、`
       + `<strong>${result.total_files || 0}</strong> 个字幕文件，`
-      + `<strong>${result.group_count || 0}</strong> 组存在重复`
+      + `保留 <strong>${result.kept_count || 0}</strong> 条、`
       + (isPreview
-          ? `，共 <strong>${matched.length}</strong> 条多余，预计可释放 <strong>${((result.total_free_bytes || 0) / 1048576).toFixed(2)}</strong> MB`
-          : `，已删除 <strong>${result.deleted_count || 0}</strong> 条，实际释放 <strong>${((result.deleted_bytes || 0) / 1048576).toFixed(2)}</strong> MB`)
+          ? `将删除 <strong>${result.remove_count || 0}</strong> 条（其中其它语言/繁体/无标记 <strong>${result.reject_count || 0}</strong> 条），预计可释放 <strong>${((result.total_free_bytes || 0) / 1048576).toFixed(2)}</strong> MB`
+          : `已删除 <strong>${result.deleted_count || 0}</strong> 条，实际释放 <strong>${((result.deleted_bytes || 0) / 1048576).toFixed(2)}</strong> MB`)
       + `</div>`;
+
+    // 原语言识别结果必须显示出来：认错了就会整片删错语言
+    html += `<div class="mb-2 small text-muted">保留规则：每集 <strong>中文 1 条 + 该剧原语言 1 条 + 中×原语言双语（按字幕内容区分上下排，最多 2 条）</strong>；其余（其它语言 / 繁体中文 / 认不出语言）一律删除，同一集只有一条也删。</div>`;
+    if (scopes.length > 0) {
+      let src_map = {"tmdb": "TMDB", "files": "按目录内语言推断", "default": "默认"};
+      html += `<div class="mb-2 small">识别到的原语言：`;
+      html += scopes.slice(0, 12).map(s =>
+        `<span class="badge bg-blue-lt me-1 mb-1" title="${escape_text(s.dir)}">${escape_text(s.name)} → ${escape_text(s.lang_name)}（${escape_text(src_map[s.source] || s.source || "")}）</span>`
+      ).join("");
+      if (scopes.length > 12) {
+        html += `<span class="text-muted">……共 ${scopes.length} 部</span>`;
+      }
+      html += `</div>`;
+    }
 
     if (isPreview && groups.length > 0) {
       html += `<div class="table-responsive" style="max-height:340px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-striped">
-          <thead><tr><th>保留（每种语言一条）</th><th>删除</th></tr></thead><tbody>`;
+          <thead><tr><th>保留</th><th>删除</th></tr></thead><tbody>`;
       for (let g of groups) {
+        let keeps = (g.keeps || []).map(k =>
+          `<div class="text-truncate" style="max-width:420px;" title="${escape_text(k.path)}">`
+          + `<span class="badge bg-green-lt me-1">${escape_text(k.lang)}</span>${escape_text(k.name)}</div>`
+        ).join("");
         let removes = (g.remove || []).map(r =>
-          `<div class="text-truncate text-muted" style="max-width:420px;" title="${escape_text(r.path)}">${escape_text(r.name)}</div>`
+          `<div class="text-truncate text-muted" style="max-width:420px;" title="${escape_text(r.path)}（${escape_text(r.reason)}）">`
+          + `${escape_text(r.name)}<span class="ms-1">· ${escape_text(r.reason)}</span></div>`
         ).join("");
         html += `<tr>`
-          + `<td><span class="badge bg-green-lt me-1">${escape_text(g.lang)}</span>`
-          + `<div class="text-truncate" style="max-width:420px;" title="${escape_text(g.keep.path)}">${escape_text(g.keep.name)}</div>`
+          + `<td>${keeps || `<span class="text-muted">（无可保留项）</span>`}`
           + `<div class="text-muted text-truncate" style="max-width:420px;" title="${escape_text(g.dir)}">${escape_text(g.dir)}</div></td>`
           + `<td>${removes}</td></tr>`;
       }
       html += `</tbody></table></div>`;
       if (result.truncated) {
-        html += `<div class="text-muted mt-2">清单过长，上表只展示前 ${matched.length} 条；执行时仍会处理全部。</div>`;
+        html += `<div class="text-muted mt-2">清单过长，上表只展示前 ${groups.length} 组；执行时仍会处理全部 ${result.remove_count || 0} 条。</div>`;
       }
     } else if (isPreview) {
-      html += `<div class="text-muted">没有发现重复字幕，无需清理。</div>`;
+      html += `<div class="text-muted">没有需要处理的字幕，无需清理。</div>`;
     } else if (deleted.length > 0) {
       html += `<div class="table-responsive" style="max-height:260px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-striped">
-          <thead><tr><th>已删除字幕</th><th class="w-1">语言</th></tr></thead><tbody>`;
+          <thead><tr><th>已删除字幕</th><th class="w-1">语言</th><th>原因</th></tr></thead><tbody>`;
       for (let item of deleted) {
-        html += `<tr title="${escape_text(item.path)}"><td class="text-truncate" style="max-width:460px;">`
-          + `${escape_text(item.name)}</td><td class="text-end">${escape_text(item.lang)}</td></tr>`;
+        html += `<tr title="${escape_text(item.path)}"><td class="text-truncate" style="max-width:380px;">`
+          + `${escape_text(item.name)}</td><td class="text-end">${escape_text(item.lang)}</td>`
+          + `<td class="text-muted">${escape_text(item.reason || "")}</td></tr>`;
       }
       html += `</tbody></table></div>`;
     } else {
       html += `<div class="text-muted">本次没有删除任何字幕。</div>`;
     }
 
-    // 语言认不出来的一组只列出、绝不删除 —— 必须让用户看见，否则会以为漏了
-    if (unknown.length > 0) {
-      html += `<div class="text-muted mt-2">另有 <strong>${unknown.length}</strong> 组字幕没有任何语言标记，无法判断语言，已跳过不动（可手动补上语言标记后再清）：`;
-      html += unknown.slice(0, 20).map(u =>
-        `<div class="text-truncate" title="${escape_text(u.dir)}">${escape_text((u.files || []).join(" / "))}</div>`
-      ).join("");
-      if (unknown.length > 20) {
-        html += `<div>……共 ${unknown.length} 组</div>`;
-      }
-      html += `</div>`;
+    // 非符合项（其它语言 / 繁体 / 认不出语言）是「整片删」，最容易被忽略，单独说一句
+    if (isPreview && result.reject_count > 0) {
+      html += `<div class="text-muted mt-2">其中 <strong>${result.reject_count}</strong> 条属于「其它语言 / 繁体中文 / 认不出语言」，按规则<b>一律删除</b>（同一集只有这一条也删）。</div>`;
     }
     // 失败项单独提示，不阻断
     if (result.failed && result.failed.length > 0) {
@@ -845,8 +856,8 @@
         return;
       }
       clean_subs_render(ret.data, true);
-      // 有命中才允许执行
-      $("#clean_subs_run_btn").prop("disabled", !(ret.data.matched.length > 0));
+      // 有命中才允许执行（用 remove_count：matched 明细会被截断，计数不会）
+      $("#clean_subs_run_btn").prop("disabled", !(Number(ret.data.remove_count || 0) > 0));
     }, true, true, function (xhr, textStatus) {
       // 网络层失败：必须恢复按钮，否则会永久停在「扫描中...」
       btn.text("预览").removeAttr("disabled");

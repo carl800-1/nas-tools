@@ -2251,7 +2251,7 @@ class SystemCleanSubsScan(ApiResource):
     @system.doc(parser=parser)
     def post(self):
         """
-        字幕清理预览：列出每种语言多余的重复字幕，不执行删除（密钥认证）
+        字幕清理预览：按剧集列出保留项与待删项（其它语言/繁体/认不出语言的一律删除），不执行删除（密钥认证）
         """
         return WebAction().api_action(cmd='clean_subs_scan', data=self.parser.parse_args())
 
@@ -2270,7 +2270,7 @@ class SystemCleanSubsRun(ApiResource):
     @system.doc(parser=parser)
     def post(self):
         """
-        字幕清理：删除每种语言多余的副本，只保留一条（密钥认证，不可撤销）
+        字幕清理：每集只保留 中文 + 该剧原语言 + 中×原语言双语，其余一律删除（密钥认证，不可撤销）
         """
         args = self.parser.parse_args()
         # 表单传来的字符串转 bool

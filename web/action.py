@@ -2925,7 +2925,9 @@ class WebAction:
     @staticmethod
     def __clean_subs_scan(data):
         """
-        字幕清理：预览模式。列出「同一目录 + 同一视频 + 同一语言」下多余的重复字幕，不删除任何内容。
+        字幕清理：预览模式。按剧集列出「保留哪些、删哪些」，不删除任何内容。
+        保留 = 中文 1 条 + 该剧原语言 1 条 + 中×原语言双语（按内容形态，最多 2 条）；
+        其余（其它语言 / 繁体中文 / 认不出语言）一律删除，同一集只有这一条也删。
         :param data: {root_path, keep_policy, recursive, follow_links}
         """
         root_path = data.get("root_path")
@@ -2949,7 +2951,8 @@ class WebAction:
     @staticmethod
     def __clean_subs_run(data):
         """
-        字幕清理：执行模式。删除每种语言多余的副本，只保留一条（不可撤销）。
+        字幕清理：执行模式。删除全部非保留项（不可撤销）。
+        每集保留：中文 1 条 + 该剧原语言 1 条 + 中×原语言双语（按内容形态，最多 2 条）。
         :param data: {root_path, keep_policy, recursive, follow_links}
         """
         root_path = data.get("root_path")
