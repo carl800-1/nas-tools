@@ -28,7 +28,8 @@ Date.prototype.format = function (format) {
 }
 
 // Ajax主方法
-function ajax_post(cmd, params, handler, aync = true, show_progress = true) {
+function ajax_post(cmd, params, handler, aync = true, show_progress = true,
+                    error_handler = null) {
   if (show_progress) {
     NProgress.start();
   }
@@ -58,7 +59,12 @@ function ajax_post(cmd, params, handler, aync = true, show_progress = true) {
         NProgress.done();
       }
       if (xhr && xhr.status === 200) {
+        // 响应体不是合法 JSON（如登录页 HTML）：仍按成功回调，由调用方自行兜底
         handler({code: 0});
+      } else if (error_handler) {
+        // 网络中断 / 网关超时 / 非 2xx：交给调用方兜底。
+        // 不处理的话，带按钮状态的调用（如目录清理）会永久卡在「执行中...」且毫无提示。
+        error_handler(xhr, textStatus, errorThrown);
       }
     }
   });

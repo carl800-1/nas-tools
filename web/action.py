@@ -25,7 +25,7 @@ from app.filetransfer import FileTransfer
 from app.filter import Filter
 from app.helper import DbHelper, ProgressHelper, ThreadHelper, \
     MetaHelper, DisplayHelper, WordsHelper
-from app.helper import RssHelper, PluginHelper, BackupHelper, CleanHelper
+from app.helper import RssHelper, PluginHelper, BackupHelper, CleanHelper, SubtitleHelper
 from app.helper.openai_helper import OpenAiHelper
 from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
@@ -278,6 +278,8 @@ class WebAction:
             "get_library_resume": self.__get_resume,
             "clean_dirs_scan": self.__clean_dirs_scan,
             "clean_dirs_run": self.__clean_dirs_run,
+            "clean_subs_scan": self.__clean_subs_scan,
+            "clean_subs_run": self.__clean_subs_run,
         }
         # 远程命令响应
         self._commands = {
@@ -2918,6 +2920,55 @@ class WebAction:
             return {"code": -1, "msg": result["error"]}
         return {"code": 0,
                 "msg": CleanHelper.format_result_message(result),
+                "data": result}
+
+    @staticmethod
+    def __clean_subs_scan(data):
+        """
+        字幕清理：预览模式。列出「同一目录 + 同一视频 + 同一语言」下多余的重复字幕，不删除任何内容。
+        :param data: {root_path, keep_policy, recursive, follow_links}
+        """
+        root_path = data.get("root_path")
+        keep_policy = SubtitleHelper.normalize_keep_policy(data.get("keep_policy"))
+        follow_links = bool(data.get("follow_links"))
+        # 未显式传 recursive 时回落到配置默认值（默认 True = 含子目录）
+        recursive = SubtitleHelper.normalize_recursive(data.get("recursive"))
+        if not root_path:
+            root_path = SubtitleHelper.get_default_config().get("root_path")
+        result = SubtitleHelper().clean(root_path=root_path,
+                                        keep_policy=keep_policy,
+                                        dry_run=True,
+                                        recursive=recursive,
+                                        follow_links=follow_links)
+        if result.get("error"):
+            return {"code": -1, "msg": result["error"]}
+        return {"code": 0,
+                "msg": SubtitleHelper.format_result_message(result),
+                "data": result}
+
+    @staticmethod
+    def __clean_subs_run(data):
+        """
+        字幕清理：执行模式。删除每种语言多余的副本，只保留一条（不可撤销）。
+        :param data: {root_path, keep_policy, recursive, follow_links}
+        """
+        root_path = data.get("root_path")
+        keep_policy = SubtitleHelper.normalize_keep_policy(data.get("keep_policy"))
+        follow_links = bool(data.get("follow_links"))
+        recursive = SubtitleHelper.normalize_recursive(data.get("recursive"))
+        if not root_path:
+            root_path = SubtitleHelper.get_default_config().get("root_path")
+        if not root_path:
+            return {"code": -1, "msg": "未指定根目录"}
+        result = SubtitleHelper().clean(root_path=root_path,
+                                        keep_policy=keep_policy,
+                                        dry_run=False,
+                                        recursive=recursive,
+                                        follow_links=follow_links)
+        if result.get("error"):
+            return {"code": -1, "msg": result["error"]}
+        return {"code": 0,
+                "msg": SubtitleHelper.format_result_message(result),
                 "data": result}
 
     @staticmethod

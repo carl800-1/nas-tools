@@ -674,6 +674,13 @@
 
   //添加下载目录
   function add_downloaddir(dir_type, dir_subtype, save_path, container_path, label, auto_category) {
+    // 遗留兼容：早期版本「类型」列可选「动漫」，现已并入「电视剧」（动漫不再是独立媒体类型，
+    // 降为电影 / 剧集下的二级分类）。老配置里的「动漫」必须在这里就归一，否则：
+    //   ① 下面 get_categories() 取 Categories["动漫"] 得到 undefined，for...of 直接抛异常，整张卡空白；
+    //   ② 下拉里已没有对应 <option>，控件会静默回落成「全部」并原样保存 —— 老行被改坏。
+    if (dir_type === "动漫") {
+      dir_type = "电视剧";
+    }
     let html = $("#div_downloader_downloaddir_template").text();
     $("#div_downloader_downloaddir").append(html.replaceAll('{DIRDIV_LEVEL}', CURRENT_DIRDIV_LEVEL));
     let level = CURRENT_DIRDIV_LEVEL;
@@ -956,12 +963,11 @@
     <div class="row g-2">
       <div class="col-12 col-md-6 col-lg-3">
         <label class="form-label dl-dir-label" for="dir_type_{DIRDIV_LEVEL}">类型<span class="form-help" data-bs-toggle="tooltip"
-               data-bs-original-title="按媒体类型匹配：全部 / 电影 / 电视剧 / 动漫。自动分类时「动漫」按电视剧处理">?</span></label>
+               data-bs-original-title="按媒体类型匹配：全部 / 电影 / 电视剧">?</span></label>
         <select class="form-select form-select-sm" name="dir_type" id="dir_type_{DIRDIV_LEVEL}" onchange="get_categories($(this).attr('id').replace('dir_type_', ''))">
           <option value="" selected>全部</option>
           <option value="电影">电影</option>
           <option value="电视剧">电视剧</option>
-          <option value="动漫">动漫</option>
         </select>
       </div>
       <div class="col-12 col-md-6 col-lg-3">

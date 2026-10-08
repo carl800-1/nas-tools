@@ -31,7 +31,7 @@ from app.brushtask import BrushTask
 from app.conf import ModuleConf, SystemConfig
 from app.downloader import Downloader
 from app.filter import Filter
-from app.helper import SecurityHelper, MetaHelper, ChromeHelper, ThreadHelper, CleanHelper
+from app.helper import SecurityHelper, MetaHelper, ChromeHelper, ThreadHelper, CleanHelper, SubtitleHelper
 from app.indexer import Indexer
 from app.media.meta import MetaInfo
 from app.mediaserver import MediaServer
@@ -790,6 +790,7 @@ def service():
             Services.pop('processes')
 
     CleanConf = CleanHelper.get_default_config()
+    SubConf = SubtitleHelper.get_default_config()
     return render_template("service.html",
                            Count=len(Services),
                            RuleGroups=RuleGroups,
@@ -797,6 +798,9 @@ def service():
                            CleanDefaultRoot=CleanConf.get("root_path"),
                            CleanDefaultThreshold=CleanConf.get("threshold_mb"),
                            CleanDefaultRecursive=CleanConf.get("recursive", True),
+                           SubDefaultRoot=SubConf.get("root_path"),
+                           SubDefaultPolicy=SubConf.get("keep_policy"),
+                           SubDefaultRecursive=SubConf.get("recursive", True),
                            SchedulerTasks=Services)
 
 
@@ -950,7 +954,7 @@ def downloader():
     Categories = {
         x: WebAction().get_categories({
             "type": x
-        }).get("category") for x in ["电影", "电视剧", "动漫"]
+        }).get("category") for x in ["电影", "电视剧"]
     }
     RmtModeDict = WebAction().get_rmt_modes()
     return render_template("setting/downloader.html",

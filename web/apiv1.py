@@ -2237,6 +2237,50 @@ class SystemCleanDirsRun(ApiResource):
         return WebAction().api_action(cmd='clean_dirs_run', data=args)
 
 
+@system.route('/clean_subs/scan')
+class SystemCleanSubsScan(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('root_path', type=str, help='根目录', location='form', required=True)
+    parser.add_argument('keep_policy', type=str,
+                        help='保留策略：quality（先看格式再看体积，默认）/ size（留体积最大的）',
+                        location='form')
+    parser.add_argument('follow_links', type=str, help='是否跟随符号链接（true/false）', location='form')
+    parser.add_argument('recursive', type=str, help='是否包含子目录（true/false，默认 true）',
+                        location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        字幕清理预览：列出每种语言多余的重复字幕，不执行删除（密钥认证）
+        """
+        return WebAction().api_action(cmd='clean_subs_scan', data=self.parser.parse_args())
+
+
+@system.route('/clean_subs/run')
+class SystemCleanSubsRun(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('root_path', type=str, help='根目录', location='form', required=True)
+    parser.add_argument('keep_policy', type=str,
+                        help='保留策略：quality（先看格式再看体积，默认）/ size（留体积最大的）',
+                        location='form')
+    parser.add_argument('follow_links', type=str, help='是否跟随符号链接（true/false）', location='form')
+    parser.add_argument('recursive', type=str, help='是否包含子目录（true/false，默认 true）',
+                        location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        字幕清理：删除每种语言多余的副本，只保留一条（密钥认证，不可撤销）
+        """
+        args = self.parser.parse_args()
+        # 表单传来的字符串转 bool
+        for key in ("follow_links", "recursive"):
+            val = args.get(key)
+            if isinstance(val, str):
+                args[key] = val.strip().lower() in ("true", "1", "yes", "on")
+        return WebAction().api_action(cmd='clean_subs_run', data=args)
+
+
 @sync.route('/file/hardlinks')
 class SystemFileHardlinks(ClientResource):
     parser = reqparse.RequestParser()

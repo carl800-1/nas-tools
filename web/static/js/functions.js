@@ -1700,16 +1700,10 @@ function show_manual_transfer_modal(manual_type, inpath, syncmod, media_type, un
   }
 
   // 初始化媒体类型
-  if (media_type === "电视剧") {
+  // 类型只有「电影 / 电视剧」两档：动漫已降级为二级分类，不再是可选的媒体类型；
+  // 历史记录里遗留的「动漫」记录按「电视剧」处理（两者共用剧集目录）。
+  if (media_type === "电视剧" || media_type === "动漫") {
     $("#rename_type_tv").prop("checked", true);
-    $("#rename_type_mov").removeProp("checked");
-    $("#rename_type_anime").removeProp("checked");
-    $("#rename_season_div").show();
-    $("#rename_specify_episode_div").show();
-    $("#rename_episode_div").show();
-  } else if (media_type === "动漫") {
-    $("#rename_type_anime").prop("checked", true);
-    $("#rename_type_tv").removeProp("checked");
     $("#rename_type_mov").removeProp("checked");
     $("#rename_season_div").show();
     $("#rename_specify_episode_div").show();
@@ -1717,7 +1711,6 @@ function show_manual_transfer_modal(manual_type, inpath, syncmod, media_type, un
   } else {
     $("#rename_type_mov").prop("checked", true);
     $("#rename_type_tv").removeProp("checked");
-    $("#rename_type_anime").removeProp("checked");
     $("#rename_season_div").hide();
     $("#rename_specify_episode_div").hide();
     $("#rename_episode_div").hide();

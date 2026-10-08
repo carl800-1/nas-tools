@@ -244,6 +244,63 @@
     </div>
   </div>
 </div>
+<div class="modal modal-blur fade" id="modal-clean-subs" tabindex="-1" role="dialog" aria-hidden="true"
+  data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">字幕清理</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <div class="col-lg-8">
+            <div class="mb-3">
+              <label class="form-label required">根目录 <span class="form-help"
+                  title="检查该目录下同一视频 / 同一集的字幕；同一集里每种语言只保留一条，其余删除"
+                  data-bs-toggle="tooltip">?</span></label>
+              <input type="text" id="clean_subs_root" class="form-control filetree-folders-only"
+                     value="{{ SubDefaultRoot or '' }}" placeholder="如 /video">
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="mb-3">
+              <label class="form-label">保留策略 <span class="form-help" data-bs-html="true" data-bs-toggle="tooltip"
+                  title="<b>保留 ASS/SSA</b>：先比格式（ASS/SSA 带样式，通常优于 SRT），同格式留体积最大的<br><b>一律留最大</b>：不看格式，直接留体积最大的，同体积再比格式"
+                  >?</span></label>
+              <select class="form-select" id="clean_subs_policy">
+                <option value="quality" {% if SubDefaultPolicy != 'size' %}selected{% endif %}>保留 ASS/SSA，同格式留大</option>
+                <option value="size" {% if SubDefaultPolicy == 'size' %}selected{% endif %}>一律保留体积最大</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="mb-2 d-flex align-items-center flex-wrap">
+          <label class="form-check form-switch me-4 mb-0">
+            <input class="form-check-input" type="checkbox" id="clean_subs_recursive"
+                   {% if SubDefaultRecursive is not none and SubDefaultRecursive|string|lower in ['false','0','no','off'] %}unchecked{% else %}checked{% endif %}>
+            <span class="form-check-label">包含子目录 <span class="form-help"
+                title="开启（默认）：检查根目录及其各级子目录 —— 剧集的字幕一般在 Season 子目录里。<br>关闭：只检查根目录自身的字幕。"
+                data-bs-toggle="tooltip">?</span></span>
+          </label>
+          <label class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="clean_subs_follow_links">
+            <span class="form-check-label">跟随符号链接 <span class="form-help"
+                title="默认关闭：符号链接（目录与文件）一律跳过，既不参与比较也不删除"
+                data-bs-toggle="tooltip">?</span></span>
+          </label>
+        </div>
+        <hr>
+        <div id="clean_subs_result" class="text-muted">请先点击「预览」查看待删除清单。</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
+        <button id="clean_subs_scan_btn" class="btn btn-primary">预览</button>
+        <button id="clean_subs_run_btn" class="btn btn-danger" disabled>执行删除</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal modal-blur fade" id="modal-backup" tabindex="-1" role="dialog" aria-hidden="true"
   data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
@@ -401,6 +458,9 @@
       case "clean_dirs":
         show_clean_dirs_modal();
         break;
+      case "clean_subs":
+        show_clean_subs_modal();
+        break;
       case "sync":
         $('#modal-service-sync').modal('show');
         break;
@@ -471,13 +531,17 @@
 
   // 渲染扫描结果表格
   function clean_dirs_render(result, isPreview) {
+    result = result || {};
+    // 兜底：服务端返回异常结构时也不能抛异常，否则整个弹窗会永久卡死
+    let matched = result.matched || [];
+    let deleted = result.deleted || [];
     let scope = result.recursive ? "各级子文件夹" : "一级子文件夹";
     let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：`
-      + `共扫描 <strong>${result.total_dirs}</strong> 个${scope}，`
-      + `命中 <strong>${result.matched.length}</strong> 个，`
-      + `阈值 <strong>${result.threshold_mb}</strong> MB`
+      + `共扫描 <strong>${result.total_dirs || 0}</strong> 个${scope}，`
+      + `命中 <strong>${matched.length}</strong> 个，`
+      + `阈值 <strong>${result.threshold_mb || 0}</strong> MB`
       + (isPreview
-          ? `，预计可释放 <strong>${(result.total_free_bytes / 1048576).toFixed(2)}</strong> MB`
+          ? `，预计可释放 <strong>${((result.total_free_bytes || 0) / 1048576).toFixed(2)}</strong> MB`
           : `，已删除 <strong>${result.deleted_count || 0}</strong> 个，`
             + `实际释放 <strong>${((result.deleted_bytes || 0) / 1048576).toFixed(2)}</strong> MB`)
       + `</div>`;
@@ -487,26 +551,28 @@
       ? `<span class="badge bg-secondary me-1" title="相对根目录的第 ${d} 层">第${d}层</span>`
       : "";
 
-    if (isPreview && result.matched.length > 0) {
+    if (isPreview && matched.length > 0) {
       html += `<div class="table-responsive" style="max-height:320px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-hover table-striped">
           <thead><tr><th>目录</th><th class="w-1">大小</th></tr></thead><tbody>`;
-      for (let item of result.matched) {
+      for (let item of matched) {
         html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
           + `${depthBadge(item.depth)}${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
       }
       html += `</tbody></table></div>`;
     } else if (isPreview) {
       html += `<div class="text-muted">没有符合条件的文件夹，无需清理。</div>`;
-    } else if (result.deleted && result.deleted.length > 0) {
+    } else if (deleted.length > 0) {
       html += `<div class="table-responsive" style="max-height:240px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-hover table-striped">
           <thead><tr><th>已删除目录</th><th class="w-1">大小</th></tr></thead><tbody>`;
-      for (let item of result.deleted) {
+      for (let item of deleted) {
         html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
           + `${depthBadge(item.depth)}${item.path}</td><td class="text-end">${item.size_mb} MB</td></tr>`;
       }
       html += `</tbody></table></div>`;
+    } else {
+      html += `<div class="text-muted">本次没有删除任何文件夹。</div>`;
     }
 
     // 失败项单独提示，不阻断
@@ -519,29 +585,79 @@
     if (result.skipped && result.skipped.length > 0) {
       html += `<div class="text-muted mt-2">已跳过 ${result.skipped.length} 项（权限不足 / 符号链接 / 非普通文件），详见运行日志。</div>`;
     }
+    // 执行完清单已过期，明确告诉用户下一步（「执行删除」会一并置灰）
+    if (!isPreview && deleted.length > 0) {
+      html += `<div class="text-muted mt-2">清单已过期，如需再次清理请点「预览」重新扫描。</div>`;
+    }
 
     $("#clean_dirs_result").removeClass("text-muted").html(html);
   }
 
-  // 预览
-  $("#clean_dirs_scan_btn").unbind("click").click(function () {
+  // 后端响应是否可用：防御「非 JSON 响应 / 缺字段」——一旦抛异常，界面会永久卡死
+  function clean_dirs_is_ok(ret) {
+    return !!(ret && ret.code === 0 && ret.data && Array.isArray(ret.data.matched));
+  }
+
+  // 网络层失败的可读描述
+  function clean_dirs_err_text(xhr, textStatus) {
+    if (xhr && xhr.status) {
+      return "HTTP " + xhr.status + (xhr.statusText ? " " + xhr.statusText : "");
+    }
+    if (textStatus === "timeout") {
+      return "请求超时";
+    }
+    return "未收到服务器响应（网络中断或网关超时）";
+  }
+
+  // 预览（silent = 异常兜底后的自动重扫，不显示「扫描中...」）
+  function clean_dirs_scan(silent) {
     if (!clean_dirs_validate()) {
       return;
     }
-    let btn = $(this);
-    btn.text("扫描中...").attr("disabled", true);
+    let btn = $("#clean_dirs_scan_btn");
+    if (silent) {
+      $("#clean_dirs_result").addClass("text-muted").html("正在重新扫描，以确认当前状态…");
+    } else {
+      btn.text("扫描中...").attr("disabled", true);
+    }
     ajax_post("clean_dirs_scan", clean_dirs_params(), function (ret) {
       btn.text("预览").removeAttr("disabled");
-      if (ret.code !== 0) {
-        $("#clean_dirs_result").addClass("text-muted").html(ret.msg || "扫描失败");
+      if (!clean_dirs_is_ok(ret)) {
+        $("#clean_dirs_result").addClass("text-muted").html((ret && ret.msg) || "扫描失败，请重试");
         $("#clean_dirs_run_btn").prop("disabled", true);
         return;
       }
-      let result = ret.data || {};
-      clean_dirs_render(result, true);
+      clean_dirs_render(ret.data, true);
       // 有命中才允许执行
-      $("#clean_dirs_run_btn").prop("disabled", !(result.matched && result.matched.length > 0));
+      $("#clean_dirs_run_btn").prop("disabled", !(ret.data.matched.length > 0));
+    }, true, true, function (xhr, textStatus) {
+      // 网络层失败：必须恢复按钮，否则会永久停在「扫描中...」
+      btn.text("预览").removeAttr("disabled");
+      $("#clean_dirs_result").addClass("text-muted")
+        .html("扫描失败：" + clean_dirs_err_text(xhr, textStatus));
+      $("#clean_dirs_run_btn").prop("disabled", true);
     });
+  }
+
+  // 「执行删除」没拿到结果时的兜底：
+  // 请求已经发出（服务端可能已在删），但响应没回来（网关超时 / 连接中断 / 进程被重启）。
+  // 这时必须让按钮可点并给出提示，否则界面会永久停在「删除中...」且毫无反馈。
+  function clean_dirs_run_abort(detail) {
+    let btn = $("#clean_dirs_run_btn");
+    btn.text("执行删除").removeAttr("disabled");
+    $("#clean_dirs_result").removeClass("text-muted").html(
+      `<div class="text-danger">「执行删除」未取得结果，删除可能仍在后台进行。</div>`
+      + `<div class="text-muted mt-1">点「确定」后将自动重新扫描，确认当前状态。</div>`);
+    show_fail_modal(
+      `执行删除未取得结果：${detail}。删除可能仍在后台进行，请稍后重新预览确认。`,
+      function () {
+        clean_dirs_scan(true);
+      });
+  }
+
+  // 预览
+  $("#clean_dirs_scan_btn").unbind("click").click(function () {
+    clean_dirs_scan(false);
   });
 
   // 执行删除（二次确认）
@@ -559,14 +675,234 @@
         btn.text("删除中...").attr("disabled", true);
         ajax_post("clean_dirs_run", params, function (ret) {
           btn.text("执行删除");
-          if (ret.code !== 0) {
-            show_fail_modal(ret.msg || "删除失败");
-            btn.removeAttr("disabled");
+          if (!clean_dirs_is_ok(ret)) {
+            clean_dirs_run_abort((ret && ret.msg) || "服务器返回的数据无法识别");
             return;
           }
-          clean_dirs_render(ret.data || {}, false);
-          show_success_modal(ret.msg || "清理完成");
+          clean_dirs_render(ret.data, false);
+          show_success_modal((ret.msg || "清理完成")
+            + "；如需再次清理，请点「预览」重新扫描（清单已过期）。");
           btn.prop("disabled", true);
+        }, true, true, function (xhr, textStatus) {
+          btn.text("执行删除");
+          clean_dirs_run_abort(clean_dirs_err_text(xhr, textStatus));
+        });
+      }
+    );
+  });
+
+  // ---------------- 字幕清理 ----------------
+
+  // 打开字幕清理弹窗
+  function show_clean_subs_modal() {
+    clean_subs_reset(true);
+    $('#modal-clean-subs').modal('show');
+  }
+
+  // 读取表单参数
+  function clean_subs_params() {
+    return {
+      "root_path": $("#clean_subs_root").val().trim(),
+      "keep_policy": $("#clean_subs_policy").val(),
+      "follow_links": $("#clean_subs_follow_links").is(":checked"),
+      "recursive": $("#clean_subs_recursive").is(":checked")
+    };
+  }
+
+  // 重置结果区
+  function clean_subs_reset(clearForm) {
+    $("#clean_subs_result").addClass("text-muted").html("请先点击「预览」查看待删除清单。");
+    $("#clean_subs_run_btn").prop("disabled", true);
+    if (clearForm) {
+      $("#clean_subs_root").removeClass("is-invalid");
+    }
+  }
+
+  // 校验参数，非法则标红并返回 false
+  function clean_subs_validate() {
+    let root = $("#clean_subs_root").val().trim();
+    if (!root) {
+      $("#clean_subs_root").addClass("is-invalid");
+      return false;
+    }
+    $("#clean_subs_root").removeClass("is-invalid");
+    return true;
+  }
+
+  // 渲染扫描结果：左边是保留下来的那条，右边是会被删掉的重复项
+  function clean_subs_render(result, isPreview) {
+    result = result || {};
+    // 兜底：服务端返回异常结构时也不能抛异常，否则整个弹窗会永久卡死
+    let groups = result.groups || [];
+    let matched = result.matched || [];
+    let deleted = result.deleted || [];
+    let unknown = result.unknown || [];
+    let scope = result.recursive ? "根目录及其各级子目录" : "根目录自身";
+    let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：检查 ${scope} 的 `
+      + `<strong>${result.total_dirs || 0}</strong> 个目录、`
+      + `<strong>${result.total_files || 0}</strong> 个字幕文件，`
+      + `<strong>${result.group_count || 0}</strong> 组存在重复`
+      + (isPreview
+          ? `，共 <strong>${matched.length}</strong> 条多余，预计可释放 <strong>${((result.total_free_bytes || 0) / 1048576).toFixed(2)}</strong> MB`
+          : `，已删除 <strong>${result.deleted_count || 0}</strong> 条，实际释放 <strong>${((result.deleted_bytes || 0) / 1048576).toFixed(2)}</strong> MB`)
+      + `</div>`;
+
+    if (isPreview && groups.length > 0) {
+      html += `<div class="table-responsive" style="max-height:340px;overflow-y:auto;">
+        <table class="table table-vcenter card-table table-striped">
+          <thead><tr><th>保留（每种语言一条）</th><th>删除</th></tr></thead><tbody>`;
+      for (let g of groups) {
+        let removes = (g.remove || []).map(r =>
+          `<div class="text-truncate text-muted" style="max-width:420px;" title="${escape_text(r.path)}">${escape_text(r.name)}</div>`
+        ).join("");
+        html += `<tr>`
+          + `<td><span class="badge bg-green-lt me-1">${escape_text(g.lang)}</span>`
+          + `<div class="text-truncate" style="max-width:420px;" title="${escape_text(g.keep.path)}">${escape_text(g.keep.name)}</div>`
+          + `<div class="text-muted text-truncate" style="max-width:420px;" title="${escape_text(g.dir)}">${escape_text(g.dir)}</div></td>`
+          + `<td>${removes}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+      if (result.truncated) {
+        html += `<div class="text-muted mt-2">清单过长，上表只展示前 ${matched.length} 条；执行时仍会处理全部。</div>`;
+      }
+    } else if (isPreview) {
+      html += `<div class="text-muted">没有发现重复字幕，无需清理。</div>`;
+    } else if (deleted.length > 0) {
+      html += `<div class="table-responsive" style="max-height:260px;overflow-y:auto;">
+        <table class="table table-vcenter card-table table-striped">
+          <thead><tr><th>已删除字幕</th><th class="w-1">语言</th></tr></thead><tbody>`;
+      for (let item of deleted) {
+        html += `<tr title="${escape_text(item.path)}"><td class="text-truncate" style="max-width:460px;">`
+          + `${escape_text(item.name)}</td><td class="text-end">${escape_text(item.lang)}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    } else {
+      html += `<div class="text-muted">本次没有删除任何字幕。</div>`;
+    }
+
+    // 语言认不出来的一组只列出、绝不删除 —— 必须让用户看见，否则会以为漏了
+    if (unknown.length > 0) {
+      html += `<div class="text-muted mt-2">另有 <strong>${unknown.length}</strong> 组字幕没有任何语言标记，无法判断语言，已跳过不动（可手动补上语言标记后再清）：`;
+      html += unknown.slice(0, 20).map(u =>
+        `<div class="text-truncate" title="${escape_text(u.dir)}">${escape_text((u.files || []).join(" / "))}</div>`
+      ).join("");
+      if (unknown.length > 20) {
+        html += `<div>……共 ${unknown.length} 组</div>`;
+      }
+      html += `</div>`;
+    }
+    // 失败项单独提示，不阻断
+    if (result.failed && result.failed.length > 0) {
+      html += `<div class="text-danger mt-2">失败 ${result.failed.length} 条：`;
+      html += result.failed.map(f =>
+        `<div class="text-truncate" title="${escape_text(f.path)}">${escape_text(f.path)}（${escape_text(f.reason)}）</div>`
+      ).join("");
+      html += `</div>`;
+    }
+    if (result.skipped && result.skipped.length > 0) {
+      html += `<div class="text-muted mt-2">已跳过 ${result.skipped.length} 项（权限不足 / 符号链接 / 非普通文件），详见运行日志。</div>`;
+    }
+    // 执行完清单已过期，明确告诉用户下一步（「执行删除」会一并置灰）
+    if (!isPreview && deleted.length > 0) {
+      html += `<div class="text-muted mt-2">清单已过期，如需再次清理请点「预览」重新扫描。</div>`;
+    }
+
+    $("#clean_subs_result").removeClass("text-muted").html(html);
+  }
+
+  // 后端响应是否可用：防御「非 JSON 响应 / 缺字段」——一旦抛异常，界面会永久卡死
+  function clean_subs_is_ok(ret) {
+    return !!(ret && ret.code === 0 && ret.data && Array.isArray(ret.data.matched));
+  }
+
+  // 网络层失败的可读描述
+  function clean_subs_err_text(xhr, textStatus) {
+    if (xhr && xhr.status) {
+      return "HTTP " + xhr.status + (xhr.statusText ? " " + xhr.statusText : "");
+    }
+    if (textStatus === "timeout") {
+      return "请求超时";
+    }
+    return "未收到服务器响应（网络中断或网关超时）";
+  }
+
+  // 预览（silent = 异常兜底后的自动重扫，不显示「扫描中...」）
+  function clean_subs_scan(silent) {
+    if (!clean_subs_validate()) {
+      return;
+    }
+    let btn = $("#clean_subs_scan_btn");
+    if (silent) {
+      $("#clean_subs_result").addClass("text-muted").html("正在重新扫描，以确认当前状态…");
+    } else {
+      btn.text("扫描中...").attr("disabled", true);
+    }
+    ajax_post("clean_subs_scan", clean_subs_params(), function (ret) {
+      btn.text("预览").removeAttr("disabled");
+      if (!clean_subs_is_ok(ret)) {
+        $("#clean_subs_result").addClass("text-muted").html((ret && ret.msg) || "扫描失败，请重试");
+        $("#clean_subs_run_btn").prop("disabled", true);
+        return;
+      }
+      clean_subs_render(ret.data, true);
+      // 有命中才允许执行
+      $("#clean_subs_run_btn").prop("disabled", !(ret.data.matched.length > 0));
+    }, true, true, function (xhr, textStatus) {
+      // 网络层失败：必须恢复按钮，否则会永久停在「扫描中...」
+      btn.text("预览").removeAttr("disabled");
+      $("#clean_subs_result").addClass("text-muted")
+        .html("扫描失败：" + clean_subs_err_text(xhr, textStatus));
+      $("#clean_subs_run_btn").prop("disabled", true);
+    });
+  }
+
+  // 「执行删除」没拿到结果时的兜底：
+  // 请求已经发出（服务端可能已在删），但响应没回来（网关超时 / 连接中断 / 进程被重启）。
+  // 这时必须让按钮可点并给出提示，否则界面会永久停在「删除中...」且毫无反馈。
+  function clean_subs_run_abort(detail) {
+    let btn = $("#clean_subs_run_btn");
+    btn.text("执行删除").removeAttr("disabled");
+    $("#clean_subs_result").removeClass("text-muted").html(
+      `<div class="text-danger">「执行删除」未取得结果，删除可能仍在后台进行。</div>`
+      + `<div class="text-muted mt-1">点「确定」后将自动重新扫描，确认当前状态。</div>`);
+    show_fail_modal(
+      `执行删除未取得结果：${detail}。删除可能仍在后台进行，请稍后重新预览确认。`,
+      function () {
+        clean_subs_scan(true);
+      });
+  }
+
+  // 预览
+  $("#clean_subs_scan_btn").unbind("click").click(function () {
+    clean_subs_scan(false);
+  });
+
+  // 执行删除（二次确认）
+  $("#clean_subs_run_btn").unbind("click").click(function () {
+    if (!clean_subs_validate()) {
+      return;
+    }
+    let params = clean_subs_params();
+    show_confirm_modal(
+      `即将删除「${params.root_path}」下每种语言多余的重复字幕（同一集只保留一条），`
+      + `删除后不可恢复，是否确认？`,
+      function () {
+        hide_confirm_modal();
+        let btn = $("#clean_subs_run_btn");
+        btn.text("删除中...").attr("disabled", true);
+        ajax_post("clean_subs_run", params, function (ret) {
+          btn.text("执行删除");
+          if (!clean_subs_is_ok(ret)) {
+            clean_subs_run_abort((ret && ret.msg) || "服务器返回的数据无法识别");
+            return;
+          }
+          clean_subs_render(ret.data, false);
+          show_success_modal((ret.msg || "清理完成")
+            + "；如需再次清理，请点「预览」重新扫描（清单已过期）。");
+          btn.prop("disabled", true);
+        }, true, true, function (xhr, textStatus) {
+          btn.text("执行删除");
+          clean_subs_run_abort(clean_subs_err_text(xhr, textStatus));
         });
       }
     );

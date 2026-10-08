@@ -382,3 +382,16 @@ clean_dirs:
   threshold_mb: 10
   # 是否包含子目录（多级递归）；false = 只清理根目录下的一级子文件夹
   recursive: true
+# 【字幕清理】：同一视频 / 同一集的同语言字幕去重，每种语言只留一条（服务 → 字幕清理）
+#   留空则每次在界面里填写；keep_policy 为保留策略：
+#     quality = 先比格式（ASS/SSA 优于 SRT），同格式留体积大的（默认）
+#     size    = 一律留体积最大的，同体积再比格式
+#   recursive=true（默认）时检查根目录及其各级子目录；false 则只看根目录自身
+#   语言认不出来（文件名没有任何语言标记）的一组只列出、绝不删除
+clean_subs:
+  # 根目录（留空则界面上手动填写）
+  root_path: ''
+  # 保留策略：quality / size
+  keep_policy: quality
+  # 是否包含子目录
+  recursive: true
