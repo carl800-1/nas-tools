@@ -1203,7 +1203,23 @@ class UgreenClient(_IMediaClient):
         # v6.10.1：最后再试「该库某条已缓存条目的本地海报」—— 真机上有库的
         # custom_cover / poster_paths / folder 封面**全是云端地址或为空**，
         # 但条目自己的 poster_path 是本地文件，用它兜底。
-        return self._lib_item_cover(lib_id)
+        cover = self._lib_item_cover(lib_id)
+        if cover:
+            return cover
+        # v7.0.0：条目缓存仍为空 ⇒ 主动拉一次全量条目再试。
+        # 背景（真机实测「动漫电视剧」整卡无图，其余 6 个库都正常）：该库的
+        # custom_cover / poster_paths / folder.cover / backdrop_paths **四项全是
+        # 云端地址**（scraper.ugnas.com 带 auth_key，被上面统一滤掉），于是只能
+        # 靠 _lib_item_cover() 兜底；而它只查 `_all_videos` 内存缓存 —— 首页刷新
+        # 时该缓存通常是空的（只有点过「媒体库同步」或跑过功能查询才会填），
+        # 这个库就恒落空 ⇒ 卡片显示「无图」占位，手动点一次同步能恢复、重启又复现。
+        # 实测内网全量拉取 994 条仅约 0.6s（49 次请求），且**只对常规候选全落空
+        # 的库触发**（有本地候选的库在上面就 return 了），结果进程内缓存，
+        # 代价可忽略。
+        if not self._all_videos:
+            self._all_library_videos()
+            cover = self._lib_item_cover(lib_id)
+        return cover
 
     def _lib_item_cover(self, lib_id):
         """
