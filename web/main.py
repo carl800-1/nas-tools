@@ -31,7 +31,8 @@ from app.brushtask import BrushTask
 from app.conf import ModuleConf, SystemConfig
 from app.downloader import Downloader
 from app.filter import Filter
-from app.helper import SecurityHelper, MetaHelper, ChromeHelper, ThreadHelper, CleanHelper, SubtitleHelper
+from app.helper import SecurityHelper, MetaHelper, ChromeHelper, ThreadHelper, CleanHelper, SubtitleHelper, \
+    OrphanHelper
 from app.indexer import Indexer
 from app.media.meta import MetaInfo
 from app.mediaserver import MediaServer
@@ -791,6 +792,11 @@ def service():
 
     CleanConf = CleanHelper.get_default_config()
     SubConf = SubtitleHelper.get_default_config()
+    # 媒体库残留清理：默认扫描目录（配置优先，否则取「设置 → 媒体」的媒体库目录）
+    OrphanConf = OrphanHelper.get_default_config()
+    OrphanRoots = ",".join(OrphanHelper.get_configured_roots(OrphanConf))
+    # 媒体库残留清理：实际会查询的媒体服务器（界面固定用「当前启用」那一台，只展示不选择）
+    OrphanServer = OrphanHelper.resolve_server()
     return render_template("service.html",
                            Count=len(Services),
                            RuleGroups=RuleGroups,
@@ -801,6 +807,9 @@ def service():
                            SubDefaultRoot=SubConf.get("root_path"),
                            SubDefaultPolicy=SubConf.get("keep_policy"),
                            SubDefaultRecursive=SubConf.get("recursive", True),
+                           OrphanDefaultRoots=OrphanRoots,
+                           OrphanServerName=OrphanServer.get("name") or "",
+                           OrphanServerReady=bool(OrphanServer.get("configured")),
                            SchedulerTasks=Services)
 
 

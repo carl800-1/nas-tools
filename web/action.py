@@ -25,7 +25,7 @@ from app.filetransfer import FileTransfer
 from app.filter import Filter
 from app.helper import DbHelper, ProgressHelper, ThreadHelper, \
     MetaHelper, DisplayHelper, WordsHelper
-from app.helper import RssHelper, PluginHelper, BackupHelper, CleanHelper, SubtitleHelper
+from app.helper import RssHelper, PluginHelper, BackupHelper, CleanHelper, SubtitleHelper, OrphanHelper
 from app.helper.openai_helper import OpenAiHelper
 from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
@@ -278,6 +278,9 @@ class WebAction:
             "get_library_resume": self.__get_resume,
             "clean_dirs_scan": self.__clean_dirs_scan,
             "clean_dirs_run": self.__clean_dirs_run,
+            "media_orphan_detect": self.__media_orphan_detect,
+            "media_orphan_scan": self.__media_orphan_scan,
+            "media_orphan_run": self.__media_orphan_run,
             "clean_subs_scan": self.__clean_subs_scan,
             "clean_subs_run": self.__clean_subs_run,
             "clean_subs_progress": self.__clean_subs_progress,
@@ -2924,6 +2927,71 @@ class WebAction:
             return {"code": -1, "msg": result["error"]}
         return {"code": 0,
                 "msg": CleanHelper.format_result_message(result),
+                "data": result}
+
+    @staticmethod
+    def __media_orphan_common(data):
+        """
+        媒体库残留清理的公共入参归一：返回 (roots, server_type)。
+
+        roots 留空时**不在这里兜底**，交给 OrphanHelper.resolve_roots() 走三级兜底
+        （显式配置 → 媒体服务器的媒体库目录 → 「设置 → 媒体」目录），这样 REST 直调
+        也能享受「自动读取媒体库目录」。
+        """
+        roots = data.get("roots")
+        if roots is None:
+            roots = ""
+        # 界面不提供服务器选择：留空即「设置 → 媒体服务器」里当前启用的那一台。
+        # 兜底顺序与界面展示一致（resolve_server），这里只取类型 id。
+        server_type = OrphanHelper.resolve_server(data.get("server_type")).get("id") or ""
+        return roots, server_type
+
+    @staticmethod
+    def __media_orphan_detect(data):
+        """
+        媒体库残留清理：自动检测媒体服务器并读取其媒体库目录（供界面确认，不删任何东西）。
+        即使读取失败也返回 code=0，由 data.error 说明原因（界面仍需展示服务器信息）。
+        :param data: {server_type}
+        """
+        server_type = OrphanHelper.resolve_server(data.get("server_type")).get("id") or ""
+        return {"code": 0, "data": OrphanHelper.detect(server_type)}
+
+    @staticmethod
+    def __media_orphan_scan(data):
+        """
+        媒体库残留清理：预览模式。实时拉取媒体服务器现存条目，列出「磁盘上还在、
+        媒体服务器里已不存在」的影片目录，不删除任何内容。
+        :param data: {roots, server_type}
+        """
+        roots, server_type = WebAction.__media_orphan_common(data)
+        result = OrphanHelper().clean(roots=roots,
+                                      server_type=server_type,
+                                      dry_run=True)
+        if result.get("error"):
+            return {"code": -1, "msg": result["error"]}
+        return {"code": 0,
+                "msg": OrphanHelper.format_result_message(result),
+                "data": result}
+
+    @staticmethod
+    def __media_orphan_run(data):
+        """
+        媒体库残留清理：执行模式。删除扫描命中的残留目录（不可撤销）。
+        :param data: {roots, server_type}
+        """
+        roots, server_type = WebAction.__media_orphan_common(data)
+        if not roots:
+            # 未显式指定时按同一套兜底链解析（与预览保持一致，不会凭空扩大范围）
+            roots, _source = OrphanHelper.resolve_roots(None, server_type)
+        if not roots:
+            return {"code": -1, "msg": "未指定扫描目录，且未能从媒体服务器 / 「设置 → 媒体」读到可用目录"}
+        result = OrphanHelper().clean(roots=roots,
+                                      server_type=server_type,
+                                      dry_run=False)
+        if result.get("error"):
+            return {"code": -1, "msg": result["error"]}
+        return {"code": 0,
+                "msg": OrphanHelper.format_result_message(result),
                 "data": result}
 
     @staticmethod

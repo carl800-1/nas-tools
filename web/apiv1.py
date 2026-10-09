@@ -2237,6 +2237,53 @@ class SystemCleanDirsRun(ApiResource):
         return WebAction().api_action(cmd='clean_dirs_run', data=args)
 
 
+@system.route('/media_orphan/detect')
+class SystemMediaOrphanDetect(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('server_type', type=str,
+                        help='媒体服务器类型（emby/jellyfin/plex/ugreen/trimemedia），留空用当前启用的',
+                        location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        媒体库残留清理：自动检测媒体服务器并读取其媒体库目录（密钥认证，不执行删除）
+        """
+        return WebAction().api_action(cmd='media_orphan_detect', data=self.parser.parse_args())
+
+
+@system.route('/media_orphan/scan')
+class SystemMediaOrphanScan(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('roots', type=str, help='扫描目录，多个用英文逗号分隔', location='form')
+    parser.add_argument('server_type', type=str,
+                        help='媒体服务器类型（emby/jellyfin/plex/ugreen/trimemedia），留空用当前启用的',
+                        location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        媒体库残留清理预览：列出「媒体服务器里已不存在」的影片目录，不执行删除（密钥认证）
+        """
+        return WebAction().api_action(cmd='media_orphan_scan', data=self.parser.parse_args())
+
+
+@system.route('/media_orphan/run')
+class SystemMediaOrphanRun(ApiResource):
+    parser = reqparse.RequestParser()
+    parser.add_argument('roots', type=str, help='扫描目录，多个用英文逗号分隔', location='form')
+    parser.add_argument('server_type', type=str,
+                        help='媒体服务器类型（emby/jellyfin/plex/ugreen/trimemedia），留空用当前启用的',
+                        location='form')
+
+    @system.doc(parser=parser)
+    def post(self):
+        """
+        媒体库残留清理：删除扫描命中的残留目录（密钥认证，不可撤销）
+        """
+        return WebAction().api_action(cmd='media_orphan_run', data=self.parser.parse_args())
+
+
 @system.route('/clean_subs/scan')
 class SystemCleanSubsScan(ApiResource):
     parser = reqparse.RequestParser()

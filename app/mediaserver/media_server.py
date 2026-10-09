@@ -71,6 +71,20 @@ class MediaServer:
         """
         return self.server.get_type()
 
+    def get_server_by_type(self, ctype, conf=None):
+        """
+        按类型构造一个**独立**的媒体服务器客户端实例（不改变当前使用的服务器）。
+
+        用于「媒体库残留清理」这类需要临时比对另一台服务器的场景：nas-tools 同一
+        时刻只使用一台媒体服务器，但用户可能同时装了飞牛与绿联，删除操作发生在他
+        没有配置为「当前启用」的那一台上（该服务界面固定使用当前启用的那一台，
+        此方法供 config 的 media_orphan.server 与 REST 的 server_type 参数使用）。
+
+        :param ctype: 媒体服务器类型（emby / jellyfin / plex / ugreen / trimemedia）
+        :param conf: 可选的配置覆盖，一般传 None 让客户端自己读配置
+        """
+        return self.__get_server(ctype=ctype, conf=conf)
+
     def get_activity_log(self, limit):
         """
         获取媒体服务器的活动日志

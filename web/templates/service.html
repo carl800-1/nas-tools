@@ -244,6 +244,54 @@
     </div>
   </div>
 </div>
+<div class="modal modal-blur fade" id="modal-media-orphan" tabindex="-1" role="dialog" aria-hidden="true"
+  data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">媒体库残留清理</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-info" role="alert">
+          以<strong>媒体服务器现存条目</strong>为准：扫描下面目录里的<strong>一级子文件夹</strong>，
+          把「磁盘上还在、媒体服务器里已经查不到」的影片目录列出来。
+          只比对、不猜测 —— <strong>拿不到媒体服务器条目时不会产生任何清单</strong>，避免误删。
+        </div>
+        <div class="row">
+          <div class="col-lg-4">
+            <div class="mb-3">
+              <label class="form-label">媒体服务器 <span class="form-help"
+                  title="固定使用「设置 → 媒体服务器」里当前启用的那一台。要清理另一套影视（如飞牛影视）的残留，去设置里把当前启用切过去，再回来扫描即可"
+                  data-bs-toggle="tooltip">?</span></label>
+              <div id="media_orphan_server_name" class="form-control-plaintext text-truncate">
+                {% if OrphanServerName %}<span{% if not OrphanServerReady %} class="text-danger"{% endif %}>{{ OrphanServerName }}{% if not OrphanServerReady %}（未填地址，请到「设置 → 媒体服务器」配置）{% endif %}</span>{% else %}<span class="text-danger">未配置，请先到「设置 → 媒体服务器」</span>{% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-8">
+            <div class="mb-3">
+              <label class="form-label">扫描目录 <span class="form-help"
+                  title="留空则自动读取媒体服务器上的媒体库目录；也可手动填写，多个目录用英文逗号分隔。只扫描每个目录下的一级子文件夹，目录本身与散落文件不受影响"
+                  data-bs-toggle="tooltip">?</span></label>
+              <input type="text" id="media_orphan_roots" class="form-control"
+                     value="{{ OrphanDefaultRoots or '' }}"
+                     placeholder="留空自动读取媒体服务器的媒体库目录">
+            </div>
+          </div>
+        </div>
+        <div id="media_orphan_detect_box" class="mb-2 small text-muted"></div>
+        <hr>
+        <div id="media_orphan_result" class="text-muted">请先点击「预览」查看待删除清单。</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
+        <button id="media_orphan_scan_btn" class="btn btn-primary">预览</button>
+        <button id="media_orphan_run_btn" class="btn btn-danger" disabled>执行删除</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal modal-blur fade" id="modal-clean-subs" tabindex="-1" role="dialog" aria-hidden="true"
   data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
@@ -465,6 +513,9 @@
       case "clean_dirs":
         show_clean_dirs_modal();
         break;
+      case "media_orphan":
+        show_media_orphan_modal();
+        break;
       case "clean_subs":
         show_clean_subs_modal();
         break;
@@ -486,6 +537,277 @@
       show_success_modal(`${name} 服务启动成功，正在后台运行`);
     });
   }
+
+  // ---------------- 媒体库残留清理 ----------------
+
+  // 上一次预览命中的数量（用于二次确认提示文案）
+  let media_orphan_last_count = 0;
+  // 打开弹窗时输入框的初始值（用于判断用户是否手动改过，决定能否被自动检测结果覆盖）
+  let media_orphan_initial_roots = "";
+
+  // 打开弹窗：先自动检测媒体服务器并读取其媒体库目录，再让用户确认
+  function show_media_orphan_modal() {
+    media_orphan_reset(true);
+    media_orphan_initial_roots = ($("#media_orphan_roots").val() || "").trim();
+    $('#modal-media-orphan').modal('show');
+    media_orphan_detect();
+  }
+
+  // 读取表单参数（服务器不提供选择：后端固定用「设置 → 媒体服务器」里当前启用的那一台）
+  function media_orphan_params() {
+    return {
+      "roots": $("#media_orphan_roots").val().trim()
+    };
+  }
+
+  // 重置结果区
+  function media_orphan_reset(clearForm) {
+    media_orphan_last_count = 0;
+    $("#media_orphan_result").addClass("text-muted").html("请先点击「预览」查看待删除清单。");
+    $("#media_orphan_detect_box").removeClass("text-danger").addClass("text-muted").html("");
+    $("#media_orphan_run_btn").prop("disabled", true);
+    if (clearForm) {
+      $("#media_orphan_roots").removeClass("is-invalid");
+    }
+  }
+
+  // 校验参数（允许留空：留空时后端会自动读取媒体服务器上的媒体库目录）
+  function media_orphan_validate() {
+    $("#media_orphan_roots").removeClass("is-invalid");
+    return true;
+  }
+
+  // 自动检测媒体服务器并读取其媒体库目录（打开弹窗时触发）
+  function media_orphan_detect() {
+    let box = $("#media_orphan_detect_box");
+    box.removeClass("text-danger").addClass("text-muted")
+      .html('<span class="spinner-border spinner-border-sm me-1"></span>正在检测媒体服务器并读取媒体库目录…');
+    ajax_post("media_orphan_detect", {}, function (ret) {
+      let d = (ret && ret.data) || {};
+      let server = d.server || {};
+      let libs = d.libraries || [];
+      let name = server.name || "未配置";
+      let html = `媒体服务器：<strong${server.configured ? "" : ' class="text-danger"'}>${name}</strong>`;
+      if (server.id) {
+        html += `（${server.id}${server.configured ? " · 当前启用" : " · 未填地址"}）`;
+      }
+      if (libs.length > 0) {
+        html += ` · 读到 <strong>${libs.length}</strong> 个媒体库：<ul class="mb-0 ps-3">`;
+        for (let lib of libs) {
+          let paths = (lib.paths || []).map(function (p) {
+            let ok = (lib.present || []).indexOf(p) >= 0;
+            return `<span class="${ok ? "text-success" : "text-danger"}">${p}`
+              + `${ok ? "" : "（当前环境不可访问）"}</span>`;
+          }).join("、");
+          html += `<li>${lib.name || lib.id}${lib.type ? "[" + lib.type + "]" : ""}：`
+            + `${paths || "未返回目录"}</li>`;
+        }
+        html += "</ul>";
+      }
+      if (d.error) {
+        html += `<div class="text-danger mt-1">${d.error}</div>`;
+      }
+      if ((d.suggested_roots || []).length > 0) {
+        let srcMap = {
+          config: "media_orphan 配置", server: "媒体服务器媒体库目录",
+          media: "「设置 → 媒体」目录"
+        };
+        html += `<div class="mt-1">扫描目录按<strong>${srcMap[d.source] || "自动检测"}</strong>`
+          + `填入，可手动修改。</div>`;
+        let cur = ($("#media_orphan_roots").val() || "").trim();
+        // 用户没手动改过时，才用自动检测的结果覆盖
+        if (!cur || cur === media_orphan_initial_roots) {
+          $("#media_orphan_roots").val(d.suggested_roots.join(","));
+        }
+      } else if (!d.error) {
+        html += '<div class="mt-1">未读到可用目录，请手动填写扫描目录。</div>';
+      }
+      box.html(html);
+    }, true, false, function (xhr, textStatus) {
+      box.removeClass("text-muted").addClass("text-danger")
+        .html("检测媒体服务器失败（" + (textStatus || (xhr && xhr.status)) +
+          "），可在下方手动填写扫描目录。");
+    });
+  }
+
+  // 累加字节数
+  function media_orphan_size(list) {
+    return (list || []).reduce(function (sum, x) {
+      return sum + (Number(x.size_bytes) || 0);
+    }, 0);
+  }
+
+  // 渲染结果（预览 / 执行共用）
+  function media_orphan_render(result, isPreview) {
+    result = result || {};
+    // 兜底：服务端返回异常结构时也不能抛异常，否则弹窗会永久卡死
+    let matched = result.matched || [];
+    let deleted = result.deleted || [];
+    let kept = result.kept || [];
+    let rows = isPreview ? matched : deleted;
+    let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：`
+      + `比对依据 <strong>${result.server || "当前启用的媒体服务器"}</strong>`
+      + `（共 <strong>${result.server_items || 0}</strong> 条条目），`
+      + `扫描 <strong>${result.total_dirs || 0}</strong> 个影片目录，`
+      + (isPreview
+          ? `磁盘上还在、媒体服务器里已查不到的有 <strong>${matched.length}</strong> 个，`
+            + `预计可释放 <strong>${(media_orphan_size(matched) / 1048576).toFixed(2)}</strong> MB`
+          : `已删除残留 <strong>${result.deleted_count || 0}</strong> 个，`
+            + `实际释放 <strong>${(media_orphan_size(deleted) / 1048576).toFixed(2)}</strong> MB`)
+      + `</div>`;
+
+    // 扫描目录及其来源（判断依据是自动读取还是手动填写）
+    let srcMap = {
+      input: "手动填写", config: "media_orphan 配置",
+      server: "媒体服务器媒体库目录", media: "「设置 → 媒体」目录"
+    };
+    if ((result.roots || []).length > 0) {
+      html += `<div class="mb-2 small text-muted">扫描目录`
+        + `${srcMap[result.root_source] ? "（" + srcMap[result.root_source] + "）" : ""}：`
+        + result.roots.map(p => `<code>${p}</code>`).join("、") + `</div>`;
+    }
+
+    if (isPreview) {
+      html += `<div class="mb-2 small text-muted">判定顺序：<strong>路径优先</strong>`
+        + `（容忍容器内外挂载点不同）→ <strong>片名+年份兜底</strong>；`
+        + `任一条命中就认为「媒体服务器里还在」，只有全部落空的才会列在这里。</div>`;
+    }
+
+    if (rows.length > 0) {
+      html += `<div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+        <table class="table table-vcenter card-table table-hover table-striped">
+          <thead><tr><th>${isPreview ? "残留目录（磁盘有 / 媒体服务器无）" : "已删除目录"}</th><th class="w-1">大小</th></tr></thead><tbody>`;
+      for (let item of rows) {
+        html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
+          + `${item.path}</td><td class="text-end">${((Number(item.size_bytes) || 0) / 1048576).toFixed(2)} MB</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+      if (isPreview) {
+        html += `<div class="text-muted mt-2">确认无误后点「执行删除」，删除后不可恢复。</div>`;
+      }
+    } else if (isPreview) {
+      html += `<div class="text-muted">没有发现残留，磁盘与媒体服务器一致。</div>`;
+    } else {
+      html += `<div class="text-muted">本次没有删除任何目录。</div>`;
+    }
+
+    // 判定为「仍在库中」的数量（自动保留）
+    if (isPreview && kept.length > 0) {
+      html += `<div class="text-muted mt-2">另有 <strong>${kept.length}</strong> 个目录经路径或片名比对`
+        + `判定为「仍存在于媒体服务器」，已自动保留。</div>`;
+    }
+    if (result.failed && result.failed.length > 0) {
+      html += `<div class="text-danger mt-2">失败 ${result.failed.length} 个：`;
+      html += result.failed.map(f => `<div class="text-truncate" title="${f.path}">${f.path}（${f.reason}）</div>`).join("");
+      html += `</div>`;
+    }
+    if (result.skipped && result.skipped.length > 0) {
+      html += `<div class="text-muted mt-2">已跳过 ${result.skipped.length} 项`
+        + `（目录不存在 / 权限不足 / 符号链接），详见运行日志。</div>`;
+    }
+    if (!isPreview && deleted.length > 0) {
+      html += `<div class="text-muted mt-2">清单已过期，如需再次清理请点「预览」重新扫描。</div>`;
+    }
+
+    $("#media_orphan_result").removeClass("text-muted").html(html);
+  }
+
+  // 后端响应是否可用
+  function media_orphan_is_ok(ret) {
+    return !!(ret && ret.code === 0 && ret.data && Array.isArray(ret.data.matched));
+  }
+
+  // 网络层失败的可读描述
+  function media_orphan_err_text(xhr, textStatus) {
+    if (xhr && xhr.status) {
+      return "HTTP " + xhr.status + (xhr.statusText ? " " + xhr.statusText : "");
+    }
+    if (textStatus === "timeout") {
+      return "请求超时";
+    }
+    return "未收到服务器响应（网络中断或网关超时）";
+  }
+
+  // 预览
+  function media_orphan_scan(silent) {
+    if (!media_orphan_validate()) {
+      return;
+    }
+    let btn = $("#media_orphan_scan_btn");
+    if (silent) {
+      $("#media_orphan_result").addClass("text-muted").html("正在重新扫描，以确认当前状态…");
+    } else {
+      btn.text("扫描中...").attr("disabled", true);
+      $("#media_orphan_result").addClass("text-muted")
+        .html("正在实时拉取媒体服务器条目并扫描目录，条目多时可能需要 1~3 分钟，请稍候…");
+    }
+    ajax_post("media_orphan_scan", media_orphan_params(), function (ret) {
+      btn.text("预览").removeAttr("disabled");
+      if (!media_orphan_is_ok(ret)) {
+        // code=-1：例如拿不到媒体服务器条目（安全闸门），此时绝不允许执行
+        $("#media_orphan_result").addClass("text-muted").html((ret && ret.msg) || "扫描失败，请重试");
+        $("#media_orphan_run_btn").prop("disabled", true);
+        return;
+      }
+      media_orphan_render(ret.data, true);
+      media_orphan_last_count = ret.data.matched.length;
+      $("#media_orphan_run_btn").prop("disabled", !(ret.data.matched.length > 0));
+    }, true, true, function (xhr, textStatus) {
+      btn.text("预览").removeAttr("disabled");
+      $("#media_orphan_result").addClass("text-muted")
+        .html("扫描失败：" + media_orphan_err_text(xhr, textStatus));
+      $("#media_orphan_run_btn").prop("disabled", true);
+    });
+  }
+
+  // 「执行删除」没拿到结果时的兜底
+  function media_orphan_run_abort(detail) {
+    let btn = $("#media_orphan_run_btn");
+    btn.text("执行删除").removeAttr("disabled");
+    $("#media_orphan_result").removeClass("text-muted").html(
+      `<div class="text-danger">「执行删除」未取得结果，删除可能仍在后台进行。</div>`
+      + `<div class="text-muted mt-1">点「确定」后将自动重新扫描，确认当前状态。</div>`);
+    show_fail_modal(
+      `执行删除未取得结果：${detail}。删除可能仍在后台进行，请稍后重新预览确认。`,
+      function () {
+        media_orphan_scan(true);
+      });
+  }
+
+  // 预览按钮
+  $("#media_orphan_scan_btn").unbind("click").click(function () {
+    media_orphan_scan(false);
+  });
+
+  // 执行删除（二次确认）
+  $("#media_orphan_run_btn").unbind("click").click(function () {
+    if (!media_orphan_validate()) {
+      return;
+    }
+    let params = media_orphan_params();
+    show_confirm_modal(
+      `即将删除 ${media_orphan_last_count} 个「媒体服务器中已不存在」的影片目录，`
+      + `删除后不可恢复，是否确认？`,
+      function () {
+        hide_confirm_modal();
+        let btn = $("#media_orphan_run_btn");
+        btn.text("删除中...").attr("disabled", true);
+        ajax_post("media_orphan_run", params, function (ret) {
+          btn.text("执行删除");
+          if (!media_orphan_is_ok(ret)) {
+            media_orphan_run_abort((ret && ret.msg) || "服务器返回的数据无法识别");
+            return;
+          }
+          media_orphan_render(ret.data, false);
+          show_success_modal((ret.msg || "清理完成")
+            + "；如需再次清理，请点「预览」重新扫描（清单已过期）。");
+          btn.prop("disabled", true);
+        }, true, true, function (xhr, textStatus) {
+          btn.text("执行删除");
+          media_orphan_run_abort(media_orphan_err_text(xhr, textStatus));
+        });
+      });
+  });
 
   // ---------------- 目录清理 ----------------
 
