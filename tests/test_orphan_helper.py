@@ -4,6 +4,8 @@ OrphanHelper（媒体库残留清理服务）单元测试。
 
 覆盖要点：
   - 路径归一化与「尾部路径段」容错比对（容忍容器内外挂载点不同）
+  - ★ 路径映射：媒体服务器报 /vol3/1000/video/... → 本环境 /video/...（map_server_path）
+  - ★ 媒体库目录本身、以及任何「现存条目的上级目录」都不算残留
   - 目录名解析 (片名, 年份)：年份取最后一个 4 位数字（银翼杀手2049 (2017)）
   - 匹配顺序：路径优先 → 片名+年份兜底；任一命中即视为「仍在媒体服务器」
   - 片名命中但年份缺失/不同时的保守保留
@@ -13,6 +15,7 @@ OrphanHelper（媒体库残留清理服务）单元测试。
   - ★ 安全闸门：拿不到媒体服务器条目 / 连接报错时，绝不产生清单
   - 参数归一化：roots 空 → 明确报错；目录不存在 → skipped
   - 默认扫描目录回落「设置 → 媒体」的媒体库目录
+  - 目录浏览：list_dirs / default_browse_path（界面「扫描目录」下拉用）
 
 运行：python -m unittest tests.test_orphan_helper -v
 """
@@ -207,25 +210,95 @@ class OrphanHelperTest(unittest.TestCase):
 
     def test_tail_match_tolerates_different_mount_roots(self):
         """容器内外挂载点不同：/video/... 与 /volume1/video/... 也要能对上"""
-        path_keys, _ = OrphanHelper._build_index(
+        path_keys, _, library_keys = OrphanHelper._build_index(
             [_item(path="/volume1/video/电影/沙丘 (2021)/沙丘.mkv")])
-        keep, why = OrphanHelper._match("/video/电影/沙丘 (2021)", "沙丘 (2021)", path_keys, set())
+        keep, why = OrphanHelper._match("/video/电影/沙丘 (2021)", "沙丘 (2021)",
+                                        path_keys, set(), library_keys)
         self.assertTrue(keep)
-        self.assertEqual(why, "路径匹配")
+        self.assertEqual(why, "条目所在目录")
 
     def test_path_exact_inside_dir_matches(self):
         root = os.path.join(self.tmp, "video", "电影")
         d = self._make_movie(root, "沙丘 (2021)")
-        path_keys, _ = OrphanHelper._build_index(
+        path_keys, _, library_keys = OrphanHelper._build_index(
             [_item(path=os.path.join(d, "movie.mkv"))])
-        keep, why = OrphanHelper._match(d, "沙丘 (2021)", path_keys, set())
+        keep, why = OrphanHelper._match(d, "沙丘 (2021)", path_keys, set(), library_keys)
         self.assertTrue(keep)
-        self.assertEqual(why, "路径匹配")
+        self.assertEqual(why, "条目所在目录")
+
+
+    def test_ancestor_dir_is_never_residue(self):
+        """★ 扫描根比媒体库目录浅一层时，被扫到的其实是媒体库目录 —— 不能判成残留"""
+        base = os.path.join(self.tmp, "video", "01.电影")
+        lib = os.path.join(base, "华语电影")
+        os.makedirs(os.path.join(lib, "某片 (2020)"), exist_ok=True)
+        os.makedirs(os.path.join(base, "外语电影"), exist_ok=True)
+        # 条目在 华语电影/某片 (2020) 下；外语电影 里没有任何现存条目
+        path_keys, _, library_keys = OrphanHelper._build_index(
+            [_item(title="某片", year="2020",
+                   path=os.path.join(lib, "某片 (2020)", "movie.mkv"))])
+        keep, why = OrphanHelper._match(lib, "华语电影", path_keys, set(), library_keys)
+        self.assertTrue(keep, "媒体库目录（现存条目的上级目录）不能算残留")
+        self.assertEqual(why, "条目所在目录")
+        # 真正没有条目的分类目录仍然要被列出来
+        other = os.path.join(base, "外语电影")
+        self.assertFalse(OrphanHelper._match(other, "外语电影", path_keys, set(), library_keys)[0])
+
+    def test_server_library_dir_is_kept_by_library_keys(self):
+        """媒体库目录本身（哪怕条目 path 用的是另一种挂载点）也要保留"""
+        path_keys, _, library_keys = OrphanHelper._build_index(
+            [_item(title="x", year="2020", path="/volume1/video/剧/a.mkv")],
+            libraries=[{"id": "2", "name": "电视剧",
+                        "paths": ["/volume1/video/02.电视剧/国产剧"]}])
+        keep, why = OrphanHelper._match("/video/02.电视剧/国产剧", "国产剧",
+                                        path_keys, set(), library_keys)
+        self.assertTrue(keep)
+        self.assertEqual(why, "媒体库目录")
+
+    def test_scan_keeps_library_dir_when_root_is_its_parent(self):
+        """★ 扫描根选成媒体库目录的上一层时，媒体库目录本身不能被判成残留"""
+        base = os.path.join(self.tmp, "video", "01.电影")
+        lib = os.path.join(base, "华语电影")
+        os.makedirs(os.path.join(lib, "某片 (2020)"), exist_ok=True)
+        other = os.path.join(base, "外语电影")   # 没有任何现存条目的分类目录
+        os.makedirs(other, exist_ok=True)
+        self._install_fake_server(
+            [{"id": "1", "name": "华语电影", "type": "电影", "path": lib}],
+            items=[{"type": "Movie", "title": "某片", "year": "2020",
+                    "path": os.path.join(lib, "某片 (2020)", "movie.mkv")}])
+        _ConfigStub.store = {"media_orphan": {"roots": "", "server": ""},
+                             "media": {"media_server": "ugreen"}}
+        result = self.helper.scan(roots=base, dry_run=True)
+        self.assertIsNone(result["error"])
+        names = [x["name"] for x in result["matched"]]
+        self.assertNotIn("华语电影", names, "媒体库目录（现存条目的上级目录）不能算残留")
+        self.assertIn("外语电影", names, "真正没有现存条目的目录仍要列出来")
+
+    def test_scan_auto_roots_translates_foreign_mount(self):
+        """★ 媒体服务器报 /vol3/1000/video/...，本环境是 <tmp>/video/... → 自动翻译后照常扫描"""
+        vroot = os.path.join(self.tmp, "video")
+        lib = os.path.join(vroot, "01.电影", "华语电影")
+        os.makedirs(os.path.join(lib, "某片 (2020)"), exist_ok=True)
+        self._make_movie(lib, "残留片 (2019)")
+        self._install_fake_server(
+            [{"id": "1", "name": "华语电影", "type": "电影",
+              "path": "/vol3/1000/video/01.电影/华语电影"}],
+            items=[{"type": "Movie", "title": "某片", "year": "2020",
+                    "path": os.path.join(lib, "某片 (2020)", "movie.mkv")}])
+        # 锚点：「设置 → 媒体」里配置的本环境媒体库目录
+        _ConfigStub.store = {"media_orphan": {"roots": "", "server": ""},
+                             "media": {"media_server": "ugreen",
+                                       "movie_path": os.path.join(vroot, "01.电影")}}
+        result = self.helper.scan(roots="", dry_run=True)
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["root_source"], "server")
+        self.assertEqual(result["roots"], [OrphanHelper._norm_path(lib)])
+        self.assertEqual([x["name"] for x in result["matched"]], ["残留片 (2019)"])
 
     # ---------------- 片名 ----------------
 
     def test_name_match_and_year_rules(self):
-        _, name_keys = OrphanHelper._build_index([_item(title="沙丘", year="2021")])
+        _, name_keys, _lib = OrphanHelper._build_index([_item(title="沙丘", year="2021")])
         # 年份一致
         self.assertTrue(OrphanHelper._match("/x/沙丘 (2021)", "沙丘 (2021)", set(), name_keys)[0])
         # 目录没写年份 → 仍按片名命中（保守：宁可保留）
@@ -236,7 +309,7 @@ class OrphanHelperTest(unittest.TestCase):
         self.assertFalse(OrphanHelper._match("/x/流浪地球 (2019)", "流浪地球 (2019)", set(), name_keys)[0])
 
     def test_original_title_also_indexed(self):
-        _, name_keys = OrphanHelper._build_index(
+        _, name_keys, _lib = OrphanHelper._build_index(
             [_item(title="沙丘", original_title="Dune", year="2021")])
         self.assertTrue(OrphanHelper._match("/x/Dune (2021)", "Dune (2021)", set(), name_keys)[0])
 
@@ -374,7 +447,8 @@ class OrphanHelperTest(unittest.TestCase):
         result = self.helper.scan(roots="", dry_run=True)
         self.assertIsNone(result["error"])
         self.assertEqual(result["root_source"], "server")
-        self.assertEqual(result["roots"], [self._norm(root)])
+        # 服务器读到的目录会经 map_server_path 归一成本环境路径（走 _norm_path，正斜杠）
+        self.assertEqual(result["roots"], [OrphanHelper._norm_path(root)])
         self.assertEqual(sorted(x["name"] for x in result["matched"]),
                          ["残留乙 (2021)", "残留甲 (2020)"])
 
@@ -430,7 +504,7 @@ class OrphanHelperTest(unittest.TestCase):
         self.assertEqual(OrphanHelper._client_type_id(_Bare(), "PLEX"), "plex")
 
     def test_get_server_libraries_normalizes_paths_and_checks_access(self):
-        """绿联是逗号分隔字符串、飞牛是列表；并逐个判定当前环境能否访问"""
+        """绿联是逗号分隔字符串、飞牛是列表；并把目录映射成本环境可访问的路径"""
         real = os.path.join(self.tmp, "电影库")
         os.makedirs(real, exist_ok=True)
         missing = os.path.join(self.tmp, "不存在的库")
@@ -445,9 +519,80 @@ class OrphanHelperTest(unittest.TestCase):
         self.assertEqual(name, "绿联影视")
         self.assertEqual(libs[0]["paths"], [self._norm(real), self._norm(missing)])
         self.assertFalse(libs[0]["accessible"], "含不可访问目录时整体不算全可访问")
-        self.assertEqual(libs[0]["present"], [self._norm(real)])
+        self.assertEqual(libs[0]["present"], [OrphanHelper._norm_path(real)])
         self.assertEqual(libs[0]["missing"], [self._norm(missing)])
         self.assertTrue(libs[1]["accessible"])
+        # 逐条映射明细：可访问的原样返回，不可访问的给出原因
+        detail = {d["server"]: d for d in libs[0]["details"]}
+        self.assertTrue(detail[self._norm(real)]["ok"])
+        self.assertIn("直接可访问", detail[self._norm(real)]["reason"])
+        self.assertFalse(detail[self._norm(missing)]["ok"])
+        self.assertEqual(detail[self._norm(missing)]["local"], "")
+
+    def test_map_server_path_translates_foreign_mount_root(self):
+        """★ 媒体服务器报 /vol3/1000/video/...，本环境是 /video/... → 按尾部路径段对齐"""
+        vroot = os.path.join(self.tmp, "video")
+        lib_cn = os.path.join(vroot, "01.电影", "华语电影")
+        lib_en = os.path.join(vroot, "01.电影", "外语电影")
+        os.makedirs(lib_cn, exist_ok=True)
+        os.makedirs(lib_en, exist_ok=True)
+        anchors = {"movie_path": [os.path.join(vroot, "01.电影")],
+                   "tv_path": [], "anime_path": []}
+        local, why = OrphanHelper.map_server_path(
+            "/vol3/1000/video/01.电影/华语电影", anchors)
+        self.assertEqual(local, OrphanHelper._norm_path(lib_cn))
+        self.assertIn("尾部路径段", why)
+        # 锚点只有 /video 这种浅前缀时也能对上
+        anchors_loose = {"movie_path": [self._norm(vroot)],
+                         "tv_path": [], "anime_path": []}
+        local, _why = OrphanHelper.map_server_path(
+            "/vol3/1000/video/01.电影/外语电影", anchors_loose)
+        self.assertEqual(local, OrphanHelper._norm_path(lib_en))
+        # 本环境本来就能访问 → 原样返回
+        local, why = OrphanHelper.map_server_path(OrphanHelper._norm_path(lib_en), anchors)
+        self.assertEqual(local, OrphanHelper._norm_path(lib_en))
+        self.assertIn("直接可访问", why)
+        # 对不上任何锚点 → 映射失败
+        local, _why = OrphanHelper.map_server_path("/vol9/unknown/某处", anchors)
+        self.assertEqual(local, "")
+        self.assertEqual(OrphanHelper.map_server_path("")[0], "")
+
+    def test_default_browse_path_is_common_parent(self):
+        """目录下拉的起始位置 = 建议目录各父级的公共前缀"""
+        self.assertEqual(OrphanHelper.default_browse_path(
+            ["/video/01.电影/华语电影", "/video/02.电视剧/国产剧"]), "/video")
+        self.assertEqual(OrphanHelper.default_browse_path(
+            ["/video/01.电影/华语电影", "/other/x"]), "/")
+        self.assertEqual(OrphanHelper.default_browse_path(["/video"]), "/")
+        _ConfigStub.store = {"media": {"movie_path": "/video/01.电影"}}
+        self.assertEqual(OrphanHelper.default_browse_path([]), "/video")
+
+    def test_list_dirs_lists_subdirectories(self):
+        base = os.path.join(self.tmp, "video")
+        os.makedirs(os.path.join(base, "01.电影", "华语电影"))
+        os.makedirs(os.path.join(base, "02.电视剧"))
+        with open(os.path.join(base, "readme.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        info = OrphanHelper.list_dirs(self._norm(base))
+        self.assertEqual(info["error"], "")
+        self.assertEqual([d["name"] for d in info["dirs"]], ["01.电影", "02.电视剧"])
+        self.assertEqual(info["total"], 2)
+        self.assertFalse(info["truncated"])
+        self.assertEqual(info["parent"], OrphanHelper._norm_path(os.path.dirname(base)))
+        # is_library 标记
+        info2 = OrphanHelper.list_dirs(
+            self._norm(os.path.join(base, "01.电影")),
+            library_dirs=[OrphanHelper._norm_path(os.path.join(base, "01.电影", "华语电影"))])
+        self.assertTrue(info2["dirs"][0]["is_library"])
+
+    def test_list_dirs_missing_and_empty_path(self):
+        info = OrphanHelper.list_dirs(os.path.join(self.tmp, "不存在"))
+        self.assertEqual(info["dirs"], [])
+        self.assertIn("目录不存在", info["error"])
+        # 留空 → 用 default_browse_path 兜底（此处 media 未配置，回落到 /）
+        _ConfigStub.store = {"media": {"movie_path": "/video/01.电影"}}
+        info = OrphanHelper.list_dirs("")
+        self.assertEqual(info["path"], "/video")
 
     def test_get_server_libraries_error_and_empty(self):
         self._install_fake_server([], error="连接被拒绝")
@@ -473,7 +618,8 @@ class OrphanHelperTest(unittest.TestCase):
         self._install_fake_server([{"id": "1", "name": "电影", "type": "电影", "path": lib}])
         _ConfigStub.store = {"media_orphan": {"roots": ""},
                             "media": {"media_server": "ugreen", "movie_path": "/media/电影"}}
-        self.assertEqual(OrphanHelper.resolve_roots(None), ([self._norm(lib)], "server"))
+        # 服务器读到的目录会经 map_server_path → _norm_path 归一（正斜杠）
+        self.assertEqual(OrphanHelper.resolve_roots(None), ([OrphanHelper._norm_path(lib)], "server"))
 
         # 媒体服务器读不到 → 回落「设置 → 媒体」目录
         self._install_fake_server([], error="连不上")
@@ -498,8 +644,8 @@ class OrphanHelperTest(unittest.TestCase):
         self.assertEqual(info["server"]["id"], "ugreen")
         self.assertTrue(info["server"]["configured"])
         self.assertEqual(info["libraries"][0]["name"], "电影")
-        self.assertEqual(info["detected_roots"], [self._norm(lib)])
-        self.assertEqual(info["suggested_roots"], [self._norm(lib)])
+        self.assertEqual(info["detected_roots"], [OrphanHelper._norm_path(lib)])
+        self.assertEqual(info["suggested_roots"], [OrphanHelper._norm_path(lib)])
         self.assertEqual(info["source"], "server")
         self.assertEqual(info["error"], "")
 

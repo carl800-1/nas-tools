@@ -71,8 +71,17 @@
                         img-ratio="50%"
                         img-style="object-fit: cover;"
             ></custom-img>
-          {% else %}
+          {% elif Library.image_list %}
             <custom-plex-library-img img-src-list='{{ Library.image_list }}'></custom-plex-library-img>
+          {% else %}
+            {# v6.10.1：既没有单图、也没有 Plex 专用的多图列表时，不能再落到 Plex 组件
+               —— 它的 canvas 底色写死 #000000，会渲染成一块纯黑方块，看起来像「加载失败」。
+               改用本应用的标准「无图」占位：custom-img 在空 src 时会自动用 no-image.png。
+               ★ 保留 image_list 分支：Plex 只给多图列表，那是它的真实封面，不能丢。 #}
+            <custom-img img-class="w-100"
+                        img-ratio="50%"
+                        img-style="object-fit: cover;"
+            ></custom-img>
           {% endif %}
             <div class="m-2 text-center">
               {{ Library.name }}

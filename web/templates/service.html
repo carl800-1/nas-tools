@@ -272,11 +272,21 @@
           <div class="col-lg-8">
             <div class="mb-3">
               <label class="form-label">扫描目录 <span class="form-help"
-                  title="留空则自动读取媒体服务器上的媒体库目录；也可手动填写，多个目录用英文逗号分隔。只扫描每个目录下的一级子文件夹，目录本身与散落文件不受影响"
+                  title="用下拉框逐层进入并选中所要扫描的目录；只扫描该目录下的一级子文件夹，目录本身与散落文件不受影响。留空则自动读取媒体服务器上的媒体库目录"
                   data-bs-toggle="tooltip">?</span></label>
-              <input type="text" id="media_orphan_roots" class="form-control"
+              <div class="input-group mb-1">
+                <select id="media_orphan_dir_select" class="form-select" disabled
+                        title="逐层选择目录，选中即作为扫描目录">
+                  <option value="">正在读取目录…</option>
+                </select>
+                <button type="button" class="btn btn-outline-secondary" id="media_orphan_dir_up"
+                        title="返回上一级" disabled>上一级</button>
+              </div>
+              <div class="form-hint mb-1" id="media_orphan_browse_hint">当前浏览：/</div>
+              <input type="text" id="media_orphan_roots" class="form-control form-control-sm"
                      value="{{ OrphanDefaultRoots or '' }}"
-                     placeholder="留空自动读取媒体服务器的媒体库目录">
+                     placeholder="已选的扫描目录（留空则自动读取媒体服务器媒体库目录）">
+              <div class="form-hint">也可在输入框里手动填写；多个目录用英文逗号分隔。</div>
             </div>
           </div>
         </div>
@@ -544,11 +554,18 @@
   let media_orphan_last_count = 0;
   // 打开弹窗时输入框的初始值（用于判断用户是否手动改过，决定能否被自动检测结果覆盖）
   let media_orphan_initial_roots = "";
+  // 目录下拉当前浏览到的位置
+  let media_orphan_browse_path = "";
+  // 已知的媒体库目录（来自自动检测），用于在下拉里标记「媒体库」
+  let media_orphan_library_dirs = [];
 
   // 打开弹窗：先自动检测媒体服务器并读取其媒体库目录，再让用户确认
   function show_media_orphan_modal() {
     media_orphan_reset(true);
     media_orphan_initial_roots = ($("#media_orphan_roots").val() || "").trim();
+    media_orphan_library_dirs = [];
+    media_orphan_browse_path = "";
+    media_orphan_render_dir_list("");
     $('#modal-media-orphan').modal('show');
     media_orphan_detect();
   }
@@ -623,12 +640,119 @@
         html += '<div class="mt-1">未读到可用目录，请手动填写扫描目录。</div>';
       }
       box.html(html);
+      // 目录下拉：记住已知的媒体库目录（下拉里会打上「媒体库」标记），
+      // 并从「建议扫描目录的公共父级」开始浏览，用户可逐层进入后选中
+      media_orphan_library_dirs = [];
+      for (let lib of libs) {
+        for (let p of (lib.present || [])) {
+          if (media_orphan_library_dirs.indexOf(p) < 0) {
+            media_orphan_library_dirs.push(p);
+          }
+        }
+      }
+      media_orphan_render_dir_list(d.browse_base || (d.suggested_roots || [])[0] || "");
     }, true, false, function (xhr, textStatus) {
       box.removeClass("text-muted").addClass("text-danger")
         .html("检测媒体服务器失败（" + (textStatus || (xhr && xhr.status)) +
           "），可在下方手动填写扫描目录。");
+      // 服务器连不上也要能用下拉选目录（list_dirs 只读本机文件系统，不依赖媒体服务器）
+      media_orphan_render_dir_list("");
     });
   }
+
+  // 渲染「扫描目录」下拉：列出当前浏览目录下的一级子目录（含「上一级」）
+  // path 留空时由后端用「建议扫描目录的公共父级」兜底。
+  // 用请求序号丢弃过期响应：打开弹窗时会连着触发两次（初始 + 自动检测后），
+  // 若不丢弃，先发的慢响应可能把后发的快响应覆盖掉。
+  let media_orphan_dir_req = 0;
+  function media_orphan_render_dir_list(path) {
+    media_orphan_dir_req += 1;
+    let req = media_orphan_dir_req;
+    media_orphan_browse_path = (path || "").trim();
+    let sel = $("#media_orphan_dir_select");
+    let up = $("#media_orphan_dir_up");
+    sel.prop("disabled", true);
+    up.prop("disabled", true);
+    $("#media_orphan_browse_hint").text("当前浏览：" + (media_orphan_browse_path || "/"));
+    ajax_post("media_orphan_list_dirs", {
+      "path": media_orphan_browse_path,
+      "library_dirs": media_orphan_library_dirs.join(",")
+    }, function (ret) {
+      if (req !== media_orphan_dir_req) {
+        return;   // 已有更新的请求，丢弃这次响应
+      }
+      let d = (ret && ret.data) || {};
+      media_orphan_browse_path = d.path || media_orphan_browse_path;
+      let cur = media_orphan_browse_path || "/";
+      let dirs = d.dirs || [];
+      let hint = "当前浏览：" + cur;
+      if (d.error) {
+        hint += "（" + d.error + "）";
+      } else if (dirs.length === 0) {
+        hint += "（此目录下没有子目录）";
+      }
+      $("#media_orphan_browse_hint").text(hint);
+      sel.empty();
+      // 首项仅用于提示当前位置，不可选
+      sel.append($("<option>").val("__here__").prop("disabled", true)
+        .text("当前目录：" + cur));
+      if (d.parent) {
+        sel.append($("<option>").val("__up__").text("⬆ 上一级（" + d.parent + "）"));
+      }
+      for (let item of dirs) {
+        let label = "📁 " + item.name
+          + (item.is_library ? "（媒体库）" : "")
+          + (item.is_link ? "（符号链接，不会被扫描）" : "");
+        sel.append($("<option>").val(item.path).text(label));
+      }
+      sel.prop("disabled", false);
+      up.prop("disabled", !d.parent);
+    }, true, false, function () {
+      if (req !== media_orphan_dir_req) {
+        return;
+      }
+      sel.prop("disabled", true).empty()
+        .append($("<option>").val("").text("目录读取失败"));
+      $("#media_orphan_browse_hint").text("无法读取目录列表，可直接在下方输入框手动填写。");
+      up.prop("disabled", true);
+    });
+  }
+
+  // 去掉路径最后一段（本环境统一正斜杠）
+  function media_orphan_dir_parent(path) {
+    let p = (path || "").replace(/[\\/]+$/, "");
+    let i = p.lastIndexOf("/");
+    if (i <= 0) {
+      return "/";
+    }
+    return p.slice(0, i);
+  }
+
+  // 选中某个目录：写入「扫描目录」输入框，并进入该目录（可继续往下选）
+  function media_orphan_choose_dir(path) {
+    if (!path) {
+      return;
+    }
+    $("#media_orphan_roots").val(path).removeClass("is-invalid");
+    media_orphan_render_dir_list(path);
+  }
+
+  // 下拉选择：__up__ 只上翻一级，其余选项即选中该目录
+  $("#media_orphan_dir_select").unbind("change").change(function () {
+    let val = ($(this).val() || "");
+    if (val === "__up__") {
+      media_orphan_choose_dir(media_orphan_dir_parent(media_orphan_browse_path));
+      return;
+    }
+    if (val && val !== "__here__") {
+      media_orphan_choose_dir(val);
+    }
+  });
+
+  // 「上一级」按钮
+  $("#media_orphan_dir_up").unbind("click").click(function () {
+    media_orphan_choose_dir(media_orphan_dir_parent(media_orphan_browse_path));
+  });
 
   // 累加字节数
   function media_orphan_size(list) {

@@ -279,6 +279,7 @@ class WebAction:
             "clean_dirs_scan": self.__clean_dirs_scan,
             "clean_dirs_run": self.__clean_dirs_run,
             "media_orphan_detect": self.__media_orphan_detect,
+            "media_orphan_list_dirs": self.__media_orphan_list_dirs,
             "media_orphan_scan": self.__media_orphan_scan,
             "media_orphan_run": self.__media_orphan_run,
             "clean_subs_scan": self.__clean_subs_scan,
@@ -2955,6 +2956,26 @@ class WebAction:
         """
         server_type = OrphanHelper.resolve_server(data.get("server_type")).get("id") or ""
         return {"code": 0, "data": OrphanHelper.detect(server_type)}
+
+    @staticmethod
+    def __media_orphan_list_dirs(data):
+        """
+        媒体库残留清理：列出某目录下的**一级子目录**，供界面「扫描目录」下拉逐层选择。
+
+        只读本机文件系统，不连媒体服务器 —— 因此服务器连不上时依然可以手动选目录。
+        `library_dirs` 由界面把自动检测到的媒体库目录回传，用于在下拉里标记「媒体库」；
+        未回传时退化为「设置 → 媒体」里的目录（同样不发网络请求）。
+        :param data: {path, library_dirs}
+        """
+        library_dirs = OrphanHelper.normalize_roots(data.get("library_dirs"))
+        if not library_dirs:
+            media = OrphanHelper.get_media_roots()
+            for key in ("movie_path", "tv_path", "anime_path"):
+                for path in media.get(key) or []:
+                    if path not in library_dirs:
+                        library_dirs.append(path)
+        return {"code": 0,
+                "data": OrphanHelper.list_dirs(data.get("path"), library_dirs)}
 
     @staticmethod
     def __media_orphan_scan(data):

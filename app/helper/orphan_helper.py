@@ -14,9 +14,15 @@
      根目录本身与根目录下散落的文件不受影响；
   3. 匹配顺序 **路径优先 → 片名兜底**，任一命中即视为「媒体服务器里还在」——
      宁可漏判为「还在」，绝不误判为「残留」；
-  4. 容器内外挂载点不一致时，用「尾部路径段」容错比对；
-  5. 符号链接一律跳过；单条异常只记录、不中断整体流程；
-  6. 预览（dry_run）与执行分离，执行由前端二次确认。
+  4. 容器内外挂载点不一致时，用「尾部路径段」容错比对；媒体服务器报出的
+     媒体库目录还要经 map_server_path() **翻译成本环境可访问的路径**
+     （`/vol3/1000/video/...` → `/video/...`），否则会一律显示「不可访问」，
+     进而拿着错误的默认目录去扫（整层目录被误判成残留）；
+  5. **媒体库目录本身、以及任何「现存条目的上级目录」都不算残留** ——
+     扫描根若比媒体库目录浅一层（例如选到了分类层的上一层），
+     被扫到的其实是媒体库目录，必须保留；
+  6. 符号链接一律跳过；单条异常只记录、不中断整体流程；
+  7. 预览（dry_run）与执行分离，执行由前端二次确认。
 """
 
 import os
@@ -34,6 +40,9 @@ BYTES_PER_MB = 1024 * 1024
 _MAX_TAIL_SEG = 4
 # 至少要比较 2 段路径，避免单段（仅片名）过松误命中
 _MIN_TAIL_SEG = 2
+
+# 目录下拉：单次最多返回的子目录数（避免超大目录把浏览器拖死）
+_MAX_LIST_DIRS = 500
 
 # 目录名里的年份：取最后一个 4 位年份（避免「银翼杀手2049 (2017)」把 2049 当年份）
 _YEAR_RE = re.compile(r'(19\d{2}|20\d{2})')
@@ -247,16 +256,72 @@ class OrphanHelper:
         return server, sid, name, ""
 
     @classmethod
+    def map_server_path(cls, path, anchors=None):
+        """
+        把**媒体服务器那一侧**的目录翻译成本环境（nas-tools 容器内）可访问的路径。
+
+        容器内外挂载点经常不同：媒体服务器报 `/vol3/1000/video/01.电影/华语电影`，
+        而 nas-tools 里同一目录是 `/video/01.电影/华语电影`。直接 os.path.isdir 判定
+        会一律「不可访问」。做法是用「设置 → 媒体」里已配置的媒体库目录当**锚点**，
+        在媒体服务器路径里找锚点的**尾部路径段**，命中后把剩余段拼到锚点之后，
+        并要求拼出来的路径在本环境真实存在；命中锚点尾段最长的候选优先（越具体越可信）。
+
+        :param path: 媒体服务器报出的路径
+        :param anchors: 锚点（get_media_roots() 的返回值）；None 表示现取
+        :return: (本地路径, 说明)；本地路径为 "" 表示无法映射
+        """
+        norm = cls._norm_path(path)
+        if not norm:
+            return "", "路径为空"
+        if os.path.isdir(norm):
+            return norm, "本环境直接可访问"
+
+        anchors = anchors if isinstance(anchors, dict) else cls.get_media_roots()
+        anchor_list = []
+        for key in ("movie_path", "tv_path", "anime_path"):
+            for item in anchors.get(key) or []:
+                if item not in anchor_list:
+                    anchor_list.append(item)
+
+        segs = [s for s in norm.split("/") if s]
+        best_len = 0
+        best_path = ""
+        for anchor in anchor_list:
+            a_norm = cls._norm_path(anchor)
+            a_segs = [s for s in a_norm.split("/") if s]
+            for n in range(len(a_segs), 0, -1):
+                # 只想找比已有结果更长的匹配
+                if n > len(segs) or n <= best_len:
+                    continue
+                tail = a_segs[-n:]
+                for i in range(0, len(segs) - n + 1):
+                    if segs[i:i + n] != tail:
+                        continue
+                    rest = segs[i + n:]
+                    cand = cls._norm_path(
+                        a_norm + ("/" + "/".join(rest) if rest else ""))
+                    if cand and os.path.isdir(cand):
+                        best_len, best_path = n, cand
+                        break
+        if best_path:
+            return best_path, "按尾部路径段对齐到本环境"
+        return "", "无法映射到本环境可访问的路径"
+
+    @classmethod
     def get_server_libraries(cls, server_type=None):
         """
-        读取媒体服务器上的媒体库列表（名称 / 类型 / 目录）。
+        读取媒体服务器上的媒体库列表（名称 / 类型 / 目录），并把目录**翻译成本环境
+        可访问的路径**。
 
         各家客户端返回的 `path` 形态不一致（绿联是逗号分隔字符串、飞牛是列表），
-        统一走 normalize_roots 归一；再逐个判定「当前环境（nas-tools 容器内）能否
-        真的访问该目录」—— 容器内外挂载点不同时，这一步能把不可用的目录挑出来，
-        避免拿着扫不到的路径去扫、却显示「0 残留」。
+        统一走 normalize_roots 归一；再用 map_server_path() 把「媒体服务器那边」的
+        路径翻成本环境可访问的路径 —— 不翻的话容器内外挂载点不同时会一律被判成
+        「不可访问」，进而拿不到正确的默认扫描目录。
 
         :return: (libraries, server_name, error)
+            每个库：id / name / type / paths（服务器原样）/ details（逐条映射明细）/
+                    present（本环境可用的路径）/ missing（映射不到的原始路径）/
+                    accessible
         """
         server, _sid, name, err = cls._resolve_client(server_type)
         if err:
@@ -269,20 +334,33 @@ class OrphanHelper:
         if not raw_list:
             return [], name, "媒体服务器没有返回任何媒体库（可能未连接或未配置）"
 
+        anchors = cls.get_media_roots()
         libraries = []
         for lib in raw_list:
             if not isinstance(lib, dict):
                 continue
             paths = cls.normalize_roots(lib.get("path"))
-            present = [p for p in paths if os.path.isdir(p)]
+            details = []
+            present = []
+            missing = []
+            for path in paths:
+                local, why = cls.map_server_path(path, anchors)
+                details.append({"server": path, "local": local,
+                                "ok": bool(local), "reason": why})
+                if local:
+                    if local not in present:
+                        present.append(local)
+                else:
+                    missing.append(path)
             libraries.append({
                 "id": str(lib.get("id") or ""),
                 "name": str(lib.get("name") or lib.get("id") or ""),
                 "type": str(lib.get("type") or ""),
                 "paths": paths,
+                "details": details,
                 "present": present,
-                "missing": [p for p in paths if p not in present],
-                "accessible": bool(paths) and len(present) == len(paths),
+                "missing": missing,
+                "accessible": bool(paths) and not missing,
             })
         return libraries, name, ""
 
@@ -335,11 +413,13 @@ class OrphanHelper:
 
         :return: dict
             server          实际使用的媒体服务器 {id, name, configured}
-            libraries       媒体库列表（含目录、是否可访问）
+            libraries       媒体库列表（含目录、映射后的本地路径、是否可访问）
             config_roots    media_orphan.roots（显式配置）
             media_roots     「设置 → 媒体」里的目录
-            detected_roots  从媒体服务器读到的、当前环境可访问的目录
-            suggested_roots 建议填进「扫描目录」的值（按上面的优先级）
+            detected_roots  从媒体服务器读到并成功映射到本环境的目录
+            unmapped_roots  读到了但映射不到本环境的原始目录
+            suggested_roots 建议作为「扫描目录」的值（按上面的优先级）
+            browse_base     目录下拉的起始位置（建议目录各父级的公共前缀）
             source          建议值的来源：config / server / media / ''
             error           读媒体库时的错误（为空表示检测成功）
         """
@@ -358,10 +438,14 @@ class OrphanHelper:
                     media_roots.append(path)
 
         detected = []
+        unmapped = []
         for lib in libraries:
             for path in lib.get("present") or []:
                 if path not in detected:
                     detected.append(path)
+            for path in lib.get("missing") or []:
+                if path not in unmapped:
+                    unmapped.append(path)
         if config_roots:
             suggested, source = config_roots, "config"
         elif detected:
@@ -375,10 +459,98 @@ class OrphanHelper:
             "config_roots": config_roots,
             "media_roots": media_roots,
             "detected_roots": detected,
+            "unmapped_roots": unmapped,
             "suggested_roots": suggested,
+            "browse_base": cls.default_browse_path(suggested or media_roots),
             "source": source,
             "error": err,
         }
+
+    # ------------------------------------------------------- 目录浏览
+
+    @classmethod
+    def default_browse_path(cls, roots=None):
+        """
+        「扫描目录」下拉的起始位置：给定目录**各父级的公共前缀**。
+
+        例：建议目录为 /video/01.电影/华语电影 等 6 个 ⇒ 起始位置 /video，
+        这样下拉第一屏就能看到 01.电影 / 02.电视剧，逐层进到媒体库目录。
+        """
+        root_list = cls.normalize_roots(roots)
+        if not root_list:
+            media = cls.get_media_roots()
+            for key in ("movie_path", "tv_path", "anime_path"):
+                for path in media.get(key) or []:
+                    if path not in root_list:
+                        root_list.append(path)
+        segs_list = []
+        for root in root_list:
+            segs = [s for s in root.split("/") if s]
+            segs_list.append(segs[:-1])      # 各父级
+        if not segs_list:
+            return "/"
+        common = []
+        for i in range(min(len(s) for s in segs_list)):
+            if len({s[i] for s in segs_list}) == 1:
+                common.append(segs_list[0][i])
+            else:
+                break
+        return "/" + "/".join(common) if common else "/"
+
+    @classmethod
+    def list_dirs(cls, path="", library_dirs=None):
+        """
+        列出某个目录下的**一级子目录**，供界面「扫描目录」下拉选择。
+
+        path 留空时从 default_browse_path() 开始（建议扫描目录的公共父级）。
+
+        :param path: 要浏览的目录
+        :param library_dirs: 已知的媒体库目录，用于把选项标记为「媒体库」
+        :return: {"path","parent","dirs","total","truncated","error"}
+        """
+        start = cls._norm_path(path)
+        if not start:
+            start = cls.default_browse_path()
+        result = {"path": start, "parent": "", "dirs": [],
+                  "total": 0, "truncated": False, "error": ""}
+        if not os.path.isdir(start):
+            result["error"] = "目录不存在或本环境不可访问：%s" % start
+            return result
+        try:
+            names = sorted(os.listdir(start))
+        except PermissionError as err:
+            result["error"] = "权限不足：%s" % err
+            return result
+        except OSError as err:
+            result["error"] = "读取失败：%s" % err
+            return result
+
+        # 已归一化后再比对：library_dirs 可能来自 Windows 形态的配置（反斜杠），
+        # 而这里列出的 path 一律经 _norm_path 转成正斜杠
+        known = {cls._norm_path(p) for p in cls.normalize_roots(library_dirs)}
+        dirs = []
+        for name in names:
+            full = os.path.join(start, name)
+            try:
+                if not os.path.isdir(full):
+                    continue
+            except OSError:
+                continue
+            norm = cls._norm_path(full)
+            dirs.append({
+                "name": name,
+                "path": norm,
+                "is_library": norm in known,
+                "is_link": os.path.islink(full),
+            })
+        result["total"] = len(dirs)
+        if len(dirs) > _MAX_LIST_DIRS:
+            dirs = dirs[:_MAX_LIST_DIRS]
+            result["truncated"] = True
+        result["dirs"] = dirs
+        if start != "/":
+            result["parent"] = cls._norm_path(os.path.dirname(start))
+        return result
 
     # ------------------------------------------------------- 路径 / 片名
 
@@ -428,24 +600,37 @@ class OrphanHelper:
     # ----------------------------------------------------------- 索引
 
     @classmethod
-    def _build_index(cls, items):
+    def _build_index(cls, items, libraries=None):
         """
         建立索引：
-          path_keys —— 路径「尾部段签名」集合（含条目自身路径与其父目录）；
-          name_keys —— (归一化片名, 年份) 与 (归一化片名, "") 集合。
+          path_keys    —— 「条目路径」的尾部段签名集合：条目自身、其父目录（条目 path
+                          可能是具体文件 xxx.mkv），以及**所有上级目录**；
+          name_keys    —— (归一化片名, 年份) 与 (归一化片名, "") 集合；
+          library_keys —— 媒体服务器媒体库目录的尾部段签名集合。
+
+        ★ 为什么连**所有上级目录**一起进索引：扫描根可能比媒体库目录浅一层
+          （媒体库目录是 `…/分类/华语电影`，用户却选了 `…/分类`），此时被扫到的
+          「一级子文件夹」其实就是媒体库目录本身，条目都在它下面 —— 若只索引条目
+          自身的路径，这些目录会被整层误判成残留。把上级目录一并索引后，任何
+          「现存条目的上级目录」都会判为「仍在库中」。
         """
         path_keys = set()
         name_keys = set()
+        library_keys = set()
+        for lib in libraries or []:
+            if not isinstance(lib, dict):
+                continue
+            for path in cls.normalize_roots(lib.get("paths")):
+                library_keys |= cls._tail_keys(path)
         for item in items or []:
             if not isinstance(item, dict):
                 continue
             raw_path = item.get("path") or ""
             if raw_path:
                 path = cls._norm_path(raw_path)
-                path_keys |= cls._tail_keys(path)
-                # 条目 path 可能是具体文件（xxx.mkv），其父目录才是影片目录
-                if "/" in path:
-                    path_keys |= cls._tail_keys(path.rsplit("/", 1)[0])
+                segs = [s for s in path.split("/") if s]
+                for i in range(len(segs), 0, -1):
+                    path_keys |= cls._tail_keys("/" + "/".join(segs[:i]))
             for title in (item.get("title"), item.get("original_title")):
                 norm_title = cls._norm_title(title)
                 if not norm_title:
@@ -453,16 +638,19 @@ class OrphanHelper:
                 year = str(item.get("year") or "")
                 name_keys.add((norm_title, year))
                 name_keys.add((norm_title, ""))
-        return path_keys, name_keys
+        return path_keys, name_keys, library_keys
 
     @classmethod
-    def _match(cls, dir_path, dir_name, path_keys, name_keys):
+    def _match(cls, dir_path, dir_name, path_keys, name_keys, library_keys=None):
         """
         判定目录是否仍存在于媒体服务器。
         :return: (是否保留, 命中依据)
         """
-        if cls._tail_keys(dir_path) & path_keys:
-            return True, "路径匹配"
+        keys = cls._tail_keys(dir_path)
+        if library_keys and keys & library_keys:
+            return True, "媒体库目录"
+        if keys & path_keys:
+            return True, "条目所在目录"
         title, year = cls.split_title_year(dir_name)
         norm_title = cls._norm_title(title)
         if norm_title and ((norm_title, year) in name_keys or (norm_title, "") in name_keys):
@@ -534,6 +722,7 @@ class OrphanHelper:
             "root_source": "",
             "server": "",
             "server_items": 0,
+            "libraries": 0,
             "total_dirs": 0,
             "matched": [],
             "kept": [],
@@ -550,8 +739,8 @@ class OrphanHelper:
         result["roots"] = root_list
         result["root_source"] = root_source
         if not root_list:
-            result["error"] = ("未能确定扫描目录：媒体服务器上没有读到可访问的媒体库目录，"
-                               "「设置 → 媒体」也未配置 —— 请在窗口里手动填写要扫描的目录")
+            result["error"] = ("未能确定扫描目录：媒体服务器上没有读到可映射到本环境的媒体库目录，"
+                               "「设置 → 媒体」也未配置 —— 请在窗口的「扫描目录」里选择要扫描的目录")
             return result
 
         items, server_name, err = self.collect_server_items(server_type)
@@ -566,9 +755,12 @@ class OrphanHelper:
             return result
 
         result["server_items"] = len(items)
-        path_keys, name_keys = self._build_index(items)
+        # 媒体库目录本身也要参与判定（扫描根比媒体库目录浅时，一级子目录就是媒体库目录）
+        libraries, _lib_name, _lib_err = self.get_server_libraries(server_type)
+        result["libraries"] = len(libraries)
+        path_keys, name_keys, library_keys = self._build_index(items, libraries)
         for root in root_list:
-            self._scan_root(root, path_keys, name_keys, result)
+            self._scan_root(root, path_keys, name_keys, library_keys, result)
 
         for item in result["matched"]:
             item["reason"] = "媒体服务器中已不存在"
@@ -578,7 +770,7 @@ class OrphanHelper:
             return result
         return self._delete(result)
 
-    def _scan_root(self, root, path_keys, name_keys, result):
+    def _scan_root(self, root, path_keys, name_keys, library_keys, result):
         """扫描单个根目录下的一级子文件夹"""
         if not os.path.exists(root):
             result["skipped"].append({"path": root, "reason": "目录不存在"})
@@ -608,7 +800,7 @@ class OrphanHelper:
                 result["skipped"].append({"path": sub_path, "reason": "状态检查失败：%s" % err})
                 continue
             result["total_dirs"] += 1
-            keep, why = self._match(sub_path, name, path_keys, name_keys)
+            keep, why = self._match(sub_path, name, path_keys, name_keys, library_keys)
             if keep:
                 result["kept"].append({"path": sub_path, "name": name, "reason": why})
             else:

@@ -1103,20 +1103,50 @@ class UgreenClient(_IMediaClient):
                     paths = mapping.setdefault(str(lib_id), [])
                     if str(lib_path) not in paths:
                         paths.append(str(lib_path))
-                # v6.3.7：folder.cover 是本地的库封面路径，用于 media_list()
+                # v6.3.7：folder 自带的封面字段是**本地**路径，用于 media_list()
                 # 的 poster_paths 全是远程地址（会 403）时兜底。
-                cover = folder.get("cover")
-                if cover:
-                    lib_cover_arr = covers.setdefault(str(lib_id), [])
-                    if str(cover) not in lib_cover_arr:
-                        lib_cover_arr.append(str(cover))
+                # v6.10.1：原来只取 folder["cover"]，真机上有库这一项为空 ⇒ 卡片黑图。
+                # 同一条 folder 还带 covers[]（多条）与 backdrop_path，全部收下当候选。
+                self._push_cover(covers, lib_id, folder.get("cover"))
+                for extra in (folder.get("covers") or []):
+                    self._push_cover(covers, lib_id, extra)
+                self._push_cover(covers, lib_id, folder.get("backdrop_path"))
+            # v6.10.1：同一次请求的 video_arr（库根目录下的条目）也常带本地海报，
+            # 按 media_lib_set_id 分桶收进候选 —— 零额外请求，专门救「库自身
+            # 封面全是云端地址」的那些库。
+            for video in (data.get("video_arr") or []):
+                if not isinstance(video, dict):
+                    continue
+                lib_id = video.get("media_lib_set_id")
+                if lib_id is None:
+                    continue
+                info = self._flatten_item(video)
+                for key in ("poster_path", "poster", "cover"):
+                    self._push_cover(covers, lib_id, info.get(key))
             log.info(f"【{self.client_name}】媒体库根路径映射：{mapping}")
+            log.info(f"【{self.client_name}】媒体库封面候选："
+                     f"{ {k: len(v) for k, v in covers.items()} }")
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取媒体库根路径出错：" + str(e))
         self._lib_paths = mapping
         self._lib_covers = covers
         return mapping
+
+    @staticmethod
+    def _push_cover(covers, lib_id, value):
+        """
+        v6.10.1：把一个候选封面路径并入 `covers[lib_id]`（去空、去重、只留本地路径）。
+
+        远程地址（`http(s)://`，即 scraper.ugnas.com 那批带 auth_key 的云端海报）
+        一律**不收**：它们签名有时效，实测已过期返回 403，收进来只会白占位。
+        """
+        value = str(value or "").strip()
+        if not value or value.startswith("http"):
+            return
+        arr = covers.setdefault(str(lib_id), [])
+        if value not in arr:
+            arr.append(value)
 
     def _image_url_by_path(self, path, inner=True):
         """
@@ -1148,11 +1178,15 @@ class UgreenClient(_IMediaClient):
         取值优先级（都是实测过的真实字段）：
           1. custom_cover（用户自定义封面）
           2. media_list() 的 poster_paths —— 第一个**本地**路径
-          3. poster_wall_get_folder() 的 folder.cover（同一次请求顺带取到）
-          4. media_list() 的 backdrop_paths —— 第一个**本地**路径
+          3. poster_wall_get_folder() 的 folder.cover / folder.covers / folder.backdrop_path
+             （同一次请求顺带取到，见 `_load_library_paths()`）
+          4. **该库任一已缓存条目的本地海报**（`_lib_item_cover()`）
+          5. media_list() 的 backdrop_paths —— 第一个**本地**路径
         ⚠️ 远程地址（http(s):// 开头，即 scraper.ugnas.com 那批）一律跳过：
            它们带 auth_key 有时效，实测已过期返回 403 ⇒ 用不了。
         ⚠️ 必须先调过 _load_library_paths()（get_libraries 里已保证）。
+        ⚠️ 全部落空时**返回空串**：由模板决定画什么。**不要**在这里编造路径，
+           否则 `<img>` 会请求一个不存在的地址（浏览器画不出图，白折腾一趟）。
         """
         lib_id = str(lib.get("media_lib_set_id") or lib.get("id", ""))
         candidates = []
@@ -1166,6 +1200,33 @@ class UgreenClient(_IMediaClient):
             one = str(one or "").strip()
             if one and not one.startswith("http"):
                 return one
+        # v6.10.1：最后再试「该库某条已缓存条目的本地海报」—— 真机上有库的
+        # custom_cover / poster_paths / folder 封面**全是云端地址或为空**，
+        # 但条目自己的 poster_path 是本地文件，用它兜底。
+        return self._lib_item_cover(lib_id)
+
+    def _lib_item_cover(self, lib_id):
+        """
+        v6.10.1：取「该库第一条带**本地**海报的已缓存条目」的海报路径。
+
+        ⚠️ 只在条目列表**已经在内存里**时命中（`_all_videos`，由「媒体库同步」
+        或功能查询填充）。这里**绝不**主动触发全量拉取 —— 否则每次打开首页
+        都会多跑几十个请求，而首页刷新是高频操作。
+        ⚠️ 只认本地路径，云端地址（带 auth_key、会过期 403）一样不能用。
+        """
+        videos = getattr(self, "_all_videos", None)
+        if not videos or not lib_id:
+            return ""
+        for video in videos:
+            if not isinstance(video, dict):
+                continue
+            if str(video.get("media_lib_set_id")) != str(lib_id):
+                continue
+            info = self._flatten_item(video)
+            for key in ("poster_path", "poster", "cover"):
+                one = str(info.get(key) or "").strip()
+                if one and not one.startswith("http"):
+                    return one
         return ""
 
     # ------------------- v6.3.6：剧集定位与集号解析 -------------------
