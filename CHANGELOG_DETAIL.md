@@ -3,6 +3,75 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.10.2 — 「扫描目录」改回目录树控件 + 去掉服务器行 + 清理旧下拉遗留
+
+## 一、起因（用户反馈）
+
+1. 「不要这样，像这样」+「目录清理 → 根目录」的截图 —— 上一版的「扫描目录」做成了
+   原生 `<select>` + 「上一级」按钮，用户要的是**和「目录清理」根目录一模一样的目录树控件**。
+2. 「媒体服务器其实也可以去掉，因为你就是用的现在使用的，只用后台判断就可了」。
+3. 「下面用小字写一下，当前提什么服务器，有那几个媒体库，就可以了，不需要当前环境不可访问」。
+
+## 二、改法
+
+| 反馈 | 改法 |
+|---|---|
+| 扫描目录要目录树 | `#media_orphan_roots` 加 `class="filetree-folders-only"`，复用 `functions.js` 里既有的 `init_filetree_element()` 绑定 → 点击输入框弹出目录树（`openFileBrowser`），只选文件夹；删掉 select / 「上一级」/ 浏览位置提示与其 JS |
+| 去掉服务器行 | 模板删掉 `媒体服务器` 那一列（含 `#media_orphan_server_name`）；`web/main.py` 不再传 `OrphanServerName` / `OrphanServerReady`。后端 `resolve_server()` 仍然照旧判定「当前启用」的那一台 |
+| 小字只写服务器 + 媒体库 | `media_orphan_detect()` 的展示改为一行：`当前媒体服务器：X（当前启用）· 媒体库（N个）：A、B`；**去掉 `present/missing` 的绿/红着色与「（当前环境不可访问）」文案**，也不再 `<ul>` 罗列各项目录路径 |
+| 清死代码 | `OrphanHelper.list_dirs()` / `default_browse_path()` / `detect()` 的 `browse_base`、`_MAX_LIST_DIRS`、`web/action.py` 的 `__media_orphan_list_dirs` 入口、`web/apiv1.py` 的 `/media_orphan/list_dirs` 路由，以及前端 `media_orphan_render_dir_list/choose_dir/dir_parent`、`media_orphan_browse_path/library_dirs/dir_req` 全部删除 |
+
+## 三、改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/helper/orphan_helper.py` | 删 `list_dirs()` / `default_browse_path()` / `_MAX_LIST_DIRS` / `detect()` 的 `browse_base`（−91 行） |
+| `tests/test_orphan_helper.py` | 删 3 个只测旧下拉的用例（43 → **40**） |
+| `web/action.py` | 删 `media_orphan_list_dirs` 入口与实现（−21 行） |
+| `web/apiv1.py` | 删 `/media_orphan/list_dirs` 路由（−18 行） |
+| `web/main.py` | 不再传 `OrphanServerName` / `OrphanServerReady`（−5 行） |
+| `web/templates/service.html` | 「扫描目录」换回目录树输入框、删服务器行、检测区小字重写、清掉下拉 JS（−189 行） |
+
+合计 6 文件 `+29/−334`。
+
+## 四、关键实现
+
+- **为什么直接复用 `filetree-folders-only`**：`web/static/js/functions.js` 的
+  `init_filetree_element()` 在每次片段注入后给所有 `.filetree-folders-only` 绑
+  `onclick="openFileBrowser(this,$(this).val(),'',true,false)"`；「目录清理 → 根目录」
+  与「字幕清理 → 根目录」走的就是这条路。站点根目录切换（系统 / 媒体 / 同步 / 下载）由
+  `openFileBrowser` 的 toolbox 提供，无需前端自写任何交互。
+- **多目录仍然支持**：目录树点选写入的是单个路径；需要多个目录时直接手填逗号分隔，
+  自动检测也仍会一次填入多个。提示语里保留了说明。
+- **目录树只选文件夹**：`on_folders=true, on_files=false`（与「目录清理」一致），
+  不会误选到文件。
+- **小字去掉可访问性标注**：`get_server_libraries()` 仍然算 `present` / `missing`
+  （`detect()` 要用它得出 `detected_roots` / `unmapped_roots`），**只是界面不再展示**。
+
+## 五、验证
+
+- 单测 `tests/test_orphan_helper.py` **40/40**。
+- 接线 `_verify_v7_orphan_wire.py` **86/86**（A41 改为反向断言「旧下拉方法已删除」；
+  删掉 B11b~B11f；新增 A17c/A17h~A17l 反向断言：无 `#media_orphan_server_name`、
+  弹窗内无 `<select>`、无 `当前环境不可访问`）。
+- 无头渲染 + 交互 `shot_v7.js` **52/52**：【1d】现场调 `functions.js` 里**真实**的
+  `init_filetree_element()`，断言 onclick 与「目录清理」完全一致，并点击输入框确认
+  委托给 `openFileBrowser`（folders-only）；【1b】断言小字含服务器名与媒体库、
+  **不含**「当前环境不可访问」。
+- 全仓 `py_compile` **378/0**；本次改动未触及其他模板。
+- 既有回归：643 **54/54**、642 **57/57**、`_verify_log_api_usage` **7/7**、
+  `_verify_index_card` **13/13**、`_verify_ugreen_cover` **28/28**、
+  `_jinja_check680` **17/17**。
+
+## 六、坑
+
+- **弹窗内不得再出现 `<select>`**：无头脚本用
+  `document.querySelectorAll('#modal-media-orphan select').length === 0` 直接卡死这类回归。
+- **预览页要「真实」绑定**：`_preview_v7.py` 现场从 `functions.js` 抽 `init_filetree_element`
+  注入预览页（而不是在预览页里手写一份），否则测的就不是真实绑定逻辑；`openFileBrowser`
+  只桩「弹窗本体」。
+- **同一文件多 Edit 绝不能并行**；改完立刻 grep 复核（本次逐个替换后做过一次全符号扫描）。
+
 # v6.10.1 — 修「媒体库残留清理」三处缺陷 + 绿联库封面黑块 + 扫描目录下拉框
 
 ## 一、起因（用户反馈）
