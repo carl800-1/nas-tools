@@ -2252,24 +2252,6 @@ class SystemMediaOrphanDetect(ApiResource):
         return WebAction().api_action(cmd='media_orphan_detect', data=self.parser.parse_args())
 
 
-@system.route('/media_orphan/list_dirs')
-class SystemMediaOrphanListDirs(ApiResource):
-    parser = reqparse.RequestParser()
-    parser.add_argument('path', type=str,
-                        help='要浏览的目录，留空则用「建议扫描目录的公共父级」',
-                        location='form')
-    parser.add_argument('library_dirs', type=str,
-                        help='已知媒体库目录（用于标记），多个用英文逗号分隔',
-                        location='form')
-
-    @system.doc(parser=parser)
-    def post(self):
-        """
-        媒体库残留清理：列出目录下的一级子目录，供「扫描目录」下拉选择（密钥认证，只读）
-        """
-        return WebAction().api_action(cmd='media_orphan_list_dirs', data=self.parser.parse_args())
-
-
 @system.route('/media_orphan/scan')
 class SystemMediaOrphanScan(ApiResource):
     parser = reqparse.RequestParser()

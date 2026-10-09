@@ -15,7 +15,7 @@ OrphanHelper（媒体库残留清理服务）单元测试。
   - ★ 安全闸门：拿不到媒体服务器条目 / 连接报错时，绝不产生清单
   - 参数归一化：roots 空 → 明确报错；目录不存在 → skipped
   - 默认扫描目录回落「设置 → 媒体」的媒体库目录
-  - 目录浏览：list_dirs / default_browse_path（界面「扫描目录」下拉用）
+  - 服务器路径翻译：map_server_path（挂载点不同也能对齐）
 
 运行：python -m unittest tests.test_orphan_helper -v
 """
@@ -556,43 +556,6 @@ class OrphanHelperTest(unittest.TestCase):
         local, _why = OrphanHelper.map_server_path("/vol9/unknown/某处", anchors)
         self.assertEqual(local, "")
         self.assertEqual(OrphanHelper.map_server_path("")[0], "")
-
-    def test_default_browse_path_is_common_parent(self):
-        """目录下拉的起始位置 = 建议目录各父级的公共前缀"""
-        self.assertEqual(OrphanHelper.default_browse_path(
-            ["/video/01.电影/华语电影", "/video/02.电视剧/国产剧"]), "/video")
-        self.assertEqual(OrphanHelper.default_browse_path(
-            ["/video/01.电影/华语电影", "/other/x"]), "/")
-        self.assertEqual(OrphanHelper.default_browse_path(["/video"]), "/")
-        _ConfigStub.store = {"media": {"movie_path": "/video/01.电影"}}
-        self.assertEqual(OrphanHelper.default_browse_path([]), "/video")
-
-    def test_list_dirs_lists_subdirectories(self):
-        base = os.path.join(self.tmp, "video")
-        os.makedirs(os.path.join(base, "01.电影", "华语电影"))
-        os.makedirs(os.path.join(base, "02.电视剧"))
-        with open(os.path.join(base, "readme.txt"), "w", encoding="utf-8") as fh:
-            fh.write("x")
-        info = OrphanHelper.list_dirs(self._norm(base))
-        self.assertEqual(info["error"], "")
-        self.assertEqual([d["name"] for d in info["dirs"]], ["01.电影", "02.电视剧"])
-        self.assertEqual(info["total"], 2)
-        self.assertFalse(info["truncated"])
-        self.assertEqual(info["parent"], OrphanHelper._norm_path(os.path.dirname(base)))
-        # is_library 标记
-        info2 = OrphanHelper.list_dirs(
-            self._norm(os.path.join(base, "01.电影")),
-            library_dirs=[OrphanHelper._norm_path(os.path.join(base, "01.电影", "华语电影"))])
-        self.assertTrue(info2["dirs"][0]["is_library"])
-
-    def test_list_dirs_missing_and_empty_path(self):
-        info = OrphanHelper.list_dirs(os.path.join(self.tmp, "不存在"))
-        self.assertEqual(info["dirs"], [])
-        self.assertIn("目录不存在", info["error"])
-        # 留空 → 用 default_browse_path 兜底（此处 media 未配置，回落到 /）
-        _ConfigStub.store = {"media": {"movie_path": "/video/01.电影"}}
-        info = OrphanHelper.list_dirs("")
-        self.assertEqual(info["path"], "/video")
 
     def test_get_server_libraries_error_and_empty(self):
         self._install_fake_server([], error="连接被拒绝")

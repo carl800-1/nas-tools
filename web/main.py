@@ -793,10 +793,9 @@ def service():
     CleanConf = CleanHelper.get_default_config()
     SubConf = SubtitleHelper.get_default_config()
     # 媒体库残留清理：默认扫描目录（配置优先，否则取「设置 → 媒体」的媒体库目录）
+    # 媒体服务器不在页面选择/展示：后端固定用「设置 → 媒体服务器」里当前启用的那一台
     OrphanConf = OrphanHelper.get_default_config()
     OrphanRoots = ",".join(OrphanHelper.get_configured_roots(OrphanConf))
-    # 媒体库残留清理：实际会查询的媒体服务器（界面固定用「当前启用」那一台，只展示不选择）
-    OrphanServer = OrphanHelper.resolve_server()
     return render_template("service.html",
                            Count=len(Services),
                            RuleGroups=RuleGroups,
@@ -808,8 +807,6 @@ def service():
                            SubDefaultPolicy=SubConf.get("keep_policy"),
                            SubDefaultRecursive=SubConf.get("recursive", True),
                            OrphanDefaultRoots=OrphanRoots,
-                           OrphanServerName=OrphanServer.get("name") or "",
-                           OrphanServerReady=bool(OrphanServer.get("configured")),
                            SchedulerTasks=Services)
 
 

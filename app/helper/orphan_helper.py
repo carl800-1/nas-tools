@@ -41,9 +41,6 @@ _MAX_TAIL_SEG = 4
 # 至少要比较 2 段路径，避免单段（仅片名）过松误命中
 _MIN_TAIL_SEG = 2
 
-# 目录下拉：单次最多返回的子目录数（避免超大目录把浏览器拖死）
-_MAX_LIST_DIRS = 500
-
 # 目录名里的年份：取最后一个 4 位年份（避免「银翼杀手2049 (2017)」把 2049 当年份）
 _YEAR_RE = re.compile(r'(19\d{2}|20\d{2})')
 # 片名归一化：抹掉空白与常见标点，只留内容
@@ -419,7 +416,6 @@ class OrphanHelper:
             detected_roots  从媒体服务器读到并成功映射到本环境的目录
             unmapped_roots  读到了但映射不到本环境的原始目录
             suggested_roots 建议作为「扫描目录」的值（按上面的优先级）
-            browse_base     目录下拉的起始位置（建议目录各父级的公共前缀）
             source          建议值的来源：config / server / media / ''
             error           读媒体库时的错误（为空表示检测成功）
         """
@@ -461,96 +457,9 @@ class OrphanHelper:
             "detected_roots": detected,
             "unmapped_roots": unmapped,
             "suggested_roots": suggested,
-            "browse_base": cls.default_browse_path(suggested or media_roots),
             "source": source,
             "error": err,
         }
-
-    # ------------------------------------------------------- 目录浏览
-
-    @classmethod
-    def default_browse_path(cls, roots=None):
-        """
-        「扫描目录」下拉的起始位置：给定目录**各父级的公共前缀**。
-
-        例：建议目录为 /video/01.电影/华语电影 等 6 个 ⇒ 起始位置 /video，
-        这样下拉第一屏就能看到 01.电影 / 02.电视剧，逐层进到媒体库目录。
-        """
-        root_list = cls.normalize_roots(roots)
-        if not root_list:
-            media = cls.get_media_roots()
-            for key in ("movie_path", "tv_path", "anime_path"):
-                for path in media.get(key) or []:
-                    if path not in root_list:
-                        root_list.append(path)
-        segs_list = []
-        for root in root_list:
-            segs = [s for s in root.split("/") if s]
-            segs_list.append(segs[:-1])      # 各父级
-        if not segs_list:
-            return "/"
-        common = []
-        for i in range(min(len(s) for s in segs_list)):
-            if len({s[i] for s in segs_list}) == 1:
-                common.append(segs_list[0][i])
-            else:
-                break
-        return "/" + "/".join(common) if common else "/"
-
-    @classmethod
-    def list_dirs(cls, path="", library_dirs=None):
-        """
-        列出某个目录下的**一级子目录**，供界面「扫描目录」下拉选择。
-
-        path 留空时从 default_browse_path() 开始（建议扫描目录的公共父级）。
-
-        :param path: 要浏览的目录
-        :param library_dirs: 已知的媒体库目录，用于把选项标记为「媒体库」
-        :return: {"path","parent","dirs","total","truncated","error"}
-        """
-        start = cls._norm_path(path)
-        if not start:
-            start = cls.default_browse_path()
-        result = {"path": start, "parent": "", "dirs": [],
-                  "total": 0, "truncated": False, "error": ""}
-        if not os.path.isdir(start):
-            result["error"] = "目录不存在或本环境不可访问：%s" % start
-            return result
-        try:
-            names = sorted(os.listdir(start))
-        except PermissionError as err:
-            result["error"] = "权限不足：%s" % err
-            return result
-        except OSError as err:
-            result["error"] = "读取失败：%s" % err
-            return result
-
-        # 已归一化后再比对：library_dirs 可能来自 Windows 形态的配置（反斜杠），
-        # 而这里列出的 path 一律经 _norm_path 转成正斜杠
-        known = {cls._norm_path(p) for p in cls.normalize_roots(library_dirs)}
-        dirs = []
-        for name in names:
-            full = os.path.join(start, name)
-            try:
-                if not os.path.isdir(full):
-                    continue
-            except OSError:
-                continue
-            norm = cls._norm_path(full)
-            dirs.append({
-                "name": name,
-                "path": norm,
-                "is_library": norm in known,
-                "is_link": os.path.islink(full),
-            })
-        result["total"] = len(dirs)
-        if len(dirs) > _MAX_LIST_DIRS:
-            dirs = dirs[:_MAX_LIST_DIRS]
-            result["truncated"] = True
-        result["dirs"] = dirs
-        if start != "/":
-            result["parent"] = cls._norm_path(os.path.dirname(start))
-        return result
 
     # ------------------------------------------------------- 路径 / 片名
 
