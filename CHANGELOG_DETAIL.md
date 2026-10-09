@@ -3,6 +3,85 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.10.0 — 新增「服务 → 媒体库残留清理」（以媒体服务器实时条目为准）
+
+## 一、起因
+
+在飞牛影视 / 绿联影视里删除了影片，但媒体库目录下的文件夹仍留在磁盘上，越积越多。
+需求：在「服务」里加一个手动触发的清理，**同步删除**这些残留目录。
+
+## 二、设计（5 条口径，已与用户确认）
+
+| 决策 | 取值 |
+|---|---|
+| 判定依据 | **实时**拉媒体服务器现存条目（不用缓存、不抽样） |
+| 匹配 | **路径优先**（尾部 2~4 段签名）→ **片名 + 年份兜底**；任一命中即视为「还在」 |
+| 执行 | **先出清单**、人工确认后再删（两段式，预览不删任何东西） |
+| 扫描目录 | 默认取配置、界面可手改；**留空则自动读取媒体服务器的媒体库目录** |
+| 服务器 | 界面**只读展示**、不提供选择（固定用「设置 → 媒体服务器」当前启用的那一台） |
+
+## 三、改动（8 个改动文件 + 2 个新文件）
+
+| 文件 | 改动 |
+|---|---|
+| `app/helper/orphan_helper.py` | **新增**（703 行）：引擎 —— 服务器解析 / 媒体库读取 / 三级兜底 / 匹配 / 扫描 / 删除 |
+| `tests/test_orphan_helper.py` | **新增**（651 行，35 用例） |
+| `app/mediaserver/media_server.py` | 新增 `get_server_by_type()`（临时构造另一台服务器的客户端，不动「当前启用」） |
+| `app/helper/__init__.py` | 导出 `OrphanHelper` |
+| `web/backend/pro_user.py` | SERVICE_CONF 新增卡片 `media_orphan`（红色 `database-off`） |
+| `web/action.py` | 注册 3 个 cmd，实现 `__media_orphan_common` / `_detect` / `_scan` / `_run` |
+| `web/apiv1.py` | 新增 `/media_orphan/detect`、`/scan`、`/run` 三条 `ApiResource`（密钥认证） |
+| `web/main.py` | `service()` 传 `OrphanDefaultRoots` / `OrphanServerName` / `OrphanServerReady` |
+| `web/templates/service.html` | 弹窗 `#modal-media-orphan` + `show_media_orphan_modal` / `media_orphan_detect` / `_render` / `_scan` / `_run` |
+| `config/config.yaml` | 新增 `media_orphan` 段（`roots` / `server`）；顺带修正 `clean_subs` 的过期注释 |
+
+## 四、关键实现
+
+- **服务器解析 `resolve_server()`**（界面展示与后端执行**共用同一套优先级**）：
+  显式 `server_type` → `media_orphan.server` → `media.media_server`（设置里当前启用）。
+  返回 `{id, name, configured}`；`configured` = 该配置段是否真填了 `host`（没填则界面标红提示）。
+- **媒体库读取 `get_server_libraries()`**：调 `server.get_libraries()`，把各家不统一的 `path`
+  （绿联是逗号分隔字符串、飞牛是列表）统一归一；再逐个 `os.path.isdir()` 判定**当前容器内能否
+  真的访问**，分出 `present` / `missing` / `accessible`。
+- **目录三级兜底 `resolve_roots()`**：显式入参或 `media_orphan.roots` → 媒体服务器媒体库目录的
+  `present` 集合 → 「设置 → 媒体」的 `movie_path` / `tv_path` / `anime_path`；返回 `(roots, source)`，
+  `source ∈ {input, config, server, media, ''}`，结果里带 `root_source` 供界面提示。
+- **自动检测 `detect()`**：一次汇总 `server` / `libraries` / `config_roots` / `media_roots` /
+  `detected_roots` / `suggested_roots` / `source` / `error`，给足前端渲染所需。
+- **匹配 `_build_index()` + `_match()`**：用尾部路径段（`_MAX_TAIL_SEG = 4`、`_MIN_TAIL_SEG = 2`）
+  建索引；再按「片名归一 + 年份」兜底（`_YEAR_RE` 取**最后一个** 4 位年份，避免
+  「银翼杀手2049 (2017)」把 2049 当年份）。任一命中即 `kept`。
+- **扫描 `scan()`**：**只扫一级子文件夹**；符号链接跳过；单条异常只记录、不中断；
+  ★ **安全闸门** —— `collect_server_items()` 返回空或报错时**直接 error、`matched` 恒为空**
+  （否则整个媒体库都会被判成残留）。
+
+## 五、验证
+
+- 单测 `tests/test_orphan_helper.py` **35/35**：入参归一 / 服务器解析 / 媒体库读取 / 三级兜底 /
+  `detect` 汇总 / 安全闸门 / 符号链接跳过 / 预览与执行分离。
+- 接线 `_verify_v7_orphan_wire.py` **76/76**：`ast` 抽出**真实** action 方法执行；卡片 / REST /
+  模板 / 配置 / 新方法逐项断言。
+- 无头渲染 + 交互 `shot_v7.js` **47/47**：弹窗 720px 无横向溢出、打开自动检测展示、仅当用户
+  未改过输入框时才自动填入、不可访问目录标红、预览 / 执行两段式、失败不卡死。
+- 全仓 `py_compile` 378/0；Jinja parse / 内联 JS `node --check` / YAML 解析全通过；
+  既有回归 643 / 642 / 641 / 640 / v671 / log_api 全绿。
+
+## 六、坑
+
+- **不能用 `get_type()` 取配置段 id**：各客户端 `get_type()` 都是 `return self.client_type`，
+  返回 `MediaServerType` **枚举对象**，`str()` 出来是 `MediaServerType.UGREEN`，既不是配置段 id、
+  也不是中文展示名。改为显式读**类属性** `client_id`（`_IMediaClient.client_id = ""`，
+  具体实现如 `UgreenClient.client_id = "ugreen"`）。
+- **安全闸门不能省**：「服务器返回空列表」与「调用报错」必须都当失败处理 —— 只判 `err` 的话，
+  空列表会被当成「服务器上什么都没有」，于是整个媒体库全被判成残留。
+- **`roots` 兜底不能提前做**：`__media_orphan_common` 一度在入口就把 `roots` 兜底成配置值，
+  结果是界面点「预览」走配置、而 REST 直调拿不到「自动读媒体库目录」的能力。现在入口不兜底，
+  一律交给 `resolve_roots()`（预览与执行走同一条链，不会凭空扩大范围）。
+- **模板自动填充要「用户优先」**：打开弹窗时自动 `detect` 并填入建议目录，但**只在用户没有改过
+  输入框时**才写（与 `media_orphan_initial_roots` 比对），否则会把用户手填的值冲掉。
+- **`normalize_roots()` 不做反斜杠转换**：那是 `_norm_path()` 的行为；单测里一度按「会把 `\`
+  转 `/`」写期望，导致 6 处假失败。
+
 # v6.9.3 — 字幕清理：语言库的容量治理（孤儿回收 + 容量硬顶）
 
 ## 一、起因
