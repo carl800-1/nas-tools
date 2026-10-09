@@ -375,6 +375,84 @@ class OrphanHelperTest(unittest.TestCase):
         # 目录大小被统计
         self.assertGreater(result["deleted"][0]["size_bytes"], 0)
 
+    def test_scan_run_deletes_only_selected(self):
+        """★ 勾选式删除：只删勾中的，未勾的留在磁盘上并记入 unselected"""
+        root, items = self._build_fixture()
+        self._patch_items(items)
+        target = os.path.join(root, "残留甲 (2020)")
+        result = self.helper.scan(roots=root, dry_run=False,
+                                  selected_paths=[OrphanHelper._norm_path(target)])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["selected_count"], 1)
+        self.assertEqual(result["deleted_count"], 1)
+        self.assertEqual([x["name"] for x in result["deleted"]], ["残留甲 (2020)"])
+        self.assertFalse(os.path.exists(target))
+        # 未勾选的残留一个字节都没动，并明确记入 unselected
+        self.assertTrue(os.path.isdir(os.path.join(root, "残留乙 (2021)")))
+        self.assertEqual([x["name"] for x in result["unselected"]], ["残留乙 (2021)"])
+        self.assertIn("未勾选已保留", OrphanHelper.format_result_message(result))
+        # 判定为在库的目录照旧保留
+        self.assertTrue(os.path.isdir(os.path.join(root, "片名命中 (2023)")))
+
+    def test_scan_run_empty_selection_deletes_nothing(self):
+        """★ 勾选传空列表 = 什么都不删（绝不能退化成「删除全部」）"""
+        root, items = self._build_fixture()
+        self._patch_items(items)
+        result = self.helper.scan(roots=root, dry_run=False, selected_paths=[])
+
+        self.assertEqual(result["deleted_count"], 0)
+        self.assertEqual(result["selected_count"], 0)
+        self.assertEqual(len(result["unselected"]), 2)
+        self.assertTrue(os.path.isdir(os.path.join(root, "残留甲 (2020)")))
+        self.assertTrue(os.path.isdir(os.path.join(root, "残留乙 (2021)")))
+
+    def test_scan_run_without_selection_deletes_all_matched(self):
+        """不传 selected_paths = 没做勾选 ⇒ 沿用「删除全部命中项」（REST 直调兼容）"""
+        root, items = self._build_fixture()
+        self._patch_items(items)
+        result = self.helper.scan(roots=root, dry_run=False, selected_paths=None)
+
+        self.assertEqual(result["deleted_count"], 2)
+        self.assertEqual(result["unselected"], [])
+        self.assertEqual(result["selected_count"], 2)
+        self.assertNotIn("未勾选已保留", OrphanHelper.format_result_message(result))
+
+    def test_scan_preview_ignores_selection(self):
+        """预览必须给出**完整**清单（界面靠它渲染勾选框），不受 selected_paths 影响"""
+        root, items = self._build_fixture()
+        self._patch_items(items)
+        result = self.helper.scan(roots=root, dry_run=True, selected_paths=["/nothing"])
+        self.assertEqual(len(result["matched"]), 2)
+        self.assertEqual(result["deleted_count"], 0)
+
+    def test_parse_selection_none_and_empty(self):
+        """parse_selection：None（没传）与空（勾选为空）语义不同"""
+        self.assertIsNone(OrphanHelper.parse_selection(None))
+        self.assertEqual(OrphanHelper.parse_selection(""), [])
+        self.assertEqual(OrphanHelper.parse_selection("   "), [])
+        self.assertEqual(OrphanHelper.parse_selection("[]"), [])
+        self.assertEqual(OrphanHelper.parse_selection([]), [])
+        self.assertEqual(OrphanHelper.parse_selection(["/a", "/b"]), ["/a", "/b"])
+        self.assertEqual(OrphanHelper.parse_selection("/a,/b"), ["/a", "/b"])
+        self.assertEqual(OrphanHelper.parse_selection('["/a", "/b"]'), ["/a", "/b"])
+        # 不是合法 JSON 数组时按普通逗号串处理（不抛异常）
+        self.assertEqual(OrphanHelper.parse_selection('["/a",'), ['["/a"'])
+
+    def test_apply_selection_normalizes_slashes(self):
+        """勾选比对前归一斜杠方向（Windows 形态的路径也不会漏删）"""
+        result = {"matched": [{"path": "/v/电影/残留 (2020)", "name": "残留 (2020)"}]}
+        self.helper._apply_selection(result, [r"\v\电影\残留 (2020)"])
+        self.assertEqual(len(result["matched"]), 1)
+        self.assertEqual(result["unselected"], [])
+
+    def test_apply_selection_keeps_unmatched_selection_out(self):
+        """勾了但已不在命中清单里的路径 → 不会凭空删（只做交集）"""
+        result = {"matched": [{"path": "/v/残留 (2020)", "name": "残留 (2020)"}]}
+        self.helper._apply_selection(result, ["/v/不存在的 (1999)"])
+        self.assertEqual(result["matched"], [])
+        self.assertEqual(len(result["unselected"]), 1)
+
     def test_scan_accepts_multiple_roots(self):
         root_a, items = self._build_fixture()
         root_b = os.path.join(self.tmp, "video", "电视剧")

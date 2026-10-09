@@ -2275,6 +2275,9 @@ class SystemMediaOrphanRun(ApiResource):
     parser.add_argument('server_type', type=str,
                         help='媒体服务器类型（emby/jellyfin/plex/ugreen/trimemedia），留空用当前启用的',
                         location='form')
+    parser.add_argument('paths', type=str,
+                        help='只删除这些目录（JSON 数组，或英文逗号分隔）；留空删除全部命中项',
+                        location='form')
 
     @system.doc(parser=parser)
     def post(self):

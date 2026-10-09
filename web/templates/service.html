@@ -256,6 +256,7 @@
         <div class="alert alert-info" role="alert">
           以<strong>媒体服务器现存条目</strong>为准：扫描下面目录里的<strong>一级子文件夹</strong>，
           把「磁盘上还在、媒体服务器里已经查不到」的影片目录列出来。
+          清单里可<strong>逐条勾选</strong>（表头可全选），<strong>只有勾中的才会被删除</strong>。
           只比对、不猜测 —— <strong>拿不到媒体服务器条目时不会产生任何清单</strong>，避免误删。
         </div>
         <div class="mb-3">
@@ -527,8 +528,8 @@
 
   // ---------------- 媒体库残留清理 ----------------
 
-  // 上一次预览命中的数量（用于二次确认提示文案）
-  let media_orphan_last_count = 0;
+  // 预览命中的清单：路径 → 大小（用于统计勾选后预计释放的空间）
+  let media_orphan_size_map = {};
   // 打开弹窗时输入框的初始值（用于判断用户是否手动改过，决定能否被自动检测结果覆盖）
   let media_orphan_initial_roots = "";
 
@@ -547,9 +548,54 @@
     };
   }
 
+  // 执行删除的参数：在扫描目录之外，带上清单里**勾中**的目录（只删这些）
+  function media_orphan_run_params() {
+    let params = media_orphan_params();
+    params["paths"] = media_orphan_picked();
+    return params;
+  }
+
+  // 清单里勾中的路径
+  function media_orphan_picked() {
+    let picked = [];
+    $("#media_orphan_result .media_orphan_pick:checked").each(function () {
+      picked.push($(this).val());
+    });
+    return picked;
+  }
+
+  // 统计勾选情况：刷新「已选 N / M 个、预计释放 X MB」、表头全选态与执行按钮可用性
+  function media_orphan_sync_pick() {
+    let boxes = $("#media_orphan_result .media_orphan_pick");
+    let total = boxes.length;
+    let picked = 0;
+    let size = 0;
+    boxes.each(function () {
+      if (this.checked) {
+        picked += 1;
+        size += Number(media_orphan_size_map[String($(this).val())]) || 0;
+      }
+    });
+    let all = $("#media_orphan_pick_all");
+    if (all.length > 0) {
+      all.prop("checked", total > 0 && picked === total);
+      // 半选态：让「全选」框显示横杠，避免误以为已全选
+      all.prop("indeterminate", picked > 0 && picked < total);
+    }
+    let info = $("#media_orphan_pick_info");
+    if (info.length > 0) {
+      info.html(total > 0
+        ? `已选 <strong>${picked}</strong> / ${total} 个，勾选的预计释放 `
+          + `<strong>${(size / 1048576).toFixed(2)}</strong> MB`
+        : "");
+    }
+    $("#media_orphan_run_btn").prop("disabled", picked === 0);
+    return { picked: picked, total: total, size: size };
+  }
+
   // 重置结果区
   function media_orphan_reset(clearForm) {
-    media_orphan_last_count = 0;
+    media_orphan_size_map = {};
     $("#media_orphan_result").addClass("text-muted").html("请先点击「预览」查看待删除清单。");
     $("#media_orphan_detect_box").removeClass("text-danger").addClass("text-muted").html("");
     $("#media_orphan_run_btn").prop("disabled", true);
@@ -634,6 +680,13 @@
     let deleted = result.deleted || [];
     let kept = result.kept || [];
     let rows = isPreview ? matched : deleted;
+    // 预览清单支持勾选：记下「路径 → 大小」，供勾选统计用
+    media_orphan_size_map = {};
+    if (isPreview) {
+      for (let item of matched) {
+        media_orphan_size_map[String(item.path)] = Number(item.size_bytes) || 0;
+      }
+    }
     let html = `<div class="mb-2">${isPreview ? "预览" : "执行"}结果：`
       + `比对依据 <strong>${result.server || "当前启用的媒体服务器"}</strong>`
       + `（共 <strong>${result.server_items || 0}</strong> 条条目），`
@@ -642,7 +695,9 @@
           ? `磁盘上还在、媒体服务器里已查不到的有 <strong>${matched.length}</strong> 个，`
             + `预计可释放 <strong>${(media_orphan_size(matched) / 1048576).toFixed(2)}</strong> MB`
           : `已删除残留 <strong>${result.deleted_count || 0}</strong> 个，`
-            + `实际释放 <strong>${(media_orphan_size(deleted) / 1048576).toFixed(2)}</strong> MB`)
+            + `实际释放 <strong>${(media_orphan_size(deleted) / 1048576).toFixed(2)}</strong> MB`
+            + ((result.unselected || []).length > 0
+                ? `，另有 <strong>${result.unselected.length}</strong> 个未勾选已保留` : ''))
       + `</div>`;
 
     // 扫描目录及其来源（判断依据是自动读取还是手动填写）
@@ -665,14 +720,28 @@
     if (rows.length > 0) {
       html += `<div class="table-responsive" style="max-height:320px;overflow-y:auto;">
         <table class="table table-vcenter card-table table-hover table-striped">
-          <thead><tr><th>${isPreview ? "残留目录（磁盘有 / 媒体服务器无）" : "已删除目录"}</th><th class="w-1">大小</th></tr></thead><tbody>`;
+          <thead><tr>`;
+      if (isPreview) {
+        // 表头全选框：控制整份清单的勾选（默认全选，可只留一部分）
+        html += `<th class="w-1"><label class="form-check m-0" title="全选 / 全不选">`
+          + `<input class="form-check-input" type="checkbox" id="media_orphan_pick_all" checked></label></th>`;
+      }
+      html += `<th>${isPreview ? "残留目录（磁盘有 / 媒体服务器无）" : "已删除目录"}</th>`
+        + `<th class="w-1">大小</th></tr></thead><tbody>`;
       for (let item of rows) {
-        html += `<tr title="${item.path}"><td class="text-truncate" style="max-width:420px;">`
-          + `${item.path}</td><td class="text-end">${((Number(item.size_bytes) || 0) / 1048576).toFixed(2)} MB</td></tr>`;
+        html += `<tr title="${escape_text(item.path)}">`;
+        if (isPreview) {
+          html += `<td class="w-1"><input class="form-check-input m-0 media_orphan_pick" `
+            + `type="checkbox" value="${escape_text(item.path)}" checked></td>`;
+        }
+        html += `<td class="text-truncate" style="max-width:420px;">${escape_text(item.path)}</td>`
+          + `<td class="text-end">${((Number(item.size_bytes) || 0) / 1048576).toFixed(2)} MB</td></tr>`;
       }
       html += `</tbody></table></div>`;
       if (isPreview) {
-        html += `<div class="text-muted mt-2">确认无误后点「执行删除」，删除后不可恢复。</div>`;
+        html += `<div class="text-muted mt-2" id="media_orphan_pick_info"></div>`;
+        html += `<div class="text-muted mt-2">勾选要删除的目录（表头可全选），`
+          + `再点「执行删除」；删除后不可恢复。</div>`;
       }
     } else if (isPreview) {
       html += `<div class="text-muted">没有发现残留，磁盘与媒体服务器一致。</div>`;
@@ -699,7 +768,19 @@
     }
 
     $("#media_orphan_result").removeClass("text-muted").html(html);
+    // 勾选统计与「执行删除」可用性：预览默认全选；执行结果没有勾选框 → 按钮置灰
+    media_orphan_sync_pick();
   }
+
+  // 勾选框变化（事件委托：结果区每次渲染都会被整块替换，不能绑在行元素上）
+  $("#media_orphan_result").off("change.media_orphan_pick")
+    .on("change.media_orphan_pick", "#media_orphan_pick_all", function () {
+      $("#media_orphan_result .media_orphan_pick").prop("checked", this.checked);
+      media_orphan_sync_pick();
+    })
+    .on("change.media_orphan_pick", ".media_orphan_pick", function () {
+      media_orphan_sync_pick();
+    });
 
   // 后端响应是否可用
   function media_orphan_is_ok(ret) {
@@ -739,8 +820,6 @@
         return;
       }
       media_orphan_render(ret.data, true);
-      media_orphan_last_count = ret.data.matched.length;
-      $("#media_orphan_run_btn").prop("disabled", !(ret.data.matched.length > 0));
     }, true, true, function (xhr, textStatus) {
       btn.text("预览").removeAttr("disabled");
       $("#media_orphan_result").addClass("text-muted")
@@ -768,15 +847,20 @@
     media_orphan_scan(false);
   });
 
-  // 执行删除（二次确认）
+  // 执行删除（二次确认；只删除清单里勾中的目录）
   $("#media_orphan_run_btn").unbind("click").click(function () {
     if (!media_orphan_validate()) {
       return;
     }
-    let params = media_orphan_params();
+    let info = media_orphan_sync_pick();
+    if (info.picked === 0) {
+      show_fail_modal("请先在清单里勾选要删除的目录。");
+      return;
+    }
+    let params = media_orphan_run_params();
     show_confirm_modal(
-      `即将删除 ${media_orphan_last_count} 个「媒体服务器中已不存在」的影片目录，`
-      + `删除后不可恢复，是否确认？`,
+      `即将删除 ${info.picked} 个「媒体服务器中已不存在」的影片目录`
+      + `（共约 ${(info.size / 1048576).toFixed(2)} MB），删除后不可恢复，是否确认？`,
       function () {
         hide_confirm_modal();
         let btn = $("#media_orphan_run_btn");

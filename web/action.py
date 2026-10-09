@@ -2977,9 +2977,16 @@ class WebAction:
     def __media_orphan_run(data):
         """
         媒体库残留清理：执行模式。删除扫描命中的残留目录（不可撤销）。
-        :param data: {roots, server_type}
+
+        :param data: {roots, server_type, paths}
+                     paths = 界面上勾选的行（只删这些）。不传 paths 表示「没做勾选」，
+                             沿用旧行为删除全部命中项；传了但为空则拒绝执行。
         """
         roots, server_type = WebAction.__media_orphan_common(data)
+        paths = OrphanHelper.parse_selection(data.get("paths"))
+        if paths is not None and not paths:
+            # 勾选为空是明确的「什么都不删」意图，不能退化成「删除全部」
+            return {"code": -1, "msg": "未勾选任何要删除的目录，已取消执行"}
         if not roots:
             # 未显式指定时按同一套兜底链解析（与预览保持一致，不会凭空扩大范围）
             roots, _source = OrphanHelper.resolve_roots(None, server_type)
@@ -2987,7 +2994,8 @@ class WebAction:
             return {"code": -1, "msg": "未指定扫描目录，且未能从媒体服务器 / 「设置 → 媒体」读到可用目录"}
         result = OrphanHelper().clean(roots=roots,
                                       server_type=server_type,
-                                      dry_run=False)
+                                      dry_run=False,
+                                      selected_paths=paths)
         if result.get("error"):
             return {"code": -1, "msg": result["error"]}
         return {"code": 0,

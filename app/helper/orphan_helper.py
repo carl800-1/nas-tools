@@ -25,6 +25,7 @@
   7. 预览（dry_run）与执行分离，执行由前端二次确认。
 """
 
+import json
 import os
 import re
 import shutil
@@ -111,6 +112,34 @@ class OrphanHelper:
             if path not in roots:
                 roots.append(path)
         return roots
+
+    @classmethod
+    def parse_selection(cls, value):
+        """
+        解析「只删除哪些目录」的勾选集合（界面上预览清单里勾中的行）。
+
+        与 normalize_roots 的关键区别是**空值的语义**：
+            None（没传该字段）→ 返回 None，表示「没做勾选」，沿用「删除全部命中项」
+                                  （REST 直调等旧调用方式不受影响）；
+            [] / "" / "[]"     → 返回 []，表示「勾选为空」，调用方必须拒绝执行。
+
+        支持 list / tuple / set / JSON 数组字符串 / 英文逗号分隔字符串。
+        """
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple, set)):
+            return cls.normalize_roots(value)
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                return cls.normalize_roots(parsed)
+        return cls.normalize_roots(text)
 
     @classmethod
     def get_media_roots(cls):
@@ -617,13 +646,15 @@ class OrphanHelper:
 
     # ------------------------------------------------------------ 扫描
 
-    def scan(self, roots, server_type=None, dry_run=True):
+    def scan(self, roots, server_type=None, dry_run=True, selected_paths=None):
         """
         扫描根目录下的一级子文件夹，找出媒体服务器里已经不存在的残留。
 
         :param roots: 扫描根目录（字符串或列表）
         :param server_type: 媒体服务器类型，为空表示当前启用的那一台
         :param dry_run: True = 只出清单不删除
+        :param selected_paths: 只删除这些目录（界面上勾中的行）。None = 未做勾选、
+                               删除全部命中项；传空列表 = 勾选为空，调用方应拒绝执行。
         :return: dict
         """
         result = {
@@ -636,6 +667,9 @@ class OrphanHelper:
             "matched": [],
             "kept": [],
             "skipped": [],
+            # 勾选（界面上只删勾中的行）：勾中数量 + 被勾选排除、因而保留的命中项
+            "selected_count": 0,
+            "unselected": [],
             "dry_run": bool(dry_run),
             "error": None,
             "deleted": [],
@@ -677,7 +711,41 @@ class OrphanHelper:
         self._last_scan = result
         if dry_run:
             return result
+        # 执行阶段才收窄范围：预览要给出**完整**清单供界面勾选，
+        # 真正落盘删除的只有用户在清单里勾中的那些。
+        self._apply_selection(result, selected_paths)
         return self._delete(result)
+
+    @classmethod
+    def _apply_selection(cls, result, selected_paths):
+        """
+        把删除范围收窄到用户在预览清单里勾选的目录。
+
+        selected_paths 为 None ⇒ 没做勾选（REST 直调等），保持「删除全部命中项」；
+        传了列表 ⇒ 只留下勾中的，其余从 matched 移到 unselected，不会被动到。
+
+        路径一律经 _norm_path 归一后比对（前端回传的就是本环境路径，
+        但 Windows 形态的反斜杠配置 / 手工调 REST 仍可能传进来）。
+        """
+        matched = result.get("matched") or []
+        if selected_paths is None:
+            result["selected_count"] = len(matched)
+            result["unselected"] = []
+            return result
+        wanted = {cls._norm_path(p) for p in selected_paths if str(p or "").strip()}
+        picked, left = [], []
+        for item in matched:
+            if cls._norm_path(item.get("path")) in wanted:
+                picked.append(item)
+            else:
+                left.append(item)
+        result["matched"] = picked
+        result["selected_count"] = len(picked)
+        result["unselected"] = left
+        if left:
+            log.info("【Orphan】按勾选执行：命中 %s 个，勾选 %s 个，未勾选的 %s 个已保留"
+                     % (len(picked) + len(left), len(picked), len(left)))
+        return result
 
     def _scan_root(self, root, path_keys, name_keys, library_keys, result):
         """扫描单个根目录下的一级子文件夹"""
@@ -776,9 +844,10 @@ class OrphanHelper:
         result["failed_count"] = len(result["failed"])
         return result
 
-    def clean(self, roots, server_type=None, dry_run=True):
+    def clean(self, roots, server_type=None, dry_run=True, selected_paths=None):
         """scan 的别名，语义上表示「执行清理」"""
-        return self.scan(roots=roots, server_type=server_type, dry_run=dry_run)
+        return self.scan(roots=roots, server_type=server_type, dry_run=dry_run,
+                         selected_paths=selected_paths)
 
     # ------------------------------------------------------------ 摘要
 
@@ -798,10 +867,15 @@ class OrphanHelper:
                         len(result.get("matched", [])),
                         freed))
         released = round(sum(x.get("size_bytes", 0) for x in result.get("deleted", [])) / BYTES_PER_MB, 2)
+        # 只删勾选时，把「没勾、因而保留」的数量一并说明，避免用户以为漏删
+        kept_txt = ""
+        if result.get("unselected"):
+            kept_txt = "，另有 %s 个未勾选已保留" % len(result["unselected"])
         return ("清理完成：媒体服务器「%s」，扫描 %s 个影片目录，"
-                "已删除残留 %s 个，实际释放 %s MB，失败 %s 个" % (
+                "已删除残留 %s 个%s，实际释放 %s MB，失败 %s 个" % (
                     result.get("server") or "当前启用",
                     result.get("total_dirs", 0),
                     result.get("deleted_count", 0),
+                    kept_txt,
                     released,
                     result.get("failed_count", 0)))
