@@ -9,6 +9,7 @@
 
 | 版本 | 发布日期 |
 |---|---|
+| [v7.0.0](https://github.com/carl800-1/nas-tools/releases/tag/v7.0.0) | 2026-10-09 |
 | [v6.11.0](https://github.com/carl800-1/nas-tools/releases/tag/v6.11.0) | 2026-10-09 |
 | [v6.10.2](https://github.com/carl800-1/nas-tools/releases/tag/v6.10.2) | 2026-10-09 |
 | [v6.10.1](https://github.com/carl800-1/nas-tools/releases/tag/v6.10.1) | 2026-10-09 |
