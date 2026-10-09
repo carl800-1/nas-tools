@@ -3,6 +3,69 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.11.0 — 残留清理清单支持逐条勾选（只删勾中的）
+
+## 一、起因（用户反馈）
+
+「前面能加个勾选和全么，不一定都要删除」+ 一张残留清单截图（雷霆扫毒 / 脏局 / Fired Up）。
+上一版的清单只能「全删」，用户希望**挑着删**。
+
+## 二、设计
+
+| 决策 | 说明 |
+|---|---|
+| 勾选状态放前端 | 预览结果里每行一个勾选框、表头一个「全选」，**默认全选**（保持旧行为手感） |
+| 执行时把勾中的路径带回后端 | `media_orphan_run` 新增 `paths` 参数；后端**重新扫描后再与勾选清单求交集**，只删交集里的 |
+| `None` 与 `[]` 语义不同 | `paths` 不传（`None`）= 没做勾选 ⇒ 沿用「删除全部命中项」（REST 直调旧行为不变）；传空列表 = 勾选为空 ⇒ **拒绝执行**，绝不退化成全删 |
+| 未勾选的要留痕 | 命中但未勾选的记入 `result["unselected"]`，摘要与结果区都注明「另有 N 个未勾选已保留」 |
+
+## 三、改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/helper/orphan_helper.py` | 新增 `parse_selection()`（区分 `None` / 空）、`_apply_selection()`；`scan()` / `clean()` 新增 `selected_paths`；`format_result_message()` 补「未勾选已保留」 |
+| `web/action.py` | `__media_orphan_run` 解析 `paths`，空勾选直接 `code=-1` 拒绝 |
+| `web/apiv1.py` | `/media_orphan/run` 新增 `paths` 表单参数（JSON 数组或英文逗号分隔） |
+| `web/templates/service.html` | 清单加勾选框 + 表头全选 + 「已选 N / M 个，预计释放 X MB」；执行只提交勾中的；二次确认带数量与总大小 |
+| `tests/test_orphan_helper.py` | 新增 7 个用例（40 → **47**） |
+
+## 四、关键实现
+
+- **只在执行阶段收窄范围**：`scan(dry_run=True)` 永远返回**完整**清单（界面靠它渲染勾选框），
+  `_apply_selection()` 只在 `dry_run=False` 时调用。
+- **交集而非直接删**：勾选清单只是「允许删的候选」，仍要与重新扫描的命中集取交集 ——
+  勾了但已不在命中集的路径不会凭空被删（`test_apply_selection_keeps_unmatched_selection_out`）。
+- **半选态**：`indeterminate` 让表头全选框在「勾了一部分」时显示横杠，避免误以为已全选。
+- **事件委托**：结果区每次渲染都是整块 `.html()` 替换，勾选事件必须委托在常驻的
+  `#media_orphan_result` 上，并用命名空间 `change.media_orphan_pick` 先 `off` 再 `on`
+  （片段会被重复注入，不 off 会重复绑定）。
+- **路径转义**：清单里的路径写进 `value` / `title` 属性前经 `escape_text()`，
+  避免片名里的 `&`、`"` 破坏 DOM（`_preview_v7.py` 现在会现场从 `service.html`
+  抽真实的 `escape_text` 注入预览页，否则预览页会因 `ReferenceError` 静默不渲染）。
+
+## 五、验证
+
+- 单测 `tests/test_orphan_helper.py` **47/47**。
+- 接线 `_verify_v7_orphan_wire.py` **106/106**（A22 系列改为勾选断言；新增 B11b~B11k：
+  只删勾中的 / 未勾选原封不动 / `unselected` / 空勾选拒绝 / JSON 空数组拒绝 /
+  不传 `paths` 沿用全删 / 预览不受勾选影响）。
+- 无头渲染 + 交互 `shot_v7.js` **71/71**（新增【2b】：逐条点掉一条 → 半选态、
+  计数与释放空间实时重算、全不选 → 按钮置灰且不发请求、守门提示、全选复原；
+  【3】只勾一条 → 提交的 `paths` 恰为该条、确认文案带数量与 2048.00 MB）。
+- 全仓 `py_compile` **378/0**；46 个模板 Jinja 解析通过。
+- 既有回归：643 **54/54**、642 **57/57**、`_verify_log_api_usage` **7/7**、
+  `_verify_index_card` **13/13**、`_verify_ugreen_cover` **28/28**、
+  `_jinja_check680` **17/17**。
+
+## 六、坑
+
+- **预览页缺 `escape_text` 会静默不渲染**：无头脚本只看到「表格 0 行」，但 `pageerror`
+  才是真因。已把 `escape_text` 纳入 `_preview_v7.py` 的现场抽取清单。
+- **禁用的按钮 `page.click()` 不会触发事件**：测「没勾选也拒绝执行」的守门分支时，
+  要先 `disabled = false` 再点，否则断言永远拿不到提示。
+- **同一文件多 Edit 绝不能并行**；本次加 `parse_selection` 时一次替换误删了
+  `get_media_roots()` 的定义行，靠 `ast` 方法清单比对立刻发现并补回。
+
 # v6.10.2 — 「扫描目录」改回目录树控件 + 去掉服务器行 + 清理旧下拉遗留
 
 ## 一、起因（用户反馈）
