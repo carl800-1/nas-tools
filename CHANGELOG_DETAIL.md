@@ -3,6 +3,83 @@
 > 本文件存放各版本「怎么改的」实现细节：涉及的文件、测试、踩过的坑。
 > 用户向的发布说明见 [CHANGELOG.md](CHANGELOG.md)（只写修复 / 新增 / 怎么用）。
 
+# v6.10.1 — 修「媒体库残留清理」三处缺陷 + 绿联库封面黑块 + 扫描目录下拉框
+
+## 一、起因（用户反馈）
+
+1. 「扫描目录改成下拉框吧，可以选目录的那种」。
+2. 「这个结果明显错误，怎么可能整个华语目录是不要的」。
+3. 「而且显示都不可访问」。
+4. 「为什么绿联的媒体同步完了后，图标还是黑的」。
+
+## 二、改法
+
+| 问题 | 根因 | 改法 |
+|---|---|---|
+| 整层媒体库目录被判残留 | `_build_index()` 只索引了条目**自身**路径 | 条目路径的**所有上级目录**一并入索引；另加 `library_keys`（媒体服务器报出的媒体库目录） |
+| 全部「不可访问」 | 服务器路径 ≠ 本环境路径（容器内外挂载点不同） | 新增 `map_server_path()`：以「设置 → 媒体」目录为锚点，按**尾部路径段**对齐并验证存在性 |
+| 绿联库封面黑块 | 无库专属封面时回落到 Plex 多图组件，其空图底色是**纯黑** | 模板拆出 `{% elif Library.image_list %}` 分支；真空时走 `custom-img` 的浅灰占位；后端把封面候选扩到 8 个 |
+| 扫描目录只能手填 | —— | 新增 `list_dirs()` / `default_browse_path()` + `/media_orphan/list_dirs` + 前端下拉 |
+
+## 三、改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/helper/orphan_helper.py` | 新增 `map_server_path()` / `default_browse_path()` / `list_dirs()`；`_build_index()` 加 `libraries` 参数与 `library_keys`；`_match()` 先判媒体库目录；`detect()` 增加 `unmapped_roots` / `browse_base` |
+| `tests/test_orphan_helper.py` | 43 用例（+2 端到端：上级目录不算残留、服务器路径自动翻译） |
+| `web/action.py` | 新增 `__media_orphan_list_dirs` 并注册 |
+| `web/apiv1.py` | 新增 `/media_orphan/list_dirs` 路由 |
+| `web/templates/service.html` | 「扫描目录」改成 `<select>` + 「上一级」按钮 + 浏览位置提示；`media_orphan_render_dir_list()` / `media_orphan_choose_dir()` / `media_orphan_dir_parent()` |
+| `web/templates/index.html` | 媒体库卡片加 `{% elif Library.image_list %}` 分支，真空时用 `custom-img`（浅灰占位） |
+| `app/mediaserver/client/ugreen.py` | 库封面候选 4 → 8（`folder.covers[]` / `folder.backdrop_path` / 顶层 `video_arr` 条目海报，均复用同一次 `poster_wall_get_folder`）；新增 `_lib_item_cover()` 用**已缓存**条目海报兜底（绝不主动拉全量） |
+
+## 四、关键实现
+
+- **`map_server_path(path, anchors)`**：先 `os.path.isdir()` 判定本环境可直接访问；否则拿
+  `get_media_roots()` 的目录当锚点，用锚点的**尾部 n 段**在服务器路径里找匹配，命中后把剩余
+  段拼到锚点之后，并要求拼出来的路径**真实存在**；命中锚点尾段**最长**的候选优先。返回
+  `(本地路径, 说明)`，`""` 表示映射不到。
+- **`_build_index(items, libraries)`**：`path_keys` 不再只放条目自身 —— 对路径的每个前缀
+  （`/a/b/c` → `/a`、`/a/b`、`/a/b/c`）都取尾部段签名入集合。这样「现存条目的上级目录」
+  天然命中；`library_keys` 再兜一层「媒体服务器报出的媒体库目录」。
+- **`_match()` 顺序**：媒体库目录 → 条目所在目录 → 片名匹配。宁可漏判为「还在」，
+  绝不误判为「残留」。
+- **`list_dirs(path, library_dirs)`**：`path` 留空时用 `default_browse_path()`（建议目录各父级的
+  公共前缀，如 6 个媒体库 ⇒ `/video`）；只列一级子目录、`_MAX_LIST_DIRS = 500` 截断、标出
+  `is_library` / `is_link`。`library_dirs` 先 `_norm_path()` 再比对（Windows 形态的反斜杠配置也能命中）。
+- **前端下拉**：首项是**不可选**的「当前目录：…」定位提示，其后是「⬆ 上一级」+ 子目录；
+  选中子目录即写入「扫描目录」并进入该目录（可继续往下选）。请求按**自增序号**丢弃过期响应 ——
+  打开弹窗时会连着触发两次（初始 + 自动检测后），不丢弃的话先发的慢响应会覆盖后发的快响应。
+
+## 五、验证
+
+- 单测 `tests/test_orphan_helper.py` **43/43**。
+- 接线 `_verify_v7_orphan_wire.py` **101/101**（新增 B11b~B11f 覆盖 `list_dirs` 经真实 action 执行）。
+- 无头渲染 + 交互 `shot_v7.js` **66/66**（新增【1d】~【1g】：下拉逐层选择 / 选中即写入 /
+  上一级回退 / 不可访问目录给可读错误 / 检测失败后下拉仍可用 / 过期响应丢弃）。
+- 绿联封面：`_verify_ugreen_cover.py` **28/28**、`_verify_index_card.py` **13/13**、
+  `shot_card.js` **15/15**（像素断言：Plex 对照 darkRatio 0.79 ⇒ 证明能测出黑；
+  修复后 darkRatio 0，平均亮度 244）。
+- 全仓 `py_compile` **378/0**；46 个模板全解析；`config.yaml` YAML 解析通过。
+- 既有回归：643 **54/54**、642 **57/57**、v671_clean_oldref **48/48**、log_api **7/7**；
+  640 / 641 前端与 v6.9.3 基线**逐项相同**（16/7、13/5，属既有失败）；
+  `_verify_v671d` 仅 E 段「改动集快照」过期（把当前 diff 与 v6.7.1 的快照比对，属一次性断言）；
+  `_verify_ugreen_635` 的 A10/A10b 同理（把当前文件与 v6.3.5 的备份比对，
+  `get_no_exists_episodes` 的差异在 `HEAD` 上就已存在，非本版引入 —— 已用工作树 vs `HEAD`
+  的方法变更集做等价性对照确认）。
+
+## 六、坑
+
+- **`os.path.isdir()` 判服务器路径必然失败**：容器内外挂载点几乎一定不同，必须翻译。
+- **「上级目录」必须入索引**：否则扫描根比媒体库目录浅一层时，一级子目录恰好就是媒体库目录，
+  会整层被误判成残留 —— 这正是用户看到的「整个华语目录是不要的」。
+- **`list_dirs()` 的 `library_dirs` 要先 `_norm_path()`**：`normalize_roots()` **不做**反斜杠转换，
+  拿 Windows 形态的配置去比对（比对对象是正斜杠）会一个也匹配不上。
+- **Plex 多图组件空图 = 纯黑（`#000000`）**，而本应用「图片加载失败」的占位图是**浅灰**
+  （`no-image.png`，实测平均亮度 243）—— 所以「黑块」说明模板压根没给图，不是加载失败。
+- **绿联库封面不能用云端地址**：`scraper.ugnas.com` 那批带时效 `auth_key`，实测已过期 403。
+- **同一文件多 Edit 绝不能并行**（后写覆盖先写）；改完立刻 grep 复核。
+
 # v6.10.0 — 新增「服务 → 媒体库残留清理」（以媒体服务器实时条目为准）
 
 ## 一、起因
